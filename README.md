@@ -8,7 +8,7 @@ Tool used to help organize pentest information
 === Install ===
 
 ```
-git clone
+git clone https://github.com/Kahvi-0/ReconBubble.git
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
