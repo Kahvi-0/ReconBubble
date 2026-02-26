@@ -9,7 +9,12 @@ Tool used to help organize pentest information
 to do 
 - bbot
 - subenum
-- 
+
+
+<img width="2522" height="833" alt="image" src="https://github.com/user-attachments/assets/8e4ed887-a98d-4a28-b58a-4dee9c818c9a" />
+
+
+
 === Install ===
 
 ```
