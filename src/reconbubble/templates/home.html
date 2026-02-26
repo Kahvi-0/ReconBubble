@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Workspace Overview</h1>
+<div class="grid">
+  <div class="card"><div class="kpi">{{ stats.hosts }}</div><div class="label">Hosts</div></div>
+  <div class="card"><div class="kpi">{{ stats.services }}</div><div class="label">Services</div></div>
+  <div class="card"><div class="kpi">{{ stats.subdomains }}</div><div class="label">Subdomains</div></div>
+  <div class="card"><div class="kpi">{{ stats.emails }}</div><div class="label">Emails</div></div>
+  <div class="card"><div class="kpi">{{ stats.docs }}</div><div class="label">Docs</div></div>
+  <div class="card"><div class="kpi">{{ stats.notes }}</div><div class="label">Notes</div></div>
+</div>
+<p class="muted">Local-only: all data is stored beside your database file.</p>
+<div class="card">
+  <h2>Quick actions</h2>
+  <ul>
+    <li><a href="/scope">Define scope</a></li>
+    <li><a href="/upload">Upload artifacts</a> (file or paste)</li>
+    <li><a href="/graph">View graph</a> (filter in-scope)</li>
+  </ul>
+</div>
+{% endblock %}

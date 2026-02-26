@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>SMTP Scans</h1>
+
+<div class="card">
+  <h2>SMTP Results</h2>
+  {% if rows %}
+  <table>
+    <thead><tr><th>MX Host</th><th>VRFY</th><th>EXPN</th><th>RCPT</th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td><code>{{ r.mx_host }}</code></td>
+        <td>
+          {% if r.vrfy == "OK" %}
+          <span class="pill inscope">{{ r.vrfy }}</span>
+          {% elif r.vrfy == "ERROR" %}
+          <span class="pill outscope">{{ r.vrfy }}</span>
+          {% else %}
+          {{ r.vrfy }}
+          {% endif %}
+        </td>
+        <td>
+          {% if r.expn == "OK" %}
+          <span class="pill inscope">{{ r.expn }}</span>
+          {% elif r.expn == "ERROR" %}
+          <span class="pill outscope">{{ r.expn }}</span>
+          {% else %}
+          {{ r.expn }}
+          {% endif %}
+        </td>
+        <td>
+          {% if r.rcpt == "OK" %}
+          <span class="pill inscope">{{ r.rcpt }}</span>
+          {% elif r.rcpt == "ERROR" %}
+          <span class="pill outscope">{{ r.rcpt }}</span>
+          {% else %}
+          {{ r.rcpt }}
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No SMTP scan data. Upload a JSON file via the Upload page.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Valid Users & Credentials</h1>
+
+<div class="split">
+  <div class="card">
+    <h2>Actions</h2>
+    <button class="btn" id="createUserBtn" type="button">Add user manually</button>
+  </div>
+  <div class="card">
+    <h2>Credentials</h2>
+    <button class="btn" id="createCredBtn" type="button">Add credential manually</button>
+  </div>
+</div>
+
+<div class="split">
+  <div class="card" style="flex:1;">
+    <h2>Valid Usernames</h2>
+    {% if users %}
+    <table>
+      <thead><tr><th>Username</th><th>Source</th><th>Notes</th></tr></thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td><code>{{ u.username }}</code></td>
+          <td>{{ u.source }}</td>
+          <td>{{ u.notes }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No valid users yet. Upload a list or add manually.</p>
+    {% endif %}
+  </div>
+
+  <div class="card" style="flex:1;">
+    <h2>Credentials</h2>
+    {% if creds %}
+    <table>
+      <thead><tr><th>Username</th><th>Password</th><th>Service</th><th>Notes</th></tr></thead>
+      <tbody>
+        {% for c in creds %}
+        <tr>
+          <td><code>{{ c.username }}</code></td>
+          <td><code>{{ c.password }}</code></td>
+          <td>{{ c.service }}</td>
+          <td>{{ c.notes }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="muted">No credentials yet. Upload user:pass pairs or add manually.</p>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+  window.addEventListener("DOMContentLoaded", () => {
+    const btn = document.getElementById("createUserBtn");
+    btn && btn.addEventListener("click", () => {
+      const username = prompt("Username:");
+      if (!username) return;
+      const source = prompt("Source (optional):") || "";
+      const fd = new FormData();
+      fd.append("username", username);
+      fd.append("source", source);
+      fetch("/api/users/create", { method: "POST", body: fd }).then(() => location.reload());
+    });
+
+    const btn2 = document.getElementById("createCredBtn");
+    btn2 && btn2.addEventListener("click", () => {
+      const username = prompt("Username:");
+      if (!username) return;
+      const password = prompt("Password:") || "";
+      const service = prompt("Service (optional):") || "";
+      const fd = new FormData();
+      fd.append("username", username);
+      fd.append("password", password);
+      fd.append("service", service);
+      fetch("/api/creds/create", { method: "POST", body: fd }).then(() => location.reload());
+    });
+  });
+</script>
+{% endblock %}

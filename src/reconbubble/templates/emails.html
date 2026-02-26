@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Emails</h1>
+<table>
+  <thead><tr><th>Scope</th><th>Email</th><th>Domain</th></tr></thead>
+  <tbody>
+    {% for e in rows %}
+      <tr>
+        <td>{% if e.in_scope %}<span class="pill inscope">IN</span>{% else %}<span class="pill outscope">OUT</span>{% endif %}</td>
+        <td>{{ e.email }}</td>
+        <td>{{ e.domain }}</td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

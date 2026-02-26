@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Service: {{ host.ip if host else "" }} → {{ svc.port }}/{{ svc.proto }}</h1>
+
+<div class="split">
+  <div class="card">
+    <h2>Details</h2>
+    <div><b>State:</b> {{ svc.state }}</div>
+    <div><b>Name:</b> {{ svc.service_name }}</div>
+    <div><b>Product:</b> {{ svc.product }}</div>
+    <div><b>Version:</b> {{ svc.version }}</div>
+    <div><b>Extra:</b> {{ svc.extra_info }}</div>
+    <div class="muted"><a href="/asset/{{ svc.host_id }}">Back to asset</a></div>
+  </div>
+  <div class="card">
+    <h2>Add note</h2>
+    <form action="/notes/add" method="post">
+      <input type="hidden" name="object_type" value="service"/>
+      <input type="hidden" name="object_id" value="{{ svc.id }}"/>
+      <input type="hidden" name="redirect" value="/service/{{ svc.id }}"/>
+      <label>Severity</label>
+      <select name="severity"><option>info</option><option>low</option><option>med</option><option>high</option></select>
+      <label>Tags</label><input name="tags" placeholder="ssl, weak-cipher"/>
+      <label>Note</label><textarea name="body" rows="6" required></textarea>
+      <button class="btn" type="submit">Save note</button>
+    </form>
+  </div>
+</div>
+
+<h2>Evidence</h2>
+{% if evidence %}
+  {% for e in evidence %}
+    <div class="card">
+      <div class="muted">{{ e.created_at }}</div>
+      <pre class="evidence">{{ e.raw_output }}</pre>
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="muted">No evidence stored for this service.</p>
+{% endif %}
+
+<h2>Notes</h2>
+{% if notes %}
+  {% for n in notes %}
+    <div class="card">
+      <div class="muted">{{ n.created_at }} · {{ n.severity }} · {{ n.tags }}</div>
+      <pre class="note">{{ n.body }}</pre>
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="muted">No notes yet.</p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Web URLs</h1>
+
+<div class="card">
+  <h2>Actions</h2>
+  <label style="display:flex; gap:10px; align-items:center;">
+    <input id="showOut" type="checkbox" {% if show_out==1 %}checked{% endif %}/>
+    Show out-of-scope URLs
+  </label>
+</div>
+
+<div class="card">
+  <h2>URLs by Domain</h2>
+  {% if grouped %}
+  {% for domain, urls in grouped.items() %}
+  <details open style="margin:12px 0;">
+    <summary><strong>{{ domain }}</strong> <span class="muted">({{ urls|length }} URLs)</span>{% if urls[0].in_scope %} <span class="pill inscope">IN</span>{% else %} <span class="pill outscope">OUT</span>{% endif %}</summary>
+    <ul class="miniList">
+      {% for u in urls %}
+      <li><a href="{{ u.url }}" target="_blank">{{ u.url }}</a></li>
+      {% endfor %}
+    </ul>
+  </details>
+  {% endfor %}
+  {% else %}
+  <p class="muted">No URLs added yet. Upload a list via the Upload page.</p>
+  {% endif %}
+</div>
+
+<script>
+  const showOut = document.getElementById("showOut");
+  showOut && showOut.addEventListener("change", () => {
+    const u = new URL(window.location.href);
+    u.searchParams.set("show_out", showOut.checked ? "1" : "0");
+    window.location.href = u.toString();
+  });
+</script>
+{% endblock %}

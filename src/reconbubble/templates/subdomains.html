@@ -1,0 +1,178 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Subdomains</h1>
+
+<div class="card" style="margin-bottom:20px;">
+  <h2>Filters</h2>
+  <label style="display:flex; gap:10px; align-items:center;">
+    <input type="checkbox" id="showOut" {% if show_out==1 %}checked{% endif %}/>
+    Show out-of-scope subdomains
+  </label>
+  <p class="muted">Default hides out-of-scope.</p>
+  <a class="btn" href="/subdomains/export">Export in-scope</a>
+</div>
+
+<div class="card">
+  <h2>Subdomains by Domain</h2>
+  {% if grouped %}
+  {% for domain, data in grouped.items() %}
+  {% set subs = data.subs %}
+  {% set rdap = data.rdap %}
+  <details open style="margin:12px 0;">
+    <summary>
+      <span class="scope-dot {% if subs[0].in_scope %}in{% else %}out{% endif %}" title="Domain scope: {% if subs[0].in_scope %}IN{% else %}OUT{% endif %}">●</span>
+      <a href="#" class="domain-link" data-domain="{{ domain }}" data-rdap='{{ rdap | tojson }}'>{{ domain }}</a>
+      <span class="muted">({{ subs|length }} subdomains)</span>
+    </summary>
+    <table style="margin-top:8px;">
+      <thead><tr><th style="width:30px;"></th><th>Subdomain</th><th>Prowler IPs</th><th>Resolved IPs</th></tr></thead>
+      <tbody>
+        {% for s in subs %}
+        <tr>
+          <td><span class="scope-dot {% if s.in_scope %}in{% else %}out{% endif %}">●</span></td>
+          <td><a href="#" class="sub-link" data-fqdn="{{ s.fqdn }}" data-prowl='{{ s.prowl | tojson }}'>{{ s.fqdn }}</a></td>
+          <td>{% if s.prowl and s.prowl.ips %}<code>{{ s.prowl.ips }}</code>{% else %}<span class="muted">-</span>{% endif %}</td>
+          <td>{% if s.ips %}{% for ip in s.ips %}<code>{{ ip }}</code> {% endfor %}{% else %}<span class="muted">-</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endfor %}
+  {% else %}
+  <p class="muted">No subdomains found.</p>
+  {% endif %}
+</div>
+
+<div id="rdapModal" class="overlay hidden" style="cursor:pointer;" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="card" style="max-width:500px; max-height:80vh; overflow:auto; cursor:default;" onclick="event.stopPropagation()">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h2 style="margin:0;">Domain Info</h2>
+      <button class="btn" onclick="document.getElementById('rdapModal').classList.add('hidden')">X</button>
+    </div>
+    <div id="rdapContent"></div>
+  </div>
+</div>
+
+<style>
+.scope-dot { font-size: 14px; }
+.scope-dot.in { color: #00ff00; }
+.scope-dot.out { color: #ff3333; }
+.domain-link { color:#4a9eff; text-decoration:none; }
+.domain-link:hover { text-decoration:underline; }
+</style>
+
+<script>
+  window.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll("[data-open-sub]").forEach(a => {
+      a.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        window.ReconSidebar && window.ReconSidebar.openSubdomain(a.getAttribute("data-open-sub"));
+      });
+    });
+
+    const showOut = document.getElementById("showOut");
+    showOut && showOut.addEventListener("change", () => {
+      const u = new URL(window.location.href);
+      u.searchParams.set("show_out", showOut.checked ? "1" : "0");
+      window.location.href = u.toString();
+    });
+
+    document.querySelectorAll(".domain-link").forEach(link => {
+      link.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const rdap = JSON.parse(link.getAttribute("data-rdap") || "{}");
+        const domain = link.getAttribute("data-domain");
+        const modal = document.getElementById("rdapModal");
+        const content = document.getElementById("rdapContent");
+        
+        const formatList = (arr) => Array.isArray(arr) ? arr.join(", ") : arr;
+        
+        if (rdap.error) {
+          content.innerHTML = `<p class="muted">Error: ${rdap.error}</p><button class="btn" onclick="fetchRdap('${domain}', this)">Retry RDAP</button>`;
+        } else if (rdap.registrar || rdap.creation_date) {
+          let html = `<p><strong>Domain:</strong> ${domain}</p>`;
+          if (rdap.registrar) html += `<p><strong>Registrar:</strong> ${rdap.registrar}</p>`;
+          if (rdap.registrarEmail) html += `<p><strong>Registrar Email:</strong> ${rdap.registrarEmail}</p>`;
+          if (rdap.registrarOrg) html += `<p><strong>Registrar Org:</strong> ${rdap.registrarOrg}</p>`;
+          if (rdap.creation_date) html += `<p><strong>Created:</strong> ${rdap.creation_date}</p>`;
+          if (rdap.expiration_date) html += `<p><strong>Expires:</strong> ${rdap.expiration_date}</p>`;
+          if (rdap.updatedDate) html += `<p><strong>Updated:</strong> ${rdap.updatedDate}</p>`;
+          if (rdap.name_servers) html += `<p><strong>Name Servers:</strong><br/>${formatList(rdap.name_servers).replace(/, /g, "<br/>")}</p>`;
+          if (rdap.status) html += `<p><strong>Status:</strong> ${formatList(rdap.status)}</p>`;
+          if (rdap.dnssec) html += `<p><strong>DNSSEC:</strong> ${rdap.dnssec}</p>`;
+          if (rdap.registrant) html += `<p><strong>Registrant:</strong> ${rdap.registrant}</p>`;
+          if (rdap.registrantEmail) html += `<p><strong>Registrant Email:</strong> ${rdap.registrantEmail}</p>`;
+          if (rdap.adminContact) html += `<p><strong>Admin Contact:</strong> ${rdap.adminContact}</p>`;
+          if (rdap.adminEmail) html += `<p><strong>Admin Email:</strong> ${rdap.adminEmail}</p>`;
+          if (rdap.techContact) html += `<p><strong>Tech Contact:</strong> ${rdap.techContact}</p>`;
+          if (rdap.techEmail) html += `<p><strong>Tech Email:</strong> ${rdap.techEmail}</p>`;
+          content.innerHTML = html;
+        } else {
+          content.innerHTML = `<p class="muted">No RDAP data. <button class="btn" onclick="fetchRdap('${domain}', this)">Fetch RDAP</button></p>`;
+        }
+        
+        modal.classList.remove("hidden");
+      });
+    });
+
+    // Subdomain click - show Prowler info
+    document.querySelectorAll(".sub-link").forEach(link => {
+      link.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const fqdn = link.getAttribute("data-fqdn");
+        const prowl = JSON.parse(link.getAttribute("data-prowl") || "{}");
+        const modal = document.getElementById("rdapModal");
+        const content = document.getElementById("rdapContent");
+        
+        let html = `<p><strong>Subdomain:</strong> ${fqdn}</p>`;
+        html += `<h3 style="margin:12px 0 8px 0; color:#4a9eff;">Prowler Data</h3>`;
+        
+        if (prowl && (prowl.ips || prowl.registrar || prowl.netblocks)) {
+          if (prowl.ips) html += `<p><strong>IPs:</strong> ${prowl.ips}</p>`;
+          if (prowl.registrar) html += `<p><strong>Registrar:</strong> ${prowl.registrar}</p>`;
+          if (prowl.netblocks) html += `<p><strong>Netblocks:</strong><br/>${String(prowl.netblocks).replace(/,/g, "<br/>")}</p>`;
+        } else {
+          html += `<p class="muted">No Prowler data for this subdomain.</p>`;
+        }
+        
+        content.innerHTML = html;
+        modal.classList.remove("hidden");
+      });
+    });
+  });
+
+  window.fetchRdap = async function(domain, btn) {
+    btn.textContent = "Loading...";
+    try {
+      const r = await fetch(`/api/rdap/${encodeURIComponent(domain)}`);
+      const data = await r.json();
+      const formatList = (arr) => Array.isArray(arr) ? arr.join(", ") : arr;
+      
+      if (data.error) {
+        btn.closest("div").innerHTML = `<p class="muted" style="color:red;">Error: ${data.error}</p><button class="btn" onclick="location.reload()">Refresh</button>`;
+      } else {
+        let html = `<p><strong>Domain:</strong> ${domain}</p>`;
+        if (data.registrar) html += `<p><strong>Registrar:</strong> ${data.registrar}</p>`;
+        if (data.registrarEmail) html += `<p><strong>Registrar Email:</strong> ${data.registrarEmail}</p>`;
+        if (data.registrarOrg) html += `<p><strong>Registrar Org:</strong> ${data.registrarOrg}</p>`;
+        if (data.creationDate) html += `<p><strong>Created:</strong> ${data.creationDate}</p>`;
+        if (data.expirationDate) html += `<p><strong>Expires:</strong> ${data.expirationDate}</p>`;
+        if (data.updatedDate) html += `<p><strong>Updated:</strong> ${data.updatedDate}</p>`;
+        if (data.nameServers) html += `<p><strong>Name Servers:</strong><br/>${formatList(data.nameServers).replace(/, /g, "<br/>")}</p>`;
+        if (data.status) html += `<p><strong>Status:</strong> ${formatList(data.status)}</p>`;
+        if (data.dnssec) html += `<p><strong>DNSSEC:</strong> ${data.dnssec}</p>`;
+        if (data.registrant) html += `<p><strong>Registrant:</strong> ${data.registrant}</p>`;
+        if (data.registrantEmail) html += `<p><strong>Registrant Email:</strong> ${data.registrantEmail}</p>`;
+        if (data.adminContact) html += `<p><strong>Admin Contact:</strong> ${data.adminContact}</p>`;
+        if (data.adminEmail) html += `<p><strong>Admin Email:</strong> ${data.adminEmail}</p>`;
+        if (data.techContact) html += `<p><strong>Tech Contact:</strong> ${data.techContact}</p>`;
+        if (data.techEmail) html += `<p><strong>Tech Email:</strong> ${data.techEmail}</p>`;
+        btn.closest("div").innerHTML = html + `<p class="muted">Saved to database. <button class="btn" onclick="location.reload()">Refresh</button></p>`;
+      }
+    } catch(e) {
+      btn.closest("div").innerHTML = `<p class="muted" style="color:red;">Error: ${e}</p>`;
+    }
+  };
+</script>
+{% endblock %}

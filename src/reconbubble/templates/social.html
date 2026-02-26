@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Online Research</h1>
+
+<div class="card" style="margin-bottom:20px;">
+  <h2>Add Entry</h2>
+  <form id="socialForm" enctype="multipart/form-data">
+    <div style="display:flex; gap:20px; flex-wrap:wrap;">
+      <div style="flex:1; min-width:200px;">
+        <label>Source</label>
+        <select name="platform">
+          <option value="Website">Website</option>
+          <option value="Social Media">Social Media</option>
+          <option value="Forum">Forum</option>
+          <option value="Blog">Blog</option>
+          <option value="News">News</option>
+          <option value="Directory">Directory</option>
+          <option value="GitHub">GitHub</option>
+          <option value="Paste Site">Paste Site</option>
+          <option value="Data Breach">Data Breach</option>
+          <option value="Other">Other</option>
+        </select>
+        <label style="margin-top:8px;">URL</label>
+        <input name="url" placeholder="https://..." />
+        <label style="margin-top:8px;">Identifier / Handle</label>
+        <input name="handle" placeholder="username, email, or identifier" />
+      </div>
+      <div style="flex:1; min-width:200px;">
+        <label>Screenshot (optional)</label>
+        <input type="file" name="screenshot" accept="image/*" />
+        <label style="margin-top:8px;">Notes</label>
+        <textarea name="notes" rows="4" placeholder="Findings, content, observations..."></textarea>
+      </div>
+    </div>
+    <button class="btn" type="submit" style="margin-top:12px;">Add</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Entries</h2>
+  {% if rows %}
+  <table>
+    <thead><tr><th style="width:80px;">Image</th><th>Source</th><th>URL</th><th>Identifier</th><th>Notes</th><th style="width:60px;"></th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>
+          {% if r.artifact_id %}
+          <img src="/api/artifacts/{{ r.artifact_id }}/thumb" class="thumb" data-full="/api/artifacts/{{ r.artifact_id }}" />
+          {% else %}
+          -
+          {% endif %}
+        </td>
+        <td>{{ r.platform }}</td>
+        <td>{% if r.url %}<a href="{{ r.url }}" target="_blank">link</a>{% else %}-{% endif %}</td>
+        <td><code>{{ r.handle or '-' }}</code></td>
+        <td>{{ r.notes[:100] }}{% if r.notes and r.notes|length > 100 %}...{% endif %}</td>
+        <td><button class="btn btn-small" data-del="{{ r.id }}">X</button></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No entries yet.</p>
+  {% endif %}
+</div>
+
+<div id="imgOverlay" class="overlay hidden" style="cursor:pointer;">
+  <img id="imgFull" style="max-width:90vw; max-height:90vh; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); border:2px solid #fff; border-radius:4px;" />
+</div>
+
+<style>
+.thumb { width:60px; height:40px; object-fit:cover; cursor:pointer; border-radius:3px; border:1px solid #444; }
+</style>
+
+<script>
+  const overlay = document.getElementById("imgOverlay");
+  const fullImg = document.getElementById("imgFull");
+
+  document.querySelectorAll(".thumb").forEach(img => {
+    img.addEventListener("click", (e) => {
+      e.stopPropagation();
+      fullImg.src = img.getAttribute("data-full");
+      overlay.classList.remove("hidden");
+    });
+  });
+
+  overlay && overlay.addEventListener("click", () => {
+    overlay.classList.add("hidden");
+    fullImg.src = "";
+  });
+
+  document.getElementById("socialForm").addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    const fd = new FormData(ev.target);
+    const r = await fetch("/api/social/create", { method: "POST", body: fd });
+    if (r.ok) location.reload();
+  });
+
+  document.querySelectorAll("[data-del]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (!confirm("Delete?")) return;
+      const fd = new FormData();
+      fd.append("social_id", btn.getAttribute("data-del"));
+      await fetch("/api/social/delete", { method: "POST", body: fd });
+      location.reload();
+    });
+  });
+</script>
+{% endblock %}

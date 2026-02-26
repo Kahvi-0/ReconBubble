@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>DNS Zone Transfers</h1>
+
+<div class="card">
+  <h2>Zone Transfer Attempts</h2>
+  {% if grouped %}
+  {% for domain, records in grouped.items() %}
+  <details open style="margin:12px 0;">
+    <summary><strong>{{ domain }}</strong> <span class="muted">({{ records|length }} nameservers)</span></summary>
+    <table style="margin-top:8px;">
+      <thead><tr><th>Nameserver</th><th>Status</th></tr></thead>
+      <tbody>
+        {% for r in records %}
+        <tr>
+          <td><code>{{ r.nameserver }}</code></td>
+          <td>
+            {% if r.status == "SUCCESS" %}
+            <span class="pill inscope">{{ r.status }}</span>
+            {% elif r.status == "PROHIBITED" %}
+            <span class="pill outscope">{{ r.status }}</span>
+            {% else %}
+            {{ r.status }}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endfor %}
+  {% else %}
+  <p class="muted">No zone transfer data. Upload a JSON file via the Upload page.</p>
+  {% endif %}
+</div>
+{% endblock %}

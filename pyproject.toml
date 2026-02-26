@@ -1,0 +1,21 @@
+[project]
+name = "reconbubble"
+version = "0.7.6"
+description = "ReconBubble OSINT Visualizer"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.100",
+  "uvicorn>=0.23",
+  "sqlalchemy>=2.0",
+  "jinja2>=3.1",
+  "python-multipart>=0.0.6",
+  "typer>=0.9",
+  "rich>=13.0"
+]
+
+[project.scripts]
+reconbubble = "reconbubble.cli:app"
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"

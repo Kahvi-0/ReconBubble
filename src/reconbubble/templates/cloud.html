@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Cloud</h1>
+
+<div class="card" style="margin-bottom:16px;">
+  <h2>Actions</h2>
+  <button class="btn" id="createCloudBtn" type="button">Create cloud item</button>
+  <p class="muted">Manual tracking for cloud enumeration artifacts and identifiers.</p>
+</div>
+
+<div class="card">
+  <h2>Items</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>Provider</th>
+        <th>Name</th>
+        <th>Key fields</th>
+        <th>Notes</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+      <tr class="rowHover" data-open-cloud="{{ r.id }}">
+        <td><span class="pill">{{ r.provider }}</span></td>
+        <td>{{ r.name }}</td>
+        <td class="muted">
+          {% if r.provider == "AWS" %}
+            {% if r.data.get("account_id") %}Acct: {{ r.data.get("account_id") }}{% endif %}
+            {% if r.data.get("buckets") and r.data.get("buckets")|length %}<br/>Buckets: {{ r.data.get("buckets")|length }}{% endif %}
+          {% elif r.provider == "Azure" %}
+            {% if r.data.get("tenant_id") %}Tenant: {{ r.data.get("tenant_id") }}{% endif %}
+            {% if r.data.get("subscriptions") and r.data.get("subscriptions")|length %}<br/>Subs: {{ r.data.get("subscriptions")|length }}{% endif %}
+          {% elif r.provider == "Digital Ocean" %}
+            {% if r.data.get("projects") and r.data.get("projects")|length %}Projects: {{ r.data.get("projects")|length }}{% endif %}
+            {% if r.data.get("spaces") and r.data.get("spaces")|length %}<br/>Spaces: {{ r.data.get("spaces")|length }}{% endif %}
+          {% elif r.provider == "O365" %}
+            {% if r.data.get("tenant_id") %}Tenant: {{ r.data.get("tenant_id") }}{% endif %}
+            {% if r.data.get("primary_domain") %}<br/>Domain: {{ r.data.get("primary_domain") }}{% endif %}
+          {% else %}
+            {% if r.data.get("tenant_id") %}Tenant: {{ r.data.get("tenant_id") }}{% endif %}
+            {% if r.data.get("primary_domain") %}<br/>Domain: {{ r.data.get("primary_domain") }}{% endif %}
+          {% endif %}
+        </td>
+        <td>{{ r.notes }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  document.addEventListener("DOMContentLoaded", () => {
+    const btn = document.getElementById("createCloudBtn");
+    btn && btn.addEventListener("click", () => window.ReconSidebar && window.ReconSidebar.openCloudCreate());
+
+    document.querySelectorAll("[data-open-cloud]").forEach(tr => {
+      tr.addEventListener("click", () => {
+        const id = parseInt(tr.getAttribute("data-open-cloud"), 10);
+        window.ReconSidebar && window.ReconSidebar.openCloud(id);
+      });
+    });
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Assets</h1>
+
+<div class="split">
+  <div class="card">
+    <h2>Actions</h2>
+    <button class="btn" id="createAssetBtn" type="button">Create asset</button>
+    <label style="display:flex; gap:10px; align-items:center; margin-top:12px;">
+      <input id="showOut" type="checkbox" {% if show_out==1 %}checked{% endif %}/>
+      Show out-of-scope assets
+    </label>
+    <p class="muted">Default hides out-of-scope.</p>
+  </div>
+  <div class="card">
+    <h2>Tracker</h2>
+    <p class="muted">Dot beside IP: green if IP in scope, red if not. Domains with green dots are in scope.</p>
+    <p class="muted">Host shows in filter if IP OR domain in scope.</p>
+  </div>
+</div>
+
+<table>
+  <thead><tr><th>Complete</th><th>WAF</th><th>IP</th><th>Hostname</th><th># Services</th><th>Domains</th></tr></thead>
+  <tbody>
+    {% for r in rows %}
+      <tr class="{% if r.complete==1 %}row-complete{% endif %}">
+        <td><input type="checkbox" class="completeHost" data-host-id="{{ r.id }}" {% if r.complete==1 %}checked{% endif %} /></td>
+        <td><input type="checkbox" class="wafHost" data-host-id="{{ r.id }}" {% if r.waf==1 %}checked{% endif %} /></td>
+        <td>
+          <span class="scope-dot {% if r.ip_in_scope %}in{% else %}out{% endif %}" title="IP scope: {% if r.ip_in_scope %}IN{% else %}OUT{% endif %}">●</span>
+          <a href="#" data-open-host="{{ r.id }}">{{ r.ip }}</a>
+        </td>
+        <td>{{ r.hostname }}</td>
+        <td>{{ r.svc_count }}</td>
+        <td>
+          <details open>
+            {% set in_scope_domains = r.domains | selectattr('in_scope') | list %}
+            <summary class="muted">show ({{ in_scope_domains | length }}{% if show_out == 0 and r.domains | length > in_scope_domains | length %} / {{ r.domains | length }}{% endif %})</summary>
+            {% if r.domains %}
+              <ul class="miniList">
+                {% for d in r.domains %}
+                  {% if show_out == 0 %}
+                    {% if d.in_scope %}
+                    <li>
+                      <span class="scope-dot in" title="Domain scope: IN">●</span>
+                      <code>{{ d.fqdn }}</code>
+                    </li>
+                    {% endif %}
+                  {% else %}
+                    <li>
+                      <span class="scope-dot {% if d.in_scope %}in{% else %}out{% endif %}" title="Domain scope: {% if d.in_scope %}IN{% else %}OUT{% endif %}">●</span>
+                      <code>{{ d.fqdn }}</code>
+                    </li>
+                  {% endif %}
+                {% endfor %}
+              </ul>
+            {% else %}
+              <span class="muted">none</span>
+            {% endif %}
+          </details>
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<style>
+tr.row-complete { background: rgba(0, 255, 0, 0.1); }
+.scope-dot { font-size: 14px; margin-right: 2px; }
+.scope-dot.in { color: #00ff00; }
+.scope-dot.out { color: #ff3333; }
+</style>
+
+<script>
+  window.addEventListener("DOMContentLoaded", () => {
+    document.querySelectorAll("[data-open-host]").forEach(a => {
+      a.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        window.ReconSidebar && window.ReconSidebar.openHost(parseInt(a.getAttribute("data-open-host"), 10));
+      });
+    });
+
+    const btn = document.getElementById("createAssetBtn");
+    btn && btn.addEventListener("click", () => window.ReconSidebar && window.ReconSidebar.openHostCreate());
+
+    const showOut = document.getElementById("showOut");
+    showOut && showOut.addEventListener("change", () => {
+      const u = new URL(window.location.href);
+      u.searchParams.set("show_out", showOut.checked ? "1" : "0");
+      window.location.href = u.toString();
+    });
+
+    document.querySelectorAll(".completeHost").forEach(cb => {
+      cb.addEventListener("change", async () => {
+        const fd = new FormData();
+        fd.append("host_id", cb.getAttribute("data-host-id"));
+        fd.append("complete", cb.checked ? "1" : "0");
+        await fetch("/api/host/complete", { method: "POST", body: fd });
+        const row = cb.closest("tr");
+        if (cb.checked) row.classList.add("row-complete");
+        else row.classList.remove("row-complete");
+      });
+    });
+
+    document.querySelectorAll(".wafHost").forEach(cb => {
+      cb.addEventListener("change", async () => {
+        const fd = new FormData();
+        fd.append("host_id", cb.getAttribute("data-host-id"));
+        fd.append("waf", cb.checked ? "1" : "0");
+        await fetch("/api/host/waf", { method: "POST", body: fd });
+      });
+    });
+  });
+</script>
+{% endblock %}

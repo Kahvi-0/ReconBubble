@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+{% if error %}
+<div class="card" style="border:1px solid #c33;">
+  <h2 style="margin-top:0;">Upload error</h2>
+  <p>{{ error }}</p>
+  <p class="muted">Tip: generate XML with <code>nmap -sV -oX scan.xml TARGET</code> (or <code>-oA name</code> and upload <code>name.xml</code>).</p>
+</div>
+{% endif %}
+
+<h1>Upload</h1>
+<div class="split">
+  <form class="card" action="/upload" method="post" enctype="multipart/form-data">
+    <h2>Upload a file</h2>
+    <label>Type</label>
+    <select name="kind">
+      <option value="nmap_xml">Nmap XML</option>
+      <option value="subdomains">Subdomains list</option>
+      <option value="emails">Emails list</option>
+      <option value="doc">OSINT document</option>
+      <option value="users">Usernames list</option>
+      <option value="creds">Credentials (user:pass)</option>
+      <option value="urls">Web URLs list</option>
+      <option value="prowl_phase1">Prowler phase 1</option>
+      <option value="zone_transfers">Prowler phase 2 - zone transfers</option>
+      <option value="smtp">Prowler phase 3 - SMTP</option>
+    </select>
+    <label>File</label>
+    <input type="file" name="file" />
+    <button class="btn" type="submit">Upload & Parse</button>
+  </form>
+
+  <form class="card" action="/upload" method="post">
+    <h2>Paste raw data</h2>
+    <label>Type</label>
+    <select name="kind">
+      <option value="nmap_xml">Nmap XML</option>
+      <option value="subdomains">Subdomains list</option>
+      <option value="emails">Emails list</option>
+      <option value="users">Usernames list</option>
+      <option value="creds">Credentials (user:pass)</option>
+      <option value="urls">Web URLs list</option>
+    </select>
+    <label>Optional filename</label>
+    <input name="raw_filename" placeholder="pasted_scan.xml" />
+    <label>Raw text</label>
+    <textarea name="raw_text" rows="14" placeholder="Paste Nmap XML or newline-separated items…" required></textarea>
+    <button class="btn" type="submit">Save & Parse</button>
+    <p class="muted">Docs are file-upload only (to preserve original evidence).</p>
+  </form>
+</div>
+{% endblock %}

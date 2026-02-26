@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Graph</h1>
+<div class="card">
+  <label style="display:flex; gap:10px; align-items:center;">
+    <input id="onlyInScope" type="checkbox" />
+    Show only in-scope
+  </label>
+</div>
+<div class="split">
+  <div class="card" style="min-height:520px;">
+    <canvas id="graph" width="900" height="520" style="width:100%; height:520px; border:1px solid #222; border-radius:12px;"></canvas>
+    <div class="muted">Drag nodes. Scroll to zoom. Click for details.</div>
+  </div>
+  <div class="card" style="min-height:520px;">
+    <h2>Inspector</h2>
+    <div id="inspector" class="muted">Click a node…</div>
+  </div>
+</div>
+<script src="/static/graph.js"></script>
+{% endblock %}

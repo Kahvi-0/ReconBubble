@@ -1,0 +1,48 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>ReconBubble</title>
+  <link rel="stylesheet" href="/static/app.css"/>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="brand"><a href="/">ReconBubble</a></div>
+      <img class="firegif" src="/static/fire.gif" alt="retro fire"/>
+    </div>
+    <nav class="nav">
+      <a href="/scope">Scope</a>
+      <a href="/graph">Graph</a>
+      <a href="/assets">Assets</a>
+      <a href="/cloud">Cloud</a>
+      <a href="/users">Users</a>
+      <a href="/social">Research</a>
+      <a href="/urls">URLs</a>
+      <a href="/subdomains">Subdomains</a>
+      <a href="/emails">Emails</a>
+      <a href="/docs">Docs</a>
+      <a href="/dns">DNS</a>
+      <a href="/smtp">SMTP</a>
+      <a class="btn" href="/upload">Upload</a>
+    </nav>
+    <img class="firegif firegif-right" src="/static/fire.gif" alt="retro fire"/>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+
+  <div id="sidebarOverlay" class="overlay hidden"></div>
+  <aside id="sidebar" class="sidebar hidden" aria-hidden="true">
+    <div class="sidebarHeader">
+      <div id="sidebarTitle" class="sidebarTitle">Details</div>
+      <button id="sidebarClose" class="btn" type="button">Close</button>
+    </div>
+    <div id="sidebarBody" class="sidebarBody"></div>
+  </aside>
+
+  {% block scripts %}{% endblock %}
+  <script src="/static/sidebar.js?v=2"></script>
+</body>
+</html>

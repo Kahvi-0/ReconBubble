@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Document: {{ doc.title }}</h1>
+<div class="split">
+  <div class="card">
+    <h2>Details</h2>
+    <div><b>MIME:</b> {{ doc.mime }}</div>
+    <div><b>Size:</b> {{ doc.size_bytes }}</div>
+    <div><b>SHA256:</b> <code>{{ doc.sha256 }}</code></div>
+    {% if artifact %}<div><b>Stored:</b> <code>{{ artifact.stored_path }}</code></div>{% endif %}
+  </div>
+  <div class="card">
+    <h2>Add note</h2>
+    <form action="/notes/add" method="post">
+      <input type="hidden" name="object_type" value="document"/>
+      <input type="hidden" name="object_id" value="{{ doc.id }}"/>
+      <input type="hidden" name="redirect" value="/doc/{{ doc.id }}"/>
+      <label>Severity</label>
+      <select name="severity"><option>info</option><option>low</option><option>med</option><option>high</option></select>
+      <label>Tags</label><input name="tags" placeholder="policy, leaked, creds"/>
+      <label>Note</label><textarea name="body" rows="6" required></textarea>
+      <button class="btn" type="submit">Save note</button>
+    </form>
+  </div>
+</div>
+
+<h2>Extracted metadata</h2>
+<div class="card"><pre class="evidence">{{ meta | tojson(indent=2) }}</pre></div>
+
+<h2>Notes</h2>
+{% if notes %}
+  {% for n in notes %}
+    <div class="card">
+      <div class="muted">{{ n.created_at }} · {{ n.severity }} · {{ n.tags }}</div>
+      <pre class="note">{{ n.body }}</pre>
+    </div>
+  {% endfor %}
+{% else %}
+  <p class="muted">No notes yet.</p>
+{% endif %}
+{% endblock %}
