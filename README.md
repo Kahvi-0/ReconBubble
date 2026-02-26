@@ -13,7 +13,7 @@ to do
 === Install ===
 
 ```
-git clone https://github.com/Kahvi-0/ReconBubble.git
+git clone https://github.com/Kahvi-0/ReconBubble.git && cd ReconBubble
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
