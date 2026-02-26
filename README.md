@@ -6,6 +6,10 @@ Tool used to help organize pentest information
 - https://github.com/waffl3ss/Prowler
 - nmap
 
+to do 
+- bbot
+- subenum
+- 
 === Install ===
 
 ```
