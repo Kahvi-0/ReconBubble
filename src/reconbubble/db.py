@@ -74,6 +74,14 @@ def migrate_sqlite(engine) -> None:
         """))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_valid_users_username ON valid_users(username)"))
 
+        # credentials: add url column if missing
+        try:
+            if conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='credentials'")).fetchone():
+                if not _has_column(conn, "credentials", "url"):
+                    conn.execute(text("ALTER TABLE credentials ADD COLUMN url VARCHAR(512) DEFAULT ''"))
+        except Exception:
+            pass
+
         # credentials table
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS credentials (
@@ -81,6 +89,7 @@ def migrate_sqlite(engine) -> None:
           username VARCHAR(255),
           password VARCHAR(255),
           service VARCHAR(128) DEFAULT '',
+          url VARCHAR(512) DEFAULT '',
           notes TEXT DEFAULT '',
           created_at DATETIME
         )
@@ -157,3 +166,27 @@ def migrate_sqlite(engine) -> None:
         )
         """))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_smtp_scans_mx_host ON smtp_scans(mx_host)"))
+
+        # cloud_items table - add columns if missing
+        try:
+            if conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='cloud_items'")).fetchone():
+                for col, typ in [("tenant_id", "VARCHAR(128)"), ("app_id", "VARCHAR(128)"), ("primary_domain", "VARCHAR(255)"), ("source_file", "VARCHAR(255)")]:
+                    if not _has_column(conn, "cloud_items", col):
+                        conn.execute(text(f"ALTER TABLE cloud_items ADD COLUMN {col} {typ} DEFAULT ''"))
+        except Exception:
+            pass
+
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS cloud_items (
+          id INTEGER PRIMARY KEY,
+          provider VARCHAR(64),
+          name VARCHAR(255) DEFAULT '',
+          tenant_id VARCHAR(128) DEFAULT '',
+          app_id VARCHAR(128) DEFAULT '',
+          primary_domain VARCHAR(255) DEFAULT '',
+          source_file VARCHAR(255) DEFAULT '',
+          data_json TEXT DEFAULT '',
+          notes TEXT DEFAULT '',
+          created_at DATETIME
+        )
+        """))

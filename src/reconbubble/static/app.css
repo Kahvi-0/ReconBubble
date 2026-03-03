@@ -42,6 +42,51 @@ pre.evidence, pre.note { white-space: pre-wrap; margin: 0; font-size: 12px; line
 .topbar-left { display:flex; align-items:center; gap:12px; }
 .firegif-right { margin-left:auto; margin-right:12px; }
 
+/* Active nav tab */
+.nav a.current { 
+  color: #ff9500; 
+  font-weight: bold;
+}
+
+/* Nav dropdown */
+.nav-dropdown {
+  position: relative;
+  display: inline-block;
+}
+.nav-dropbtn {
+  margin-left: 14px;
+  cursor: pointer;
+  color: #9ad;
+  text-decoration: none;
+}
+.nav-dropbtn:hover {
+  text-decoration: underline;
+}
+.nav-dropdown-content {
+  display: block;
+  position: absolute;
+  background: #0f1318;
+  border: 1px solid #1e2630;
+  border-radius: 8px;
+  min-width: 140px;
+  box-shadow: 0 8px 16px rgba(0,0,0,0.4);
+  z-index: 100;
+  margin-top: 8px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+}
+.nav-dropdown-content a {
+  display: block;
+  padding: 10px 14px;
+  margin: 0;
+}
+.nav-dropdown.show .nav-dropdown-content,
+.nav-dropdown:hover .nav-dropdown-content {
+  opacity: 1;
+  visibility: visible;
+}
+
 @media (min-width: 1400px){ .container{ padding-left: 48px; padding-right: 48px; } }
 
 /* Severity accents (left border) */
@@ -49,3 +94,24 @@ pre.evidence, pre.note { white-space: pre-wrap; margin: 0; font-size: 12px; line
 .sev-med  { border-left: 4px solid #eab308 !important; }
 .sev-low  { border-left: 4px solid #22c55e !important; }
 .sev-info { border-left: 4px solid #3b82f6 !important; }
+
+/* Checkbox styling */
+input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #22c55e;
+  cursor: pointer;
+  margin: 0;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+input[type="checkbox"]:checked {
+  accent-color: #22c55e;
+}
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  text-align: left;
+}

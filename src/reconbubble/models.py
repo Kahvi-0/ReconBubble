@@ -77,6 +77,7 @@ class ServiceEvidence(Base):
     raw_output: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
     service: Mapped["Service"] = relationship(back_populates="evidence")
+    artifact: Mapped["Artifact"] = relationship()
 
 class Document(Base):
     __tablename__ = "documents"
@@ -107,6 +108,10 @@ class CloudItem(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     provider: Mapped[str] = mapped_column(String(64), index=True)
     name: Mapped[str] = mapped_column(String(255), default="", index=True)
+    tenant_id: Mapped[str] = mapped_column(String(128), default="", index=True)
+    app_id: Mapped[str] = mapped_column(String(128), default="", index=True)
+    primary_domain: Mapped[str] = mapped_column(String(255), default="")
+    source_file: Mapped[str] = mapped_column(String(255), default="")
     data_json: Mapped[str] = mapped_column(Text, default="")
     notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
@@ -125,6 +130,7 @@ class Credential(Base):
     username: Mapped[str] = mapped_column(String(255), index=True)
     password: Mapped[str] = mapped_column(String(255))
     service: Mapped[str] = mapped_column(String(128), default="", index=True)
+    url: Mapped[str] = mapped_column(String(512), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 

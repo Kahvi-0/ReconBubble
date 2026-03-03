@@ -543,3 +543,294 @@ def import_smtp(session: Session, artifact: Artifact, path: Path) -> int:
     session.commit()
     print(f"[SMTP] Import complete: {count} records")
     return count
+
+def import_bbot(session: Session, artifact: Artifact, path: Path) -> dict:
+    import json
+    from urllib.parse import urlparse
+    subdomain_count = 0
+    host_count = 0
+    service_count = 0
+    url_count = 0
+    note_count = 0
+    
+    source_name = artifact.filename
+    
+    content = path.read_text(encoding="utf-8", errors="ignore")
+    lines = content.splitlines()
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        
+        event_type = data.get("type", "")
+        host = data.get("host", "")
+        netloc = data.get("netloc", "")
+        module = data.get("module", "")
+        scope_desc = data.get("scope_description", "")
+        tags = data.get("tags", [])
+        
+        if event_type == "DNS_NAME":
+            fqdn = host.lower().rstrip(".") if host else ""
+            if fqdn and DOMAIN_RE.match(fqdn):
+                if not session.scalar(select(Subdomain).where(Subdomain.fqdn == fqdn)):
+                    sub = Subdomain(
+                        fqdn=fqdn, 
+                        root_domain=root_domain_guess(fqdn)
+                    )
+                    session.add(sub)
+                    session.flush()
+                    subdomain_count += 1
+                    
+                    resolved = data.get("resolved_hosts", [])
+                    for ip in resolved:
+                        if ip:
+                            h = session.scalar(select(Host).where(Host.ip == ip))
+                            if not h:
+                                h = Host(ip=ip)
+                                session.add(h)
+                                session.flush()
+                                host_count += 1
+                            
+                            exists = session.execute(
+                                sql_text("SELECT 1 FROM host_subdomains WHERE host_id = :hid AND subdomain_id = :sid"),
+                                {"hid": h.id, "sid": sub.id}
+                            ).fetchone()
+                            if not exists:
+                                session.execute(
+                                    sql_text("INSERT INTO host_subdomains (host_id, subdomain_id) VALUES (:hid, :sid)"),
+                                    {"hid": h.id, "sid": sub.id}
+                                )
+        
+        elif event_type == "OPEN_TCP_PORT":
+            port = data.get("port", 0)
+            if not port or not host:
+                continue
+            
+            resolved_hosts = data.get("resolved_hosts", [])
+            ip = resolved_hosts[0] if resolved_hosts else None
+            
+            if not ip:
+                resolved = resolve_ips(host)
+                ip = resolved[0] if resolved else host
+            
+            if ip:
+                db_host = session.scalar(select(Host).where(Host.ip == ip))
+                if not db_host:
+                    db_host = Host(ip=ip, hostname=host if host != ip else "")
+                    session.add(db_host)
+                    session.flush()
+                    host_count += 1
+                
+                if db_host.hostname == "" and host != ip:
+                    db_host.hostname = host
+                    session.commit()
+                
+                svc = session.scalar(select(Service).where(
+                    Service.host_id == db_host.id, 
+                    Service.port == port, 
+                    Service.proto == "tcp"
+                ))
+                if not svc:
+                    svc = Service(
+                        host_id=db_host.id,
+                        port=port,
+                        proto="tcp",
+                        state="open",
+                        service_name="",
+                    )
+                    session.add(svc)
+                    session.flush()
+                    service_count += 1
+                
+                source_info = f"[bbot:{module}] Scope: {scope_desc}"
+                session.add(ServiceEvidence(
+                    service_id=svc.id,
+                    artifact_id=artifact.id,
+                    raw_output=source_info
+                ))
+        
+        elif event_type == "URL":
+            url = data.get("data", "")
+            if url:
+                try:
+                    if not session.scalar(select(WebUrl).where(WebUrl.url == url)):
+                        parsed = urlparse(url)
+                        domain = parsed.netloc.lower()
+                        session.add(WebUrl(url=url, domain=domain))
+                        url_count += 1
+                except Exception:
+                    pass
+        
+        elif event_type == "FINDING" or event_type == "TECHNOLOGY":
+            description = ""
+            if isinstance(data.get("data"), dict):
+                description = data.get("data", {}).get("description", "") or data.get("data", {}).get("technology", "")
+            elif isinstance(data.get("data"), str):
+                try:
+                    description = json.loads(data.get("data", "{}")).get("description", "")
+                except:
+                    description = data.get("data", "")
+            
+            if description and host:
+                from .models import Note
+                note = Note(
+                    object_type="host",
+                    object_id=0,
+                    severity="info",
+                    tags=f"bbot,{module}",
+                    body=f"[{event_type}] {description}"
+                )
+                if DOMAIN_RE.match(host):
+                    sub = session.scalar(select(Subdomain).where(Subdomain.fqdn == host.lower()))
+                    if sub:
+                        note.object_type = "subdomain"
+                        note.object_id = sub.id
+                
+                session.add(note)
+                note_count += 1
+    
+    session.commit()
+    return {
+        "subdomains": subdomain_count,
+        "hosts": host_count,
+        "services": service_count,
+        "urls": url_count,
+        "notes": note_count
+    }
+
+def import_bbot_cloud(session: Session, artifact: Artifact, path: Path) -> dict:
+    import json
+    from sqlalchemy import text
+    subdomain_count = 0
+    host_count = 0
+    cloud_count = 0
+    note_count = 0
+    
+    source_name = artifact.filename
+    content = path.read_text(encoding="utf-8", errors="ignore")
+    lines = content.splitlines()
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        
+        event_type = data.get("type", "")
+        host = data.get("host", "")
+        module = data.get("module", "")
+        tags = data.get("tags", [])
+        
+        if event_type == "DNS_NAME":
+            fqdn = host.lower().rstrip(".") if host else ""
+            if fqdn and DOMAIN_RE.match(fqdn):
+                if not session.scalar(select(Subdomain).where(Subdomain.fqdn == fqdn)):
+                    sub = Subdomain(fqdn=fqdn, root_domain=root_domain_guess(fqdn))
+                    session.add(sub)
+                    session.flush()
+                    subdomain_count += 1
+                    
+                    resolved = data.get("resolved_hosts", [])
+                    for ip in resolved:
+                        if ip:
+                            h = session.scalar(select(Host).where(Host.ip == ip))
+                            if not h:
+                                h = Host(ip=ip)
+                                session.add(h)
+                                session.flush()
+                                host_count += 1
+                            
+                            exists = session.execute(
+                                text("SELECT 1 FROM host_subdomains WHERE host_id = :hid AND subdomain_id = :sid"),
+                                {"hid": h.id, "sid": sub.id}
+                            ).fetchone()
+                            if not exists:
+                                session.execute(
+                                    text("INSERT INTO host_subdomains (host_id, subdomain_id) VALUES (:hid, :sid)"),
+                                    {"hid": h.id, "sid": sub.id}
+                                )
+        
+        elif event_type == "FINDING":
+            data_obj = data.get("data", {})
+            if not isinstance(data_obj, dict):
+                continue
+            
+            description = data_obj.get("description", "")
+            url = data_obj.get("url", "")
+            
+            provider = None
+            identifier = None
+            
+            azure_tenant = data_obj.get("azure_tenant_id") or data_obj.get("tenant_id")
+            if azure_tenant:
+                provider = "azure"
+                identifier = azure_tenant
+            
+            aws_key = data_obj.get("aws_access_key_id") or data_obj.get("access_key_id")
+            if aws_key:
+                provider = "aws"
+                identifier = aws_key
+            
+            gcp_project = data_obj.get("gcp_project_id") or data_obj.get("project_id")
+            if gcp_project:
+                provider = "gcp"
+                identifier = gcp_project
+            
+            azure_app = data_obj.get("azure_app_id") or data_obj.get("application_id")
+            if not identifier and azure_app:
+                provider = "azure"
+                identifier = azure_app
+            
+            if not provider:
+                tag_str = ",".join(tags) if tags else ""
+                if "cloud" in tag_str.lower() or "microsoft" in tag_str.lower() or "azure" in tag_str.lower() or "aws" in tag_str.lower() or "gcp" in tag_str.lower() or "google" in tag_str.lower() or "amazon" in tag_str.lower():
+                    provider = "other"
+                    identifier = host or url or description[:100]
+            
+            if provider and identifier:
+                tid = identifier if provider == "azure" else ""
+                app = identifier if provider != "azure" else ""
+                existing = session.execute(text(
+                    f"SELECT id FROM cloud_items WHERE provider = :prov AND (tenant_id = :tid OR app_id = :app)"
+                ), {"prov": provider, "tid": tid, "app": app}).fetchone()
+                
+                if not existing:
+                    session.execute(text(
+                        "INSERT INTO cloud_items (provider, name, tenant_id, app_id, primary_domain, source_file, created_at) VALUES (:prov, :name, :tid, :app, :domain, :src, :ts)"
+                    ), {"prov": provider, "name": identifier[:255], "tid": tid, "app": app, "domain": host or "", "src": source_name, "ts": datetime.utcnow()})
+                    cloud_count += 1
+            elif description and host:
+                from .models import Note
+                note = Note(
+                    object_type="host",
+                    object_id=0,
+                    severity="info",
+                    tags=f"bbot-cloud,{module}",
+                    body=f"[FINDING] {description}"
+                )
+                if DOMAIN_RE.match(host):
+                    sub = session.scalar(select(Subdomain).where(Subdomain.fqdn == host.lower()))
+                    if sub:
+                        note.object_type = "subdomain"
+                        note.object_id = sub.id
+                
+                session.add(note)
+                note_count += 1
+    
+    session.commit()
+    return {
+        "subdomains": subdomain_count,
+        "hosts": host_count,
+        "cloud_items": cloud_count,
+        "notes": note_count
+    }

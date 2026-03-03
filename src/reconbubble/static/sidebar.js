@@ -224,7 +224,7 @@ function bindNoteHandlers() {
         <h2>Evidence</h2>
         ${(data.evidence||[]).length ? (data.evidence||[]).map(e => `
           <div class="card">
-            <div class="muted">${esc(e.created_at)}</div>
+            <div class="muted">${esc(e.created_at)}${e.source ? ' · Source: ' + esc(e.source) : ''}</div>
             <pre class="evidence">${esc(e.raw_output||"")}</pre>
           </div>`).join("") : `<div class="muted">No evidence stored.</div>`}
       </div>

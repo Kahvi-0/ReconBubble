@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from .db import make_engine, make_session, Base, migrate_sqlite
 from .workspace import Workspace
 from .models import Host, Service, Subdomain, Email, Artifact, ServiceEvidence, Document, Note, ScopeItem, CloudItem, ValidUser, Credential, SocialMedia, WebUrl, DomainInfo
-from .parsers import upsert_artifact, import_nmap_xml, import_subdomains, import_emails, import_document, upsert_host, import_valid_users, import_credentials, import_web_urls, import_prowl_phase1, import_zone_transfers, import_smtp
+from .parsers import upsert_artifact, import_nmap_xml, import_subdomains, import_emails, import_document, upsert_host, import_valid_users, import_credentials, import_web_urls, import_prowl_phase1, import_zone_transfers, import_smtp, import_bbot, import_bbot_cloud
 
 DOMAIN_RE = re.compile(r"(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\.?$")
 
@@ -324,6 +324,12 @@ def create_app(db_path: Path, workspace_root: Path | None = None) -> FastAPI:
                     import_zone_transfers(s, art, Path(stored))
                 elif kind == "smtp":
                     import_smtp(s, art, Path(stored))
+                elif kind == "bbot":
+                    result = import_bbot(s, art, Path(stored))
+                    print(f"[bbot] Import complete: {result}")
+                elif kind == "bbot_cloud":
+                    result = import_bbot_cloud(s, art, Path(stored))
+                    print(f"[bbot_cloud] Import complete: {result}")
 
             return RedirectResponse(url="/", status_code=303)
 
@@ -529,14 +535,41 @@ def create_app(db_path: Path, workspace_root: Path | None = None) -> FastAPI:
             if not svc:
                 return JSONResponse({"ok": False}, status_code=404)
             host = s.scalar(select(Host).where(Host.id == svc.host_id))
-            evidence = s.execute(select(ServiceEvidence).where(ServiceEvidence.service_id==service_id).order_by(ServiceEvidence.created_at.desc())).scalars().all()
+            from sqlalchemy.orm import joinedload
+            evidence = s.execute(
+                select(ServiceEvidence).options(joinedload(ServiceEvidence.artifact))
+                .where(ServiceEvidence.service_id==service_id)
+                .order_by(ServiceEvidence.created_at.desc())
+            ).scalars().all()
         return {
             "ok": True,
             "host": {"id": host.id, "ip": host.ip, "hostname": host.hostname} if host else None,
             "service": {"id": svc.id, "port": svc.port, "proto": svc.proto, "state": svc.state, "service_name": svc.service_name,
                         "product": svc.product, "version": svc.version, "extra_info": svc.extra_info},
-            "evidence": [{"created_at": str(ev.created_at), "raw_output": ev.raw_output} for ev in evidence],
+            "evidence": [{"id": ev.id, "created_at": str(ev.created_at), "raw_output": ev.raw_output, "source": ev.artifact.filename if ev.artifact else ""} for ev in evidence],
         }
+
+    @app.get("/service/{service_id}", response_class=HTMLResponse)
+    def service_page(request: Request, service_id: int):
+        with db() as s:
+            svc = s.scalar(select(Service).where(Service.id == service_id))
+            if not svc:
+                return HTMLResponse("Service not found", status_code=404)
+            host = s.scalar(select(Host).where(Host.id == svc.host_id))
+            from sqlalchemy.orm import joinedload
+            evidence = s.execute(
+                select(ServiceEvidence).options(joinedload(ServiceEvidence.artifact))
+                .where(ServiceEvidence.service_id==service_id)
+                .order_by(ServiceEvidence.created_at.desc())
+            ).scalars().all()
+            notes = s.execute(select(Note).where(Note.object_type=="service", Note.object_id==service_id).order_by(Note.created_at.desc())).scalars().all()
+        return templates.TemplateResponse("service_detail.html", {
+            "request": request,
+            "host": host,
+            "svc": svc,
+            "evidence": [{"created_at": str(e.created_at), "raw_output": e.raw_output, "source": e.artifact.filename if e.artifact else ""} for e in evidence],
+            "notes": [{"created_at": str(n.created_at), "severity": n.severity, "tags": n.tags, "body": n.body} for n in notes],
+        })
 
     @app.get("/api/subdomain")
     def api_subdomain(fqdn: str = Query(...)):
@@ -944,17 +977,21 @@ def create_app(db_path: Path, workspace_root: Path | None = None) -> FastAPI:
         handle: str = Form(""),
         url: str = Form(""),
         notes: str = Form(""),
-        screenshot: UploadFile | None = File(None),
+        screenshot: list[UploadFile] | None = File(None),
     ):
-        artifact_id = None
-        if screenshot and screenshot.filename:
-            tmp = ws.uploads_dir / f"tmp_{screenshot.filename}"
-            tmp.write_bytes(await screenshot.read())
-            stored = ws.store_upload(tmp, prefix="screenshot")
-            tmp.unlink(missing_ok=True)
-            with db() as s:
-                art = upsert_artifact(s, "screenshot", stored)
-                artifact_id = art.id
+        artifact_ids = []
+        if screenshot:
+            for ss in screenshot:
+                if ss and ss.filename:
+                    tmp = ws.uploads_dir / f"tmp_{ss.filename}"
+                    tmp.write_bytes(await ss.read())
+                    stored = ws.store_upload(tmp, prefix="screenshot")
+                    tmp.unlink(missing_ok=True)
+                    with db() as s:
+                        art = upsert_artifact(s, "screenshot", stored)
+                        artifact_ids.append(art.id)
+        
+        artifact_id = artifact_ids[0] if artifact_ids else None
         
         with db() as s:
             item = SocialMedia(

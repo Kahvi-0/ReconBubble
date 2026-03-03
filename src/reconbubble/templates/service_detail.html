@@ -31,7 +31,7 @@
 {% if evidence %}
   {% for e in evidence %}
     <div class="card">
-      <div class="muted">{{ e.created_at }}</div>
+      <div class="muted">{{ e.created_at }}{% if e.source %} · Source: {{ e.source }}{% endif %}</div>
       <pre class="evidence">{{ e.raw_output }}</pre>
     </div>
   {% endfor %}
