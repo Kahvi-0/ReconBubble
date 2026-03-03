@@ -23,6 +23,8 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
 
+mkdir project && cd project
+
 reconbubble --database workspace.sqlite init
 reconbubble --database workspace.sqlite run --port 5000
 ```
