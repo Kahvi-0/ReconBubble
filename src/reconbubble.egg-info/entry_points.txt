@@ -1,2 +1,0 @@
-[console_scripts]
-reconbubble = reconbubble.cli:app
