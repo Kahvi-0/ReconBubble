@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Scope</h1>
+ 
+<p> IP/Subnet: everything on this is in scope unless toggled otherwise</p>
+<p> Domain: By default does not could subdomains. Toggle to enable this. Domains in-scope not associated to 
+in-scope IPs will only inscope the domain and not the IP automatically</p>
+<p> Email domain:</p>
+ 
+<div class="card">
+  <h2>Add scope item(s)</h2>
+  <form action="/scope/add" method="post">
+    <label>Type</label>
+    <select name="kind" id="scopeKind">
+      <option value="ip_or_subnet">IP / Subnet (auto-detect)</option>
+      <option value="domain">Domain</option>
+      <option value="email_domain">Email domain</option>
+    </select>
+
+    <div id="singleWrap">
+      <label>Single value (optional)</label>
+      <input name="value" id="singleValue" placeholder="example.com | example.org" />
+    </div>
+
+    <label>OR paste a list (one per line)</label>
+    <textarea name="values_raw" rows="7" placeholder="Paste multiple items..."></textarea>
+
+    <div id="domainWrap" style="display:flex; gap:10px; align-items:center; margin: 6px 0 12px;">
+      <input type="checkbox" id="applyAllSubs" name="apply_all_subdomains" value="1" />
+      <label for="applyAllSubs" style="margin:0;">For domain scope: mark all subdomains in-scope</label>
+    </div>
+
+    <label>Note (optional)</label>
+    <input name="note" placeholder="Prod scope, provided by client" />
+    <button class="btn" type="submit">Add</button>
+  </form>
+</div>
+
+<div class="split">
+  <div class="card">
+    <h2>Domains</h2>
+    <table>
+      <thead><tr><th>Domain</th><th>Subdomains</th><th>Status</th><th>Note</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for it in domains %}
+          <tr>
+            <td><code>{{ it.value }}</code></td>
+            <td>{% if it.apply_all_subdomains == 1 %}<span class="pill inscope">ALL</span>{% else %}<span class="pill outscope">EXACT</span>{% endif %}</td>
+            <td>{% if it.in_scope == 1 %}<span class="pill inscope">IN</span>{% else %}<span class="pill outscope">OUT</span>{% endif %}</td>
+            <td class="muted">{{ it.note }}</td>
+            <td>
+              <form style="display:inline" action="/scope/toggle" method="post">
+                <input type="hidden" name="item_id" value="{{ it.id }}"/>
+                <button class="btn" type="submit">Toggle</button>
+              </form>
+              <form style="display:inline" action="/scope/delete" method="post">
+                <input type="hidden" name="item_id" value="{{ it.id }}"/>
+                <button class="btn" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>IPs &amp; Subnets</h2>
+    <table>
+      <thead><tr><th>Value</th><th>Status</th><th>Note</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for it in ip_items %}
+          <tr>
+            <td><code>{{ it.value }}</code></td>
+            <td>{% if it.in_scope == 1 %}<span class="pill inscope">IN</span>{% else %}<span class="pill outscope">OUT</span>{% endif %}</td>
+            <td class="muted">{{ it.note }}</td>
+            <td>
+              <form style="display:inline" action="/scope/toggle" method="post">
+                <input type="hidden" name="item_id" value="{{ it.id }}"/>
+                <button class="btn" type="submit">Toggle</button>
+              </form>
+              <form style="display:inline" action="/scope/delete" method="post">
+                <input type="hidden" name="item_id" value="{{ it.id }}"/>
+                <button class="btn" type="submit">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Email domains</h2>
+  <table>
+    <thead><tr><th>Email domain</th><th>Status</th><th>Note</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for it in email_items %}
+        <tr>
+          <td><code>{{ it.value }}</code></td>
+          <td>{% if it.in_scope == 1 %}<span class="pill inscope">IN</span>{% else %}<span class="pill outscope">OUT</span>{% endif %}</td>
+          <td class="muted">{{ it.note }}</td>
+          <td>
+            <form style="display:inline" action="/scope/toggle" method="post">
+              <input type="hidden" name="item_id" value="{{ it.id }}"/>
+              <button class="btn" type="submit">Toggle</button>
+            </form>
+            <form style="display:inline" action="/scope/delete" method="post">
+              <input type="hidden" name="item_id" value="{{ it.id }}"/>
+              <button class="btn" type="submit">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+  const kindSel = document.getElementById("scopeKind");
+  const domainWrap = document.getElementById("domainWrap");
+  const allSubs = document.getElementById("applyAllSubs");
+  const singleWrap = document.getElementById("singleWrap");
+  const singleValue = document.getElementById("singleValue");
+
+  function sync() {
+    const k = kindSel.value;
+    const isDomain = k === "domain";
+    domainWrap.style.display = isDomain ? "flex" : "none";
+    if (!isDomain) allSubs.checked = false;
+
+    const showSingle = (k === "domain" || k === "email_domain");
+    singleWrap.style.display = showSingle ? "block" : "none";
+    if (!showSingle) singleValue.value = "";
+  }
+  kindSel.addEventListener("change", sync);
+  sync();
+</script>
+{% endblock %}
