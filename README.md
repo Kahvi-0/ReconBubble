@@ -29,5 +29,5 @@ pip install -e .
 mkdir project && cd project
 
 reconbubble --database workspace.sqlite init
-reconbubble --database workspace.sqlite run --port 5000
+reconbubble --database workspace.sqlite --project ProjectName run --port 5000
 ```
