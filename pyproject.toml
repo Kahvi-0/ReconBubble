@@ -1,6 +1,6 @@
 [project]
 name = "reconbubble"
-version = "0.7.6"
+version = "0.9"
 description = "ReconBubble OSINT Visualizer"
 requires-python = ">=3.10"
 dependencies = [
