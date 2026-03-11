@@ -1,15 +1,15 @@
 # ReconBubble
-Tool used to help organize pentest information 
+Tool used to help organize pentest scope, scan results, OSINT information, assets and more! 
+
 <img width="1569" height="588" alt="image" src="https://github.com/user-attachments/assets/e9f5f7ae-ae31-4562-9d89-42bb8dddfb12" />
+
+https://github.com/user-attachments/assets/2dfe0dc7-563c-4753-810b-720e26ad51e6
 
 === Supported Tool Injest  ===
 - https://github.com/waffl3ss/Prowler
 - nmap
 - bbot
 - subenum 
-
-https://github.com/user-attachments/assets/2dfe0dc7-563c-4753-810b-720e26ad51e6
-
 
 === Run With UVX ===
 ```
