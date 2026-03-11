@@ -19,3 +19,13 @@ reconbubble = "reconbubble.cli:app"
 [build-system]
 requires = ["setuptools"]
 build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+reconbubble = ["templates/*.html", "static/*", "static/**/*"]
