@@ -5,20 +5,19 @@ Tool used to help organize pentest information
 === Supported Tool Injest  ===
 - https://github.com/waffl3ss/Prowler
 - nmap
-
-to do 
 - bbot
-- subenum
-
-
-
+- subenum 
 
 https://github.com/user-attachments/assets/2dfe0dc7-563c-4753-810b-720e26ad51e6
 
 
-
-
-=== Install ===
+=== Run With UVX ===
+```
+mkdir ProjectDir && cd ProjectDir
+uvx --from git+https://github.com/Kahvi-0/ReconBubble reconbubble --database bubbledb.sqlite init
+uvx --from git+https://github.com/Kahvi-0/ReconBubble reconbubble --database bubbledb.sqlite --project "Client Pentest" run --port 5000
+```
+=== pip Install ===
 
 ```
 git clone https://github.com/Kahvi-0/ReconBubble.git && cd ReconBubble
