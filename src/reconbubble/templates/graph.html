@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Graph</h1>
+<div class="card" style="display:flex; gap:12px; align-items:center; flex-wrap:wrap;">
+  <label class="checkbox-label" style="margin:0;">
+    <input id="onlyInScope" type="checkbox" />
+    Show only in-scope
+  </label>
+  <div style="border-left:1px solid #333; height:20px;"></div>
+  <button class="btn" id="zoomIn">Zoom In</button>
+  <button class="btn" id="zoomOut">Zoom Out</button>
+  <button class="btn" id="refocus">Refocus</button>
+  <span class="muted" style="font-size:12px;">Scroll to zoom • Drag to pan • Click node for details</span>
+</div>
+<div class="split">
+  <div class="card" style="min-height:520px;">
+    <canvas id="graph" width="900" height="520" style="width:100%; height:520px; border:1px solid #222; border-radius:12px;"></canvas>
+  </div>
+  <div class="card" style="min-height:520px;">
+    <h2>Inspector</h2>
+    <div id="inspector" class="muted">Click a node…</div>
+  </div>
+</div>
+<div class="card" style="margin-top:10px;">
+  <span style="color:#22c55e;">● In-scope</span>
+  <span style="margin-left:16px; color:#ef4444;">● Out-of-scope</span>
+</div>
+<script>
+document.getElementById("zoomIn").onclick = () => window.graphAPI && window.graphAPI.zoomIn();
+document.getElementById("zoomOut").onclick = () => window.graphAPI && window.graphAPI.zoomOut();
+document.getElementById("refocus").onclick = () => window.graphAPI && window.graphAPI.centerView();
+</script>
+<script src="/static/graph.js"></script>
+{% endblock %}
