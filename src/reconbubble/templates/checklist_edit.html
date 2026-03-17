@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+  <div>
+    <h1>Mind Map Editor</h1>
+    <p class="muted" style="margin-bottom:12px;">Cytoscape visual editor. Mark Initial to enable Unchecked/Vulnerable/Not Vulnerable controls in view.</p>
+  </div>
+  <a class="btn" href="{{ '/checklist' if map_name == 'authenticated' else '/checklist-unauthenticated' }}">Back To View</a>
+</div>
+
+<style>
+.editor-top { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:10px; }
+#mindmap-editor { height:70vh; min-height:540px; border:1px solid #2f2f2f; border-radius:10px; }
+#edit-panel { margin-top:10px; padding:10px; border:1px solid #2f2f2f; border-radius:8px; display:grid; grid-template-columns:repeat(3,minmax(180px,1fr)); gap:8px; }
+#edit-panel label { font-size:12px; color:#bbb; }
+#edit-panel .full { grid-column: 1 / -1; }
+</style>
+
+<div class="editor-top">
+  <select id="mapName">
+    <option value="authenticated" {% if map_name == 'authenticated' %}selected{% endif %}>Authenticated</option>
+    <option value="unauthenticated" {% if map_name == 'unauthenticated' %}selected{% endif %}>Unauthenticated</option>
+  </select>
+  <input id="mapTitle" value="{{ map_data.title }}" placeholder="Map title" />
+  <input id="phaseLabel" value="{{ map_data.phase_label }}" placeholder="Phase label" />
+  <button class="btn" type="button" id="addNodeBtn">Add Node</button>
+  <button class="btn" type="button" id="addBranchBtn">Add Vulnerable Branch</button>
+  <button class="btn" type="button" id="addEdgeBtn">Add Base->Base Edge</button>
+  <button class="btn" type="button" id="deleteBtn">Delete Selected</button>
+  <button class="btn" type="button" id="saveBtn">Save</button>
+</div>
+
+<div id="mindmap-editor"></div>
+
+<div id="edit-panel">
+  <div><label>Selected Type</label><input id="fType" readonly /></div>
+  <div><label>ID/Key</label><input id="fId" /></div>
+  <div><label>Label</label><input id="fLabel" /></div>
+  <div><label>Parent ID (branch only)</label><input id="fParent" /></div>
+  <div><label>Color Start (node)</label><input id="fColorStart" /></div>
+  <div><label>Color End (node)</label><input id="fColorEnd" /></div>
+  <div><label>Initial (node)</label><input id="fInitial" type="checkbox" /></div>
+  <div class="full"><label>Exploit Text (node) / Child Text (branch)</label><input id="fText" /></div>
+  <div><label>Edge Source Key</label><input id="edgeFrom" /></div>
+  <div><label>Edge Target Key</label><input id="edgeTo" /></div>
+  <div><label>Edge Label</label><input id="edgeLabel" /></div>
+</div>
+
+<script>
+  window.CHECKLIST_MAP_DATA = {{ map_data | tojson }};
+  window.CHECKLIST_MAP_NAME = {{ map_name | tojson }};
+</script>
+<script src="/static/vendor/cytoscape.min.js"></script>
+<script src="/static/checklist_cyto_edit.js"></script>
+{% endblock %}

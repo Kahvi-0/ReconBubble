@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block content %}
+<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+  <div>
+    <h1>{{ map_data.title }}</h1>
+    <p class="muted" style="margin-bottom:12px;">Checklist blocks with vulnerability-driven expansion.</p>
+  </div>
+  <span class="muted" style="font-size:12px;">Edits handled by assistant</span>
+</div>
+
+<style>
+#checklistCanvas {
+  border: 1px solid #2f2f2f;
+  border-radius: 10px;
+  padding: 12px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  position: relative;
+  cursor: grab;
+}
+#checklistCanvas.dragging { cursor: grabbing; }
+#checklistLinks {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  overflow: visible;
+}
+#checklistRows {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: max-content;
+  min-width: 100%;
+}
+.chain-row {
+  display: flex;
+  align-items: center;
+  gap: 40px;
+}
+.branch-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 40px;
+}
+.branch-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.card {
+  color: #fff;
+  border-radius: 10px;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.35);
+  padding: 10px 12px;
+  min-width: 240px;
+  max-width: 360px;
+  position: relative;
+  overflow: visible;
+}
+.card-title {
+  font-size: 14px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.vuln-buttons {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.vbtn {
+  border: 0;
+  border-radius: 6px;
+  padding: 6px 9px;
+  color: #fff;
+  background: rgba(0,0,0,0.35);
+  font-size: 12px;
+  cursor: pointer;
+}
+.vbtn.active-unchecked { background: #3498db; }
+.vbtn.active-vuln { background: #e74c3c; }
+.vbtn.active-notvuln { background: #666; }
+.is-greyed { filter: grayscale(0.9) brightness(0.65); }
+.child-options { margin-top: 8px; display:flex; flex-direction:column; gap:6px; font-size:13px; }
+.exploit-badge {
+  position: absolute;
+  top: -8px;
+  right: -10px;
+  background: #ef4444;
+  color: #fff;
+  border: 2px solid #7f1d1d;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 7px;
+  letter-spacing: 0.3px;
+}
+
+#stickyHScroll {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 18px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  background: rgba(10, 13, 16, 0.92);
+  border-top: 1px solid #20252b;
+  z-index: 999;
+}
+#stickyHScrollInner { height: 1px; }
+</style>
+
+<div id="checklistCanvas">
+  <svg id="checklistLinks"></svg>
+  <div id="checklistRows"></div>
+</div>
+<div id="stickyHScroll"><div id="stickyHScrollInner"></div></div>
+
+<script>
+  window.CHECKLIST_MAP_NAME = {{ (map_name or '') | tojson }};
+  window.CHECKLIST_MAP_DATA = {{ map_data | tojson }};
+</script>
+<script src="/static/checklist_blocks.js"></script>
+{% endblock %}
