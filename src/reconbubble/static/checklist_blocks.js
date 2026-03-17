@@ -54,6 +54,42 @@
     return fetch(`/api/checklist-note/${key}`, { method: 'POST', body: fd });
   }
 
+  function applyTextareaSizing(ta, noteKey, card) {
+    const sizeKey = `size_${noteKey}`;
+    ta.style.resize = 'both';
+    ta.style.overflow = 'auto';
+    if (card) card.style.maxWidth = 'none';
+
+    const raw = String(state.notes[sizeKey] || '');
+    const m = raw.match(/^(\d+)x(\d+)$/);
+    if (m) {
+      const w = Math.max(220, parseInt(m[1], 10) || 0);
+      const h = Math.max(70, parseInt(m[2], 10) || 0);
+      ta.style.width = `${w}px`;
+      ta.style.height = `${h}px`;
+      if (card) {
+        card.style.maxWidth = 'none';
+        card.style.minWidth = `${Math.max(240, w + 24)}px`;
+      }
+    }
+
+    const persist = async () => {
+      const w = Math.max(220, Math.round(ta.offsetWidth));
+      const h = Math.max(70, Math.round(ta.offsetHeight));
+      const packed = `${w}x${h}`;
+      if (state.notes[sizeKey] === packed) return;
+      state.notes[sizeKey] = packed;
+      if (card) {
+        card.style.maxWidth = 'none';
+        card.style.minWidth = `${Math.max(240, w + 24)}px`;
+      }
+      await saveNote(sizeKey, packed);
+    };
+
+    ta.addEventListener('mouseup', () => { persist(); });
+    ta.addEventListener('touchend', () => { persist(); });
+  }
+
   function branchChildren(parentId) {
     return branches.filter((b) => b.parent_id === parentId);
   }
@@ -135,6 +171,7 @@
           state.notes[noteKey] = ta.value;
           await saveNote(noteKey, ta.value);
         };
+        applyTextareaSizing(ta, noteKey, card);
         card.appendChild(ta);
       }
 
@@ -297,6 +334,7 @@
             state.notes[noteKey] = ta.value;
             await saveNote(noteKey, ta.value);
           };
+          applyTextareaSizing(ta, noteKey, exploit);
           exploit.appendChild(ta);
         }
 
@@ -357,6 +395,7 @@
               state.notes[noteKey] = ta.value;
               await saveNote(noteKey, ta.value);
             };
+            applyTextareaSizing(ta, noteKey, shared);
             shared.appendChild(ta);
 
             const successRow = document.createElement('label');
@@ -412,6 +451,7 @@
                 state.notes[successNoteKey] = ta2.value;
                 await saveNote(successNoteKey, ta2.value);
               };
+              applyTextareaSizing(ta2, successNoteKey, success);
               success.appendChild(ta2);
 
               row.appendChild(success);
@@ -451,6 +491,7 @@
               state.notes[credsNoteKey] = credsTa.value;
               await saveNote(credsNoteKey, credsTa.value);
             };
+            applyTextareaSizing(credsTa, credsNoteKey, credsCard);
             credsCard.appendChild(credsTa);
             ensureWebAppNotesStack().appendChild(credsCard);
             if (context.branchCardById['webapp_default_creds']) {
@@ -478,6 +519,7 @@
               state.notes[exploitNoteKey] = exploitTa.value;
               await saveNote(exploitNoteKey, exploitTa.value);
             };
+            applyTextareaSizing(exploitTa, exploitNoteKey, exploitCard);
             exploitCard.appendChild(exploitTa);
 
             const extrasMetaKey = 'note_webapp_exploit_extras_count';
@@ -508,6 +550,7 @@
                 state.notes[extraKey] = extraTa.value;
                 await saveNote(extraKey, extraTa.value);
               };
+              applyTextareaSizing(extraTa, extraKey, extraCard);
               extraCard.appendChild(extraTa);
               ensureWebAppNotesStack().appendChild(extraCard);
               if (context.branchCardById['webapp_exploit']) {
