@@ -1899,11 +1899,11 @@ def create_app(
                 },
                 {
                     "key": "sccm_unauth",
-                    "label": "SCCM Unauthenticated Discovery",
+                    "label": "SCCM Unauthenticated Vulnerabilities",
                     "color_start": "#6d28d9",
                     "color_end": "#5b21b6",
                     "initial": 1,
-                    "exploit_text": "Check PXE, policy/file exposure, and unauth registration paths.",
+                    "exploit_text": "Track SCCM servers and validate unauthenticated vulnerability paths.",
                 },
                 {
                     "key": "auth_coerce",
@@ -2500,6 +2500,12 @@ def create_app(
     def checklist_unauthenticated_page(request: Request):
         with db() as s:
             map_data = _load_checklist_map(s, "unauthenticated")
+        for n in map_data.get("nodes", []):
+            if str(n.get("key") or "") == "sccm_unauth":
+                n["label"] = "SCCM Unauthenticated Vulnerabilities"
+                n["exploit_text"] = (
+                    "Track SCCM servers and validate unauthenticated vulnerability paths."
+                )
         map_data["title"] = "Domain Unauth Checklist"
         return templates.TemplateResponse(
             "checklist.html",

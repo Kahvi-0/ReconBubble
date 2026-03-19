@@ -148,6 +148,59 @@
         card.appendChild(tx);
       }
 
+      if (child.parent_id === 'sccm_unauth') {
+        const exploitKey = `${child.id}_exploitable`;
+        const isExploitable = !!state.status[exploitKey];
+
+        const exploitWrap = document.createElement('label');
+        exploitWrap.style.position = 'absolute';
+        exploitWrap.style.top = '8px';
+        exploitWrap.style.right = '10px';
+        exploitWrap.style.display = 'flex';
+        exploitWrap.style.alignItems = 'center';
+        exploitWrap.style.gap = '5px';
+        exploitWrap.style.fontSize = '11px';
+        exploitWrap.style.fontWeight = '700';
+        exploitWrap.style.cursor = 'pointer';
+        const exploitCb = document.createElement('input');
+        exploitCb.type = 'checkbox';
+        exploitCb.checked = isExploitable;
+        exploitCb.onchange = async () => {
+          state.status[exploitKey] = exploitCb.checked;
+          await saveKey(exploitKey, { done: exploitCb.checked ? 1 : 0 });
+          render();
+        };
+        exploitWrap.appendChild(exploitCb);
+        exploitWrap.appendChild(document.createTextNode('Exploitable'));
+        card.appendChild(exploitWrap);
+
+        if (isExploitable) {
+          const badge = document.createElement('span');
+          badge.className = 'exploit-badge';
+          badge.textContent = 'PWNED';
+          card.appendChild(badge);
+        }
+
+        const noteKey = `note_${child.id}_details`;
+        const ta = document.createElement('textarea');
+        ta.value = state.notes[noteKey] || '';
+        ta.placeholder = 'Notes...';
+        ta.style.width = '100%';
+        ta.style.minHeight = '80px';
+        ta.style.borderRadius = '6px';
+        ta.style.border = '1px solid rgba(255,255,255,0.35)';
+        ta.style.background = 'rgba(0,0,0,0.25)';
+        ta.style.color = '#fff';
+        ta.style.padding = '6px';
+        ta.style.fontSize = '12px';
+        ta.onchange = async () => {
+          state.notes[noteKey] = ta.value;
+          await saveNote(noteKey, ta.value);
+        };
+        applyTextareaSizing(ta, noteKey, card);
+        card.appendChild(ta);
+      }
+
       if (
         child.id === 'endpoint_edr' ||
         child.id === 'endpoint_antivirus' ||
@@ -338,6 +391,27 @@
           exploit.appendChild(ta);
         }
 
+        if (n.key === 'sccm_unauth') {
+          const sccmServerKey = 'note_sccm_unauth_servers';
+          const sccmTa = document.createElement('textarea');
+          sccmTa.value = state.notes[sccmServerKey] || '';
+          sccmTa.placeholder = 'SCCM servers / MPs / DPs...';
+          sccmTa.style.width = '100%';
+          sccmTa.style.minHeight = '80px';
+          sccmTa.style.borderRadius = '6px';
+          sccmTa.style.border = '1px solid rgba(255,255,255,0.35)';
+          sccmTa.style.background = 'rgba(0,0,0,0.25)';
+          sccmTa.style.color = '#fff';
+          sccmTa.style.padding = '6px';
+          sccmTa.style.fontSize = '12px';
+          sccmTa.onchange = async () => {
+            state.notes[sccmServerKey] = sccmTa.value;
+            await saveNote(sccmServerKey, sccmTa.value);
+          };
+          applyTextareaSizing(sccmTa, sccmServerKey, exploit);
+          exploit.appendChild(sccmTa);
+        }
+
         let rootOpts = branchChildren(n.key);
         if (n.key === 'ldap_security') {
           rootOpts = rootOpts.filter((o) => o.id !== 'ldap_relay');
@@ -493,6 +567,10 @@
             };
             applyTextareaSizing(credsTa, credsNoteKey, credsCard);
             credsCard.appendChild(credsTa);
+            const credsBadge = document.createElement('span');
+            credsBadge.className = 'exploit-badge';
+            credsBadge.textContent = 'PWNED';
+            credsCard.appendChild(credsBadge);
             ensureWebAppNotesStack().appendChild(credsCard);
             if (context.branchCardById['webapp_default_creds']) {
               pendingLinks.push([context.branchCardById['webapp_default_creds'], credsNoteId]);
@@ -502,6 +580,37 @@
           if (state.branch['webapp_exploit']) {
             const exploitNoteId = 'card-b-webapp_exploit_notes';
             const exploitCard = makeCard('Exploit', nodeBg, exploitNoteId);
+            const exploitBadgeKey = 'webapp_exploit_badge_main';
+            const exploited = !!state.status[exploitBadgeKey];
+
+            const toggleWrap = document.createElement('label');
+            toggleWrap.style.position = 'absolute';
+            toggleWrap.style.top = '8px';
+            toggleWrap.style.right = '10px';
+            toggleWrap.style.display = 'flex';
+            toggleWrap.style.alignItems = 'center';
+            toggleWrap.style.gap = '5px';
+            toggleWrap.style.fontSize = '11px';
+            toggleWrap.style.fontWeight = '700';
+            toggleWrap.style.cursor = 'pointer';
+            const toggle = document.createElement('input');
+            toggle.type = 'checkbox';
+            toggle.checked = exploited;
+            toggle.onchange = async () => {
+              state.status[exploitBadgeKey] = toggle.checked;
+              await saveKey(exploitBadgeKey, { done: toggle.checked ? 1 : 0 });
+              render();
+            };
+            toggleWrap.appendChild(toggle);
+            toggleWrap.appendChild(document.createTextNode('Exploited'));
+            exploitCard.appendChild(toggleWrap);
+
+            if (exploited) {
+              const badge = document.createElement('span');
+              badge.className = 'exploit-badge';
+              badge.textContent = 'PWNED';
+              exploitCard.appendChild(badge);
+            }
 
             const exploitNoteKey = 'note_webapp_exploit';
             const exploitTa = document.createElement('textarea');
@@ -535,6 +644,38 @@
               const extraId = `card-b-webapp_exploit_notes_extra_${i}`;
               const extraCard = makeCard(`Exploit Note ${i + 1}`, nodeBg, extraId);
               const extraKey = `note_webapp_exploit_extra_${i}`;
+              const extraBadgeKey = `webapp_exploit_badge_extra_${i}`;
+              const extraExploited = !!state.status[extraBadgeKey];
+
+              const extraToggleWrap = document.createElement('label');
+              extraToggleWrap.style.position = 'absolute';
+              extraToggleWrap.style.top = '8px';
+              extraToggleWrap.style.right = '10px';
+              extraToggleWrap.style.display = 'flex';
+              extraToggleWrap.style.alignItems = 'center';
+              extraToggleWrap.style.gap = '5px';
+              extraToggleWrap.style.fontSize = '11px';
+              extraToggleWrap.style.fontWeight = '700';
+              extraToggleWrap.style.cursor = 'pointer';
+              const extraToggle = document.createElement('input');
+              extraToggle.type = 'checkbox';
+              extraToggle.checked = extraExploited;
+              extraToggle.onchange = async () => {
+                state.status[extraBadgeKey] = extraToggle.checked;
+                await saveKey(extraBadgeKey, { done: extraToggle.checked ? 1 : 0 });
+                render();
+              };
+              extraToggleWrap.appendChild(extraToggle);
+              extraToggleWrap.appendChild(document.createTextNode('Exploited'));
+              extraCard.appendChild(extraToggleWrap);
+
+              if (extraExploited) {
+                const extraBadge = document.createElement('span');
+                extraBadge.className = 'exploit-badge';
+                extraBadge.textContent = 'PWNED';
+                extraCard.appendChild(extraBadge);
+              }
+
               const extraTa = document.createElement('textarea');
               extraTa.value = state.notes[extraKey] || '';
               extraTa.placeholder = 'Notes...';
@@ -603,13 +744,40 @@
       if (!from || !to) continue;
       const a = from.getBoundingClientRect();
       const b = to.getBoundingClientRect();
-      const x1 = a.right - c.left + canvasEl.scrollLeft;
-      const y1 = a.top + a.height / 2 - c.top + canvasEl.scrollTop;
-      const x2 = b.left - c.left + canvasEl.scrollLeft;
-      const y2 = b.top + b.height / 2 - c.top + canvasEl.scrollTop;
-      const mid = x1 + Math.max(10, (x2 - x1) / 2);
+
+      const ax = a.left + a.width / 2;
+      const ay = a.top + a.height / 2;
+      const bx = b.left + b.width / 2;
+      const by = b.top + b.height / 2;
+      const dx = bx - ax;
+      const dy = by - ay;
+
+      let x1;
+      let y1;
+      let x2;
+      let y2;
+
+      if (Math.abs(dy) > Math.abs(dx) * 1.15) {
+        // Mostly vertical relationship: connect bottom->top or top->bottom.
+        x1 = a.left + a.width / 2;
+        y1 = dy >= 0 ? a.bottom : a.top;
+        x2 = b.left + b.width / 2;
+        y2 = dy >= 0 ? b.top : b.bottom;
+      } else {
+        // Mostly horizontal relationship: connect nearest side centers.
+        x1 = dx >= 0 ? a.right : a.left;
+        y1 = a.top + a.height / 2;
+        x2 = dx >= 0 ? b.left : b.right;
+        y2 = b.top + b.height / 2;
+      }
+
+      x1 = x1 - c.left + canvasEl.scrollLeft;
+      y1 = y1 - c.top + canvasEl.scrollTop;
+      x2 = x2 - c.left + canvasEl.scrollLeft;
+      y2 = y2 - c.top + canvasEl.scrollTop;
+
       const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-      p.setAttribute('d', `M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}`);
+      p.setAttribute('d', `M ${x1} ${y1} L ${x2} ${y2}`);
       p.setAttribute('stroke', '#808080');
       p.setAttribute('stroke-width', '2');
       p.setAttribute('fill', 'none');
