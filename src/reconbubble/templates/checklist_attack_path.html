@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Attack Path</h1>
+<p class="muted">Consolidated vulnerable items selected from Domain Unauth Checklist and Domain Auth Checklist.</p>
+
+{% if attack_items %}
+<div class="card" style="margin-bottom:14px;">
+  <h2>Vulnerable Options ({{ attack_items|length }})</h2>
+  <p class="muted">Only items currently marked vulnerable/selected are listed here.</p>
+</div>
+
+<table>
+  <thead><tr><th>Source</th><th>Type</th><th>Title</th><th>Detail</th><th>Notes</th></tr></thead>
+  <tbody>
+    {% for it in attack_items %}
+    <tr>
+      <td>{{ it.source }}</td>
+      <td><span class="pill {% if it.kind == 'Root' %}inscope{% else %}outscope{% endif %}">{{ it.kind }}</span></td>
+      <td><strong>{{ it.title }}</strong></td>
+      <td>{{ it.detail }}</td>
+      <td style="white-space:pre-wrap; max-width:380px;">{% if it.note %}{{ it.note }}{% else %}<span class="muted">-</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="card">
+  <h2>No Vulnerable Items Yet</h2>
+  <p class="muted">Mark items as Vulnerable in the checklist pages and selected branches will appear here.</p>
+</div>
+{% endif %}
+{% endblock %}
