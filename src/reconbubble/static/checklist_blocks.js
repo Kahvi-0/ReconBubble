@@ -201,6 +201,27 @@
         card.appendChild(ta);
       }
 
+      if (child.parent_id === 'guest_null_sessions') {
+        const noteKey = `note_${child.id}_details`;
+        const ta = document.createElement('textarea');
+        ta.value = state.notes[noteKey] || '';
+        ta.placeholder = 'Notes...';
+        ta.style.width = '100%';
+        ta.style.minHeight = '80px';
+        ta.style.borderRadius = '6px';
+        ta.style.border = '1px solid rgba(255,255,255,0.35)';
+        ta.style.background = 'rgba(0,0,0,0.25)';
+        ta.style.color = '#fff';
+        ta.style.padding = '6px';
+        ta.style.fontSize = '12px';
+        ta.onchange = async () => {
+          state.notes[noteKey] = ta.value;
+          await saveNote(noteKey, ta.value);
+        };
+        applyTextareaSizing(ta, noteKey, card);
+        card.appendChild(ta);
+      }
+
       if (
         child.id === 'endpoint_edr' ||
         child.id === 'endpoint_antivirus' ||

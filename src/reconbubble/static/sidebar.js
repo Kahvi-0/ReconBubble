@@ -5,17 +5,33 @@
   const title = document.getElementById("sidebarTitle");
   const body = document.getElementById("sidebarBody");
   const closeBtn = document.getElementById("sidebarClose");
+  let prevBodyOverflow = "";
+  let prevHtmlOverflow = "";
+
+  function lockBackgroundScroll() {
+    prevBodyOverflow = document.body.style.overflow || "";
+    prevHtmlOverflow = document.documentElement.style.overflow || "";
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+  }
+
+  function unlockBackgroundScroll() {
+    document.body.style.overflow = prevBodyOverflow;
+    document.documentElement.style.overflow = prevHtmlOverflow;
+  }
 
   function show() {
     overlay.classList.remove("hidden");
     sidebar.classList.remove("hidden");
     sidebar.setAttribute("aria-hidden", "false");
+    lockBackgroundScroll();
   }
   function hide() {
     overlay.classList.add("hidden");
     sidebar.classList.add("hidden");
     sidebar.setAttribute("aria-hidden", "true");
     body.innerHTML = "";
+    unlockBackgroundScroll();
   }
   overlay && overlay.addEventListener("click", hide);
   closeBtn && closeBtn.addEventListener("click", hide);

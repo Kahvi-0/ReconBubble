@@ -2032,16 +2032,16 @@ def create_app(
                 {
                     "id": "null_enum4",
                     "parent_id": "guest_null_sessions",
-                    "label": "enum4linux-ng unauth data",
-                    "title": "Anonymous SMB Enumeration",
-                    "text": "Anonymous/guest enumeration returned useful users/groups/shares.",
+                    "label": "Unauth LDAP sessions",
+                    "title": "Unauthenticated LDAP Sessions",
+                    "text": "Validate anonymous/unauth LDAP session behavior and exposed directory data.",
                 },
                 {
                     "id": "null_smbmap",
                     "parent_id": "guest_null_sessions",
-                    "label": "Null auth shares listed",
-                    "title": "Null Share Access",
-                    "text": "smbmap/nxc showed share visibility with null or guest credentials.",
+                    "label": "SMB null/anon session",
+                    "title": "SMB Null/Anonymous Session",
+                    "text": "Validate SMB null/anonymous session access and reachable share data.",
                 },
                 {
                     "id": "null_rpc",
@@ -2505,6 +2505,20 @@ def create_app(
                 n["label"] = "SCCM Unauthenticated Vulnerabilities"
                 n["exploit_text"] = (
                     "Track SCCM servers and validate unauthenticated vulnerability paths."
+                )
+        for b in map_data.get("vuln_branches", []):
+            bid = str(b.get("id") or "")
+            if bid == "null_enum4":
+                b["label"] = "Unauth LDAP sessions"
+                b["title"] = "Unauthenticated LDAP Sessions"
+                b["text"] = (
+                    "Validate anonymous/unauth LDAP session behavior and exposed directory data."
+                )
+            elif bid == "null_smbmap":
+                b["label"] = "SMB null/anon session"
+                b["title"] = "SMB Null/Anonymous Session"
+                b["text"] = (
+                    "Validate SMB null/anonymous session access and reachable share data."
                 )
         map_data["title"] = "Domain Unauth Checklist"
         return templates.TemplateResponse(
