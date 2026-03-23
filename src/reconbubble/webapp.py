@@ -71,6 +71,30 @@ def create_app(
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     templates.env.globals["project_name"] = (project_name or "").strip()
 
+    # Starlette/FastAPI changed TemplateResponse call style across versions.
+    # Support both:
+    #   templates.TemplateResponse("name.html", {"request": request, ...})
+    # and
+    #   templates.TemplateResponse(request, "name.html", {...})
+    _template_response_orig = templates.TemplateResponse
+
+    def _template_response_compat(*args, **kwargs):
+        if len(args) >= 2 and isinstance(args[0], str) and isinstance(args[1], dict):
+            template_name = args[0]
+            context = args[1]
+            request = context.get("request")
+            if request is not None:
+                try:
+                    return _template_response_orig(
+                        request, template_name, context, *args[2:], **kwargs
+                    )
+                except Exception:
+                    # Fall back to legacy call style below.
+                    pass
+        return _template_response_orig(*args, **kwargs)
+
+    templates.TemplateResponse = _template_response_compat
+
     def db() -> Session:
         return SessionLocal()
 
