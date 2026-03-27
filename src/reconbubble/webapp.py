@@ -1123,6 +1123,30 @@ def create_app(
                         "exploit_text": "Assess weak account control settings.",
                     },
                     {
+                        "key": "accounts_no_password",
+                        "label": "Accounts That Do Not Require Passwords",
+                        "color_start": "#c0392b",
+                        "color_end": "#922b21",
+                        "initial": 1,
+                        "exploit_text": "Identify accounts configured with password-not-required behavior and validate abuse paths.",
+                    },
+                    {
+                        "key": "insecure_domain_priv_dacl",
+                        "label": "Insecure Domain Privileges and DACL",
+                        "color_start": "#7c2d12",
+                        "color_end": "#9a3412",
+                        "initial": 1,
+                        "exploit_text": "Track risky delegated privileges and DACL misconfigurations that enable privilege escalation.",
+                    },
+                    {
+                        "key": "pre2k_auth",
+                        "label": "Pre2k Computer Account Checks",
+                        "color_start": "#334155",
+                        "color_end": "#1e293b",
+                        "initial": 1,
+                        "exploit_text": "Test legacy machine-account naming/password patterns for weak auth.",
+                    },
+                    {
                         "key": "ldap_descriptions",
                         "label": "LDAP Descriptions Harvest",
                         "color_start": "#9b59b6",
@@ -1718,6 +1742,27 @@ def create_app(
                         "label": "Client trust abuse",
                         "title": "Client Trust Abuse",
                         "text": "Exploit client trust in rogue or tampered update paths.",
+                    },
+                    {
+                        "id": "pre2k_auth_hostlist",
+                        "parent_id": "pre2k_auth",
+                        "label": "Hostname list built",
+                        "title": "Pre2k Candidate Hostnames",
+                        "text": "Prepared host-derived candidate machine accounts for pre2k checks.",
+                    },
+                    {
+                        "id": "pre2k_auth_userpass",
+                        "parent_id": "pre2k_auth",
+                        "label": "hostname$:hostname hit",
+                        "title": "Pre2k Default Pattern Hit",
+                        "text": "Legacy computer-account password pattern produced successful auth.",
+                    },
+                    {
+                        "id": "pre2k_auth_blank",
+                        "parent_id": "pre2k_auth",
+                        "label": "Blank machine password works",
+                        "title": "Blank Machine Password",
+                        "text": "Blank password accepted for candidate machine account.",
                     },
                     {
                         "id": "msa_principals",
@@ -2465,7 +2510,7 @@ def create_app(
             s.commit()
             return default
 
-        if map_name == "unauthenticated":
+        if map_name in ("unauthenticated", "authenticated"):
             default = _default_checklist_map(map_name)
             cur_nodes = (
                 data.get("nodes", []) if isinstance(data.get("nodes"), list) else []
@@ -2693,6 +2738,89 @@ def create_app(
     @app.get("/smb-shares", response_class=HTMLResponse)
     def smb_shares_page(request: Request):
         return templates.TemplateResponse("smb_shares.html", {"request": request})
+
+    @app.get("/topology", response_class=HTMLResponse)
+    def topology_page(request: Request):
+        with db() as s:
+            row = (
+                s.execute(
+                    select(Note)
+                    .where(Note.object_type == "topology_map", Note.object_id == 0)
+                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+        data = {"nodes": [], "edges": []}
+        if row and (row.body or "").strip():
+            try:
+                raw = json.loads(row.body)
+                if isinstance(raw.get("nodes"), list):
+                    data["nodes"] = raw.get("nodes")
+                if isinstance(raw.get("edges"), list):
+                    data["edges"] = raw.get("edges")
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            "topology.html", {"request": request, "topology_data": data}
+        )
+
+    @app.get("/api/topology")
+    def api_topology_get():
+        with db() as s:
+            row = (
+                s.execute(
+                    select(Note)
+                    .where(Note.object_type == "topology_map", Note.object_id == 0)
+                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+        data = {"nodes": [], "edges": []}
+        if row and (row.body or "").strip():
+            try:
+                raw = json.loads(row.body)
+                if isinstance(raw.get("nodes"), list):
+                    data["nodes"] = raw.get("nodes")
+                if isinstance(raw.get("edges"), list):
+                    data["edges"] = raw.get("edges")
+            except Exception:
+                pass
+        return {"ok": True, "map": data}
+
+    @app.post("/api/topology")
+    async def api_topology_save(request: Request):
+        body = await request.json()
+        nodes = body.get("nodes") if isinstance(body.get("nodes"), list) else []
+        edges = body.get("edges") if isinstance(body.get("edges"), list) else []
+        payload = json.dumps({"nodes": nodes, "edges": edges})
+
+        with db() as s:
+            row = (
+                s.execute(
+                    select(Note)
+                    .where(Note.object_type == "topology_map", Note.object_id == 0)
+                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+            if row:
+                row.body = payload
+                row.updated_at = datetime.utcnow()
+            else:
+                s.add(
+                    Note(
+                        object_type="topology_map",
+                        object_id=0,
+                        severity="info",
+                        tags="topology",
+                        body=payload,
+                    )
+                )
+            s.commit()
+        return {"ok": True}
 
     @app.get("/checklist/edit", response_class=HTMLResponse)
     def checklist_edit(request: Request, map_name: str = Query("authenticated")):

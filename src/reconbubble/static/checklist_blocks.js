@@ -391,11 +391,21 @@
         tx.style.marginBottom = '6px';
         exploit.appendChild(tx);
 
-        if (n.key === 'ldap_security') {
-          const noteKey = 'note_ldap_security_exploit';
+        const rootNotePlaceholders = {
+          ldap_security: 'LDAP signing/channel binding exploitation notes...',
+          adcs: 'ADCS servers/templates/ESC notes...',
+          sccm: 'SCCM servers / MPs / DPs...',
+          wsus: 'WSUS server/trust path notes...',
+          accounts_no_password: 'Accounts that do not require passwords...',
+          constrained_delegation: 'Constrained delegation notes...',
+          unconstrained_delegation: 'Unconstrained delegation notes...',
+          insecure_domain_priv_dacl: 'Insecure privileges / DACL notes...',
+        };
+        if (rootNotePlaceholders[n.key]) {
+          const noteKey = `note_${n.key}_exploit`;
           const ta = document.createElement('textarea');
           ta.value = state.notes[noteKey] || '';
-          ta.placeholder = 'LDAP signing/channel binding exploitation notes...';
+          ta.placeholder = rootNotePlaceholders[n.key];
           ta.style.width = '100%';
           ta.style.minHeight = '70px';
           ta.style.borderRadius = '6px';
@@ -723,6 +733,56 @@
 
           if (webAppNotesStack) {
             row.appendChild(webAppNotesStack);
+          }
+        }
+
+        if (n.key === 'insecure_domain_priv_dacl') {
+          const extrasMetaKey = 'note_insecure_domain_priv_dacl_extras_count';
+          const extrasRaw = parseInt(state.notes[extrasMetaKey] || '0', 10);
+          const extrasCount = Number.isFinite(extrasRaw) && extrasRaw > 0 ? extrasRaw : 0;
+
+          const addBtn = document.createElement('button');
+          addBtn.className = 'vbtn';
+          addBtn.type = 'button';
+          addBtn.style.marginTop = '8px';
+          addBtn.textContent = 'Add privilege/DACL note bubble';
+          addBtn.onclick = async () => {
+            const current = parseInt(state.notes[extrasMetaKey] || '0', 10);
+            const next = (Number.isFinite(current) ? current : 0) + 1;
+            state.notes[extrasMetaKey] = String(next);
+            await saveNote(extrasMetaKey, String(next));
+            render();
+          };
+          exploit.appendChild(addBtn);
+
+          if (extrasCount > 0) {
+            const extraStack = document.createElement('div');
+            extraStack.className = 'branch-stack';
+            for (let i = 1; i <= extrasCount; i++) {
+              const extraId = `card-b-insecure_domain_priv_dacl_extra_${i}`;
+              const extraCard = makeCard(`Privilege/DACL Note ${i + 1}`, nodeBg, extraId);
+              const extraKey = `note_insecure_domain_priv_dacl_extra_${i}`;
+              const extraTa = document.createElement('textarea');
+              extraTa.value = state.notes[extraKey] || '';
+              extraTa.placeholder = 'Notes...';
+              extraTa.style.width = '100%';
+              extraTa.style.minHeight = '90px';
+              extraTa.style.borderRadius = '6px';
+              extraTa.style.border = '1px solid rgba(255,255,255,0.35)';
+              extraTa.style.background = 'rgba(0,0,0,0.25)';
+              extraTa.style.color = '#fff';
+              extraTa.style.padding = '6px';
+              extraTa.style.fontSize = '12px';
+              extraTa.onchange = async () => {
+                state.notes[extraKey] = extraTa.value;
+                await saveNote(extraKey, extraTa.value);
+              };
+              applyTextareaSizing(extraTa, extraKey, extraCard);
+              extraCard.appendChild(extraTa);
+              extraStack.appendChild(extraCard);
+              pendingLinks.push([exploitId, extraId]);
+            }
+            row.appendChild(extraStack);
           }
         }
       }

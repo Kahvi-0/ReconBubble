@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Topology</h1>
+<div class="card" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
+  <button class="btn" draggable="true" data-node-type="computer">Drag Computer</button>
+  <button class="btn" draggable="true" data-node-type="server">Drag Server</button>
+  <button class="btn" draggable="true" data-node-type="router">Drag Router</button>
+  <button class="btn" draggable="true" data-node-type="switch">Drag Switch</button>
+  <button class="btn" draggable="true" data-node-type="firewall">Drag Firewall</button>
+  <button class="btn" draggable="true" data-node-type="user">Drag User</button>
+  <button class="btn" draggable="true" data-node-type="domain">Drag Domain</button>
+  <span style="border-left:1px solid #334155; height:20px;"></span>
+  <button class="btn" id="fitView">Fit</button>
+  <span id="topologyStatus" class="muted">Ready</span>
+</div>
+
+<div class="split">
+  <div class="card" style="min-height:620px;">
+    <div id="topologyCy" style="height:620px; border:1px solid #223046; border-radius:12px; background: radial-gradient(circle at 20% 20%, #111827 0%, #0b1220 100%);"></div>
+  </div>
+  <div class="card" style="min-height:620px;">
+    <h2>Node Inspector</h2>
+    <div id="topologyInspector" class="muted">Click a node to edit label, notes, color, and compromise state.</div>
+  </div>
+</div>
+
+<script>
+  window.TOPOLOGY_DATA = {{ topology_data | tojson }};
+</script>
+<script src="/static/vendor/cytoscape.min.js"></script>
+<script src="/static/topology.js?v=1"></script>
+{% endblock %}
