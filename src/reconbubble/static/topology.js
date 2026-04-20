@@ -29,6 +29,7 @@
         type: type,
         color: n.color || "#1f6feb",
         notes: n.notes || "",
+        floating_notes: Array.isArray(n.floating_notes) ? n.floating_notes : [],
         compromised: !!n.compromised,
         display: `${icon} ${label}`,
       },
@@ -62,6 +63,7 @@
           "height": 56,
           "border-width": 2,
           "border-color": "#0b1220",
+          "z-index": 20,
         },
       },
       {
@@ -107,6 +109,26 @@
           "text-valign": "center",
           "text-halign": "center",
           "z-index": 998,
+        },
+      },
+      {
+        selector: 'node[type = "floating_note"]',
+        style: {
+          "shape": "round-rectangle",
+          "width": 150,
+          "height": 24,
+          "background-color": "#052e16",
+          "border-width": 1,
+          "border-color": "#22c55e",
+          "label": "data(text)",
+          "font-size": 10,
+          "font-weight": 500,
+          "color": "#bbf7d0",
+          "text-valign": "center",
+          "text-halign": "center",
+          "text-wrap": "ellipsis",
+          "text-max-width": 138,
+          "z-index": 5,
         },
       },
       {
@@ -219,8 +241,12 @@
     return node && node.isNode && node.isNode() && node.data("type") === "preview";
   }
 
+  function isFloatingNote(node) {
+    return node && node.isNode && node.isNode() && node.data("type") === "floating_note";
+  }
+
   function isVirtualNode(node) {
-    return isHandle(node) || isBadge(node) || isPreview(node);
+    return isHandle(node) || isBadge(node) || isPreview(node) || isFloatingNote(node);
   }
 
   function realNodes() {
@@ -233,6 +259,10 @@
 
   function badgeIdFor(nodeId) {
     return `b_${nodeId}`;
+  }
+
+  function floatingNoteId(ownerId, noteId) {
+    return `fn_${ownerId}_${noteId}`;
   }
 
   function syncHandlePosition(nodeId) {
@@ -284,6 +314,52 @@
     if (b && b.length) b.remove();
   }
 
+  function removeFloatingNotes(ownerId) {
+    cy.nodes().forEach((n) => {
+      if (isFloatingNote(n) && n.data("owner") === ownerId) n.remove();
+    });
+  }
+
+  function refreshFloatingNotes(ownerId) {
+    removeFloatingNotes(ownerId);
+    const owner = cy.getElementById(ownerId);
+    if (!owner || !owner.length) return;
+    const notes = Array.isArray(owner.data("floating_notes")) ? owner.data("floating_notes") : [];
+    const p = owner.position();
+    notes.forEach((note, idx) => {
+      const id = floatingNoteId(ownerId, String(note.id || idx + 1));
+      cy.add({
+        group: "nodes",
+        data: {
+          id,
+          type: "floating_note",
+          owner: ownerId,
+          note_id: String(note.id || idx + 1),
+          text: String(note.text || "Note"),
+        },
+        position: { x: p.x + 110, y: p.y - 20 + idx * 28 },
+        grabbable: false,
+        selectable: false,
+      });
+    });
+  }
+
+  function deleteFloatingNoteNode(noteNode) {
+    const ownerId = String(noteNode.data("owner") || "");
+    const noteId = String(noteNode.data("note_id") || "");
+    if (!ownerId || !noteId) return;
+    const owner = cy.getElementById(ownerId);
+    if (!owner || !owner.length) return;
+    const arr = Array.isArray(owner.data("floating_notes")) ? [...owner.data("floating_notes")] : [];
+    owner.data(
+      "floating_notes",
+      arr.filter((x) => String((x || {}).id || "") !== noteId)
+    );
+    refreshFloatingNotes(ownerId);
+    queueSave();
+    setStatus("Floating note deleted");
+  }
+
   function findDropTarget(sourceId, worldPos) {
     let best = null;
     let bestDist = Number.POSITIVE_INFINITY;
@@ -308,6 +384,7 @@
       type: n.data("type") || "computer",
       color: n.data("color") || "#1f6feb",
       notes: n.data("notes") || "",
+      floating_notes: Array.isArray(n.data("floating_notes")) ? n.data("floating_notes") : [],
       compromised: !!n.data("compromised"),
       x: n.position("x"),
       y: n.position("y"),
@@ -359,6 +436,7 @@
         type: type,
         color: "#1f6feb",
         notes: "",
+        floating_notes: [],
         compromised: false,
         display: `${icon} ${label} ${nextNodeId - 1}`,
       },
@@ -477,6 +555,7 @@
 
   cy.nodes().forEach(updateNodeClass);
   ensureAllHandles();
+  realNodes().forEach((n) => refreshFloatingNotes(n.id()));
   cy.on("tap", "node", (evt) => {
     const node = evt.target;
     if (isVirtualNode(node)) {
@@ -494,6 +573,7 @@
     if (!isVirtualNode(n)) {
       syncHandlePosition(n.id());
       syncBadgePosition(n.id());
+      refreshFloatingNotes(n.id());
       saveNow();
     }
   });
@@ -503,6 +583,7 @@
     if (!isVirtualNode(n)) {
       syncHandlePosition(n.id());
       syncBadgePosition(n.id());
+      refreshFloatingNotes(n.id());
     }
   });
 
@@ -511,6 +592,7 @@
     if (!isVirtualNode(n)) {
       ensureHandle(n.id());
       updateNodeClass(n);
+      refreshFloatingNotes(n.id());
     }
   });
 
@@ -520,6 +602,7 @@
       const h = cy.getElementById(handleIdFor(n.id()));
       if (h && h.length) h.remove();
       removeBadge(n.id());
+      removeFloatingNotes(n.id());
       queueSave();
     }
   });
@@ -567,9 +650,32 @@
 
   cy.on("cxttap", "node", (evt) => {
     const node = evt.target;
+    if (isFloatingNote(node)) {
+      const oe = evt.originalEvent || {};
+      showContextMenu(oe.clientX || 24, oe.clientY || 24, [
+        {
+          label: "Delete Floating Note",
+          onClick: () => deleteFloatingNoteNode(node),
+        },
+      ]);
+      return;
+    }
     if (isVirtualNode(node)) return;
     const oe = evt.originalEvent || {};
     showContextMenu(oe.clientX || 24, oe.clientY || 24, [
+      {
+        label: "Add Floating Note",
+        onClick: () => {
+          const text = window.prompt("Floating note text", "");
+          if (text === null) return;
+          const arr = Array.isArray(node.data("floating_notes")) ? [...node.data("floating_notes")] : [];
+          arr.push({ id: String(Date.now()), text: String(text || "Note").trim() || "Note" });
+          node.data("floating_notes", arr);
+          refreshFloatingNotes(node.id());
+          queueSave();
+          setStatus("Floating note added");
+        },
+      },
       {
         label: "Delete Node",
         onClick: () => {
