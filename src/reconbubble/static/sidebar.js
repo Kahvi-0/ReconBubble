@@ -26,18 +26,25 @@
     document.documentElement.style.overflow = prevHtmlOverflow;
   }
 
+  function resetBackgroundScroll() {
+    scrollLockDepth = 0;
+    document.body.style.overflow = prevBodyOverflow;
+    document.documentElement.style.overflow = prevHtmlOverflow;
+  }
+
   function show() {
+    const wasHidden = overlay.classList.contains("hidden");
     overlay.classList.remove("hidden");
     sidebar.classList.remove("hidden");
     sidebar.setAttribute("aria-hidden", "false");
-    lockBackgroundScroll();
+    if (wasHidden) lockBackgroundScroll();
   }
   function hide() {
     overlay.classList.add("hidden");
     sidebar.classList.add("hidden");
     sidebar.setAttribute("aria-hidden", "true");
     body.innerHTML = "";
-    unlockBackgroundScroll();
+    resetBackgroundScroll();
   }
   overlay && overlay.addEventListener("click", hide);
   closeBtn && closeBtn.addEventListener("click", hide);
@@ -181,6 +188,7 @@ function bindNoteHandlers() {
 
       <div class="card">
         <h2>Services</h2>
+        <button class="btn" id="createServiceBtn" type="button" style="margin-bottom:10px;">Add service</button>
         ${ (data.services||[]).length ? `
           <table>
             <thead><tr><th>Port</th><th>Proto</th><th>State</th><th>Service</th></tr></thead>
@@ -215,6 +223,11 @@ function bindNoteHandlers() {
       }
     });
 
+    const createBtn = document.getElementById("createServiceBtn");
+    createBtn && createBtn.addEventListener("click", () => {
+      openServiceCreatePopup(data.host.id);
+    });
+
     body.querySelectorAll("[data-open-service]").forEach(a => {
       a.addEventListener("click", (ev) => {
         ev.preventDefault();
@@ -239,6 +252,7 @@ function bindNoteHandlers() {
         <div><b>Product:</b> ${esc(data.service.product || "")}</div>
         <div><b>Version:</b> ${esc(data.service.version || "")}</div>
         <div><b>Extra:</b> ${esc(data.service.extra_info || "")}</div>
+        <button class="btn" id="editServiceBtn" type="button" style="margin-top:10px;">Edit service</button>
         ${data.host ? `<div class="muted"><a href="#" id="backToHost">Back to asset</a></div>` : ""}
       </div>
 
@@ -252,10 +266,162 @@ function bindNoteHandlers() {
       </div>
     `;
     show();
+    const editBtn = document.getElementById("editServiceBtn");
+    editBtn && editBtn.addEventListener("click", () => {
+      openServiceEditPopup(data);
+    });
     const back = document.getElementById("backToHost");
     back && back.addEventListener("click", (ev) => {
       ev.preventDefault();
       if (data.host) openHost(data.host.id);
+    });
+  }
+
+  function openServiceEditPopup(serviceData) {
+    const svc = serviceData.service || {};
+    const modal = document.createElement("div");
+    modal.style.position = "fixed";
+    modal.style.inset = "0";
+    modal.style.background = "rgba(0,0,0,0.55)";
+    modal.style.zIndex = "1400";
+    modal.style.display = "flex";
+    modal.style.alignItems = "center";
+    modal.style.justifyContent = "center";
+
+    const proto = String(svc.proto || "tcp").toLowerCase();
+    const state = String(svc.state || "open").toLowerCase();
+
+    modal.innerHTML = `
+      <div class="card" style="width:min(640px, 92vw); max-height:88vh; overflow:auto;">
+        <h2>Edit service</h2>
+        <form id="serviceEditPopupForm">
+          <input type="hidden" name="service_id" value="${svc.id}"/>
+          <label>Port</label>
+          <input name="port" type="number" min="1" max="65535" value="${svc.port}" required />
+          <label>Proto</label>
+          <select name="proto">
+            <option value="tcp" ${proto==='tcp'?'selected':''}>tcp</option>
+            <option value="udp" ${proto==='udp'?'selected':''}>udp</option>
+          </select>
+          <label>State</label>
+          <select name="state">
+            <option value="open" ${state==='open'?'selected':''}>open</option>
+            <option value="filtered" ${state==='filtered'?'selected':''}>filtered</option>
+            <option value="closed" ${state==='closed'?'selected':''}>closed</option>
+          </select>
+          <label>Service name</label>
+          <input name="service_name" value="${esc(svc.service_name||'')}" />
+          <label>Product</label>
+          <input name="product" value="${esc(svc.product||'')}" />
+          <label>Version</label>
+          <input name="version" value="${esc(svc.version||'')}" />
+          <label>Extra info</label>
+          <input name="extra_info" value="${esc(svc.extra_info||'')}" />
+          <label>Additional script/output evidence</label>
+          <textarea name="raw_output" rows="5" placeholder="Paste additional output to append as evidence..."></textarea>
+          <div style="display:flex; gap:8px; margin-top:10px;">
+            <button class="btn" type="submit">Save service</button>
+            <button class="btn" type="button" id="serviceEditCancel">Cancel</button>
+          </div>
+          <div id="serviceEditPopupMsg" class="muted" style="margin-top:8px;"></div>
+        </form>
+      </div>
+    `;
+
+    function closePopup() { modal.remove(); }
+    modal.addEventListener("click", (ev) => { if (ev.target === modal) closePopup(); });
+    document.body.appendChild(modal);
+
+    const cancelBtn = modal.querySelector("#serviceEditCancel");
+    const form = modal.querySelector("#serviceEditPopupForm");
+    const msg = modal.querySelector("#serviceEditPopupMsg");
+    cancelBtn && cancelBtn.addEventListener("click", closePopup);
+
+    form && form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      msg.textContent = "Saving...";
+      const fd = new FormData(form);
+      const r = await fetch("/api/service/update", { method: "POST", body: fd });
+      const j = await r.json().catch(() => ({ ok: false }));
+      if (j.ok) {
+        msg.textContent = "Saved.";
+        closePopup();
+        openService(svc.id);
+      } else {
+        msg.textContent = j.error || "Update failed.";
+      }
+    });
+  }
+
+  function openServiceCreatePopup(hostId) {
+    const modal = document.createElement("div");
+    modal.style.position = "fixed";
+    modal.style.inset = "0";
+    modal.style.background = "rgba(0,0,0,0.55)";
+    modal.style.zIndex = "1400";
+    modal.style.display = "flex";
+    modal.style.alignItems = "center";
+    modal.style.justifyContent = "center";
+
+    modal.innerHTML = `
+      <div class="card" style="width:min(640px, 92vw); max-height:88vh; overflow:auto;">
+        <h2>Add service</h2>
+        <form id="serviceCreatePopupForm">
+          <input type="hidden" name="host_id" value="${hostId}"/>
+          <label>Port</label>
+          <input name="port" type="number" min="1" max="65535" required placeholder="445" />
+          <label>Proto</label>
+          <select name="proto"><option value="tcp">tcp</option><option value="udp">udp</option></select>
+          <label>State</label>
+          <select name="state"><option value="open">open</option><option value="filtered">filtered</option><option value="closed">closed</option></select>
+          <label>Service name</label>
+          <input name="service_name" placeholder="microsoft-ds" />
+          <label>Product</label>
+          <input name="product" placeholder="Samba" />
+          <label>Version</label>
+          <input name="version" placeholder="4.15.0" />
+          <label>Extra info</label>
+          <input name="extra_info" placeholder="domain/workgroup info" />
+          <label>Script/output evidence</label>
+          <textarea name="raw_output" rows="6" placeholder="Paste nmap script output, banners, manual checks..."></textarea>
+          <div style="display:flex; gap:8px; margin-top:10px;">
+            <button class="btn" type="submit">Create service</button>
+            <button class="btn" type="button" id="serviceCreateCancel">Cancel</button>
+          </div>
+          <div id="serviceCreatePopupMsg" class="muted" style="margin-top:8px;"></div>
+        </form>
+      </div>
+    `;
+
+    function closePopup() {
+      modal.remove();
+    }
+
+    modal.addEventListener("click", (ev) => {
+      if (ev.target === modal) closePopup();
+    });
+
+    document.body.appendChild(modal);
+
+    const cancelBtn = modal.querySelector("#serviceCreateCancel");
+    const form = modal.querySelector("#serviceCreatePopupForm");
+    const msg = modal.querySelector("#serviceCreatePopupMsg");
+
+    cancelBtn && cancelBtn.addEventListener("click", closePopup);
+
+    form && form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      msg.textContent = "Saving...";
+      const fd = new FormData(form);
+      const r = await fetch("/api/service/create", { method: "POST", body: fd });
+      const j = await r.json().catch(() => ({ ok: false }));
+      if (j.ok) {
+        msg.textContent = "Saved.";
+        closePopup();
+        openHost(hostId);
+      } else {
+        msg.textContent = j.error || "Create failed.";
+      }
     });
   }
 

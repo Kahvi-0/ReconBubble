@@ -157,16 +157,17 @@ def create_app(
         f = (fqdn or "").strip().lower().strip(".")
         if not f:
             return False
-        if f in domains:
+        needs_ip_match = bool(domain_subs_if_ip and f in domain_subs_if_ip)
+        if f in domains and not needs_ip_match:
             return True
         if any(f.endswith("." + d) for d in domain_all_subs):
             return True
-        if domain_subs_if_ip and resolved_ips:
-            matched = any(f.endswith("." + d) for d in domain_subs_if_ip)
+        if domain_subs_if_ip:
+            matched = any(f == d or f.endswith("." + d) for d in domain_subs_if_ip)
             if matched:
                 ipset = ips or set()
                 nets = subnets or []
-                return any(ip_in_scope(ip, ipset, nets) for ip in resolved_ips)
+                return any(ip_in_scope(ip, ipset, nets) for ip in (resolved_ips or []))
         return False
 
     def host_in_scope(
@@ -1015,6 +1016,161 @@ def create_app(
                 for ev in evidence
             ],
         }
+
+    @app.post("/api/service/create")
+    def api_service_create(
+        host_id: int = Form(...),
+        port: int = Form(...),
+        proto: str = Form("tcp"),
+        state: str = Form("open"),
+        service_name: str = Form(""),
+        product: str = Form(""),
+        version: str = Form(""),
+        extra_info: str = Form(""),
+        raw_output: str = Form(""),
+    ):
+        proto = (proto or "tcp").strip().lower()[:8]
+        state = (state or "open").strip().lower()[:16]
+        service_name = (service_name or "").strip()
+        product = (product or "").strip()
+        version = (version or "").strip()
+        extra_info = (extra_info or "").strip()
+        raw_output = (raw_output or "").strip()
+
+        if port <= 0 or port > 65535:
+            return JSONResponse(
+                {"ok": False, "error": "Port must be 1-65535"}, status_code=400
+            )
+
+        with db() as s:
+            host = s.scalar(select(Host).where(Host.id == host_id))
+            if not host:
+                return JSONResponse(
+                    {"ok": False, "error": "Host not found"}, status_code=404
+                )
+
+            svc = s.scalar(
+                select(Service).where(
+                    Service.host_id == host_id,
+                    Service.port == port,
+                    Service.proto == proto,
+                )
+            )
+
+            if not svc:
+                svc = Service(
+                    host_id=host_id,
+                    port=port,
+                    proto=proto,
+                    state=state or "open",
+                    service_name=service_name,
+                    product=product,
+                    version=version,
+                    extra_info=extra_info,
+                )
+                s.add(svc)
+                s.flush()
+            else:
+                svc.state = state or svc.state
+                svc.service_name = service_name or svc.service_name
+                svc.product = product or svc.product
+                svc.version = version or svc.version
+                svc.extra_info = extra_info or svc.extra_info
+
+            if raw_output:
+                manual_dir = ws.uploads_dir / "manual_evidence"
+                manual_dir.mkdir(parents=True, exist_ok=True)
+                stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+                ev_path = manual_dir / f"service-{host_id}-{port}-{proto}-{stamp}.txt"
+                ev_path.write_text(raw_output, encoding="utf-8", errors="replace")
+                art = upsert_artifact(s, "service-evidence", ev_path)
+                s.add(
+                    ServiceEvidence(
+                        service_id=svc.id,
+                        artifact_id=art.id,
+                        raw_output=raw_output,
+                    )
+                )
+
+            s.commit()
+            return {"ok": True, "service_id": svc.id}
+
+    @app.post("/api/service/update")
+    def api_service_update(
+        service_id: int = Form(...),
+        port: int = Form(...),
+        proto: str = Form("tcp"),
+        state: str = Form("open"),
+        service_name: str = Form(""),
+        product: str = Form(""),
+        version: str = Form(""),
+        extra_info: str = Form(""),
+        raw_output: str = Form(""),
+    ):
+        proto = (proto or "tcp").strip().lower()[:8]
+        state = (state or "open").strip().lower()[:16]
+        service_name = (service_name or "").strip()
+        product = (product or "").strip()
+        version = (version or "").strip()
+        extra_info = (extra_info or "").strip()
+        raw_output = (raw_output or "").strip()
+
+        if port <= 0 or port > 65535:
+            return JSONResponse(
+                {"ok": False, "error": "Port must be 1-65535"}, status_code=400
+            )
+
+        with db() as s:
+            svc = s.scalar(select(Service).where(Service.id == service_id))
+            if not svc:
+                return JSONResponse(
+                    {"ok": False, "error": "Service not found"}, status_code=404
+                )
+
+            clash = s.scalar(
+                select(Service).where(
+                    Service.host_id == svc.host_id,
+                    Service.port == port,
+                    Service.proto == proto,
+                    Service.id != svc.id,
+                )
+            )
+            if clash:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "Another service already exists for this host+port+proto",
+                    },
+                    status_code=400,
+                )
+
+            svc.port = port
+            svc.proto = proto
+            svc.state = state
+            svc.service_name = service_name
+            svc.product = product
+            svc.version = version
+            svc.extra_info = extra_info
+
+            if raw_output:
+                manual_dir = ws.uploads_dir / "manual_evidence"
+                manual_dir.mkdir(parents=True, exist_ok=True)
+                stamp = datetime.utcnow().strftime("%Y%m%d%H%M%S%f")
+                ev_path = (
+                    manual_dir / f"service-{svc.host_id}-{port}-{proto}-{stamp}.txt"
+                )
+                ev_path.write_text(raw_output, encoding="utf-8", errors="replace")
+                art = upsert_artifact(s, "service-evidence", ev_path)
+                s.add(
+                    ServiceEvidence(
+                        service_id=svc.id,
+                        artifact_id=art.id,
+                        raw_output=raw_output,
+                    )
+                )
+
+            s.commit()
+            return {"ok": True, "service_id": svc.id}
 
     @app.get("/service/{service_id}", response_class=HTMLResponse)
     def service_page(request: Request, service_id: int):
