@@ -104,9 +104,10 @@ def create_app(
         if sensitive_only:
             stmt = stmt.where(ScopeItem.sensitive == 1)
         items = s.execute(stmt).scalars().all()
-        ips, subnets, domains, email_domains, domain_all_subs = (
+        ips, subnets, domains, email_domains, domain_all_subs, domain_subs_if_ip = (
             set(),
             [],
+            set(),
             set(),
             set(),
             set(),
@@ -126,9 +127,11 @@ def create_app(
                 domains.add(v)
                 if getattr(it, "apply_all_subdomains", 0) == 1:
                     domain_all_subs.add(v)
+                if getattr(it, "apply_subdomains_with_in_scope_ip", 0) == 1:
+                    domain_subs_if_ip.add(v)
             elif it.kind == "email_domain":
                 email_domains.add(v)
-        return ips, subnets, domains, email_domains, domain_all_subs
+        return ips, subnets, domains, email_domains, domain_all_subs, domain_subs_if_ip
 
     def ip_in_scope(ip: str, ips: set[str], subnets: list) -> bool:
         ip = (ip or "").strip()
@@ -143,14 +146,28 @@ def create_app(
         return any(addr in net for net in subnets)
 
     def domain_in_scope(
-        fqdn: str, domains: set[str], domain_all_subs: set[str]
+        fqdn: str,
+        domains: set[str],
+        domain_all_subs: set[str],
+        domain_subs_if_ip: set[str] | None = None,
+        resolved_ips: list[str] | None = None,
+        ips: set[str] | None = None,
+        subnets: list | None = None,
     ) -> bool:
         f = (fqdn or "").strip().lower().strip(".")
         if not f:
             return False
         if f in domains:
             return True
-        return any(f.endswith("." + d) for d in domain_all_subs)
+        if any(f.endswith("." + d) for d in domain_all_subs):
+            return True
+        if domain_subs_if_ip and resolved_ips:
+            matched = any(f.endswith("." + d) for d in domain_subs_if_ip)
+            if matched:
+                ipset = ips or set()
+                nets = subnets or []
+                return any(ip_in_scope(ip, ipset, nets) for ip in resolved_ips)
+        return False
 
     def host_in_scope(
         ip: str,
@@ -319,6 +336,7 @@ def create_app(
         values_raw: str = Form(""),
         note: str = Form(""),
         apply_all_subdomains: int = Form(0),
+        apply_subdomains_with_in_scope_ip: int = Form(0),
         sensitive: int = Form(0),
     ):
         items: list[str] = []
@@ -373,6 +391,12 @@ def create_app(
                     in_scope=1,
                     apply_all_subdomains=1
                     if (actual_kind == "domain" and apply_all_subdomains == 1)
+                    else 0,
+                    apply_subdomains_with_in_scope_ip=1
+                    if (
+                        actual_kind == "domain"
+                        and apply_subdomains_with_in_scope_ip == 1
+                    )
                     else 0,
                     sensitive=1 if sensitive == 1 else 0,
                 )
@@ -565,9 +589,9 @@ def create_app(
             return (net.version, int(net.network_address), net.prefixlen)
 
         with db() as s:
-            ips, subnets, domains, _, domain_all_subs = scope_sets(s)
-            s_ips, s_subnets, s_domains, _, s_domain_all_subs = scope_sets(
-                s, sensitive_only=True
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
+            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip = (
+                scope_sets(s, sensitive_only=True)
             )
             rows = s.execute(
                 select(
@@ -594,8 +618,18 @@ def create_app(
             any_domain_in = False
             any_domain_sensitive = False
             for d in host_domains:
-                d_in = domain_in_scope(d, domains, domain_all_subs)
-                d_sensitive = domain_in_scope(d, s_domains, s_domain_all_subs)
+                d_in = domain_in_scope(
+                    d, domains, domain_all_subs, domain_subs_if_ip, [r.ip], ips, subnets
+                )
+                d_sensitive = domain_in_scope(
+                    d,
+                    s_domains,
+                    s_domain_all_subs,
+                    s_domain_subs_if_ip,
+                    [r.ip],
+                    s_ips,
+                    s_subnets,
+                )
                 if d_in:
                     any_domain_in = True
                 if d_sensitive:
@@ -1040,14 +1074,24 @@ def create_app(
     def api_subdomain(fqdn: str = Query(...)):
         fq = fqdn.strip().lower().rstrip(".")
         with db() as s:
-            ips, subnets, domains, _, domain_all_subs = scope_sets(s)
-            s_ips, s_subnets, s_domains, _, s_domain_all_subs = scope_sets(
-                s, sensitive_only=True
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
+            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip = (
+                scope_sets(s, sensitive_only=True)
             )
             ips_found = list_subdomain_ips(s, fq)
-            in_dom = domain_in_scope(fq, domains, domain_all_subs)
+            in_dom = domain_in_scope(
+                fq, domains, domain_all_subs, domain_subs_if_ip, ips_found, ips, subnets
+            )
             in_ip = any(ip_in_scope(ip, ips, subnets) for ip in ips_found)
-            sensitive_dom = domain_in_scope(fq, s_domains, s_domain_all_subs)
+            sensitive_dom = domain_in_scope(
+                fq,
+                s_domains,
+                s_domain_all_subs,
+                s_domain_subs_if_ip,
+                ips_found,
+                s_ips,
+                s_subnets,
+            )
             sensitive_ip = any(ip_in_scope(ip, s_ips, s_subnets) for ip in ips_found)
             hosts = list_subdomain_hosts(s, fq)
         return {
@@ -2943,9 +2987,9 @@ def create_app(
     def subdomains(request: Request):
         show_out = int(request.query_params.get("show_out", "0"))
         with db() as s:
-            ips, subnets, domains, _, domain_all_subs = scope_sets(s)
-            s_ips, s_subnets, s_domains, _, s_domain_all_subs = scope_sets(
-                s, sensitive_only=True
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
+            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip = (
+                scope_sets(s, sensitive_only=True)
             )
             rows = (
                 s.execute(
@@ -2986,10 +3030,26 @@ def create_app(
             root_domains = {}
             for x in rows:
                 ips_found = list_subdomain_ips(s, x.fqdn)
-                in_dom = domain_in_scope(x.fqdn, domains, domain_all_subs)
+                in_dom = domain_in_scope(
+                    x.fqdn,
+                    domains,
+                    domain_all_subs,
+                    domain_subs_if_ip,
+                    ips_found,
+                    ips,
+                    subnets,
+                )
                 in_ip = any(ip_in_scope(ip, ips, subnets) for ip in ips_found)
                 in_scope = bool(in_dom or in_ip)
-                sensitive_dom = domain_in_scope(x.fqdn, s_domains, s_domain_all_subs)
+                sensitive_dom = domain_in_scope(
+                    x.fqdn,
+                    s_domains,
+                    s_domain_all_subs,
+                    s_domain_subs_if_ip,
+                    ips_found,
+                    s_ips,
+                    s_subnets,
+                )
                 sensitive_ip = any(
                     ip_in_scope(ip, s_ips, s_subnets) for ip in ips_found
                 )
@@ -3045,8 +3105,8 @@ def create_app(
     @app.get("/emails", response_class=HTMLResponse)
     def emails(request: Request):
         with db() as s:
-            _, _, _, email_domains, _ = scope_sets(s)
-            _, _, _, s_email_domains, _ = scope_sets(s, sensitive_only=True)
+            _, _, _, email_domains, _, _ = scope_sets(s)
+            _, _, _, s_email_domains, _, _ = scope_sets(s, sensitive_only=True)
             rows = (
                 s.execute(select(Email).order_by(Email.domain.asc(), Email.email.asc()))
                 .scalars()
@@ -3068,7 +3128,7 @@ def create_app(
     @app.get("/emails/export")
     def export_emails():
         with db() as s:
-            _, _, _, email_domains, _ = scope_sets(s)
+            _, _, _, email_domains, _, _ = scope_sets(s)
             emails = (
                 s.execute(select(Email).order_by(Email.email.asc())).scalars().all()
             )
@@ -3106,6 +3166,46 @@ def create_app(
                 "mime": d.mime,
                 "artifact_id": d.artifact_id,
             }
+
+    @app.get("/api/doc/{doc_id}/text")
+    def api_doc_text(doc_id: int):
+        with db() as s:
+            d = s.scalar(select(Document).where(Document.id == doc_id))
+            if not d:
+                return JSONResponse({"error": "not found"}, status_code=404)
+            art = (
+                s.scalar(select(Artifact).where(Artifact.id == d.artifact_id))
+                if d.artifact_id
+                else None
+            )
+            if not art or not art.stored_path:
+                return JSONResponse({"error": "artifact not found"}, status_code=404)
+
+        path = Path(art.stored_path)
+        if not path.is_absolute():
+            path = ws.uploads_dir / path
+        if not path.exists() or not path.is_file():
+            return JSONResponse({"error": "file not found"}, status_code=404)
+
+        suffix = path.suffix.lower()
+        try:
+            if suffix == ".docx":
+                import docx
+
+                dfile = docx.Document(str(path))
+                parts = [p.text for p in dfile.paragraphs if (p.text or "").strip()]
+                text_body = "\n".join(parts)
+            elif suffix in (".txt", ".log", ".csv", ".json", ".md"):
+                text_body = path.read_text(encoding="utf-8", errors="replace")
+            else:
+                return JSONResponse(
+                    {"error": "text preview not supported for this file type"},
+                    status_code=400,
+                )
+        except Exception as e:
+            return JSONResponse({"error": f"preview error: {e}"}, status_code=500)
+
+        return {"ok": True, "text": text_body[:500000]}
 
     @app.get("/doc/{doc_id}", response_class=HTMLResponse)
     def doc_detail(doc_id: int, request: Request):
@@ -3387,7 +3487,7 @@ def create_app(
     @app.get("/services", response_class=HTMLResponse)
     def services_page(request: Request):
         with db() as s:
-            ips, subnets, domains, _, domain_all_subs = scope_sets(s)
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
 
             services = (
                 s.execute(select(Service).where(Service.state == "open"))
@@ -3472,9 +3572,9 @@ def create_app(
     def api_graph(only_in_scope: bool = Query(False)):
         nodes, edges = [], []
         with db() as s:
-            ips, subnets, domains, _, domain_all_subs = scope_sets(s)
-            s_ips, s_subnets, s_domains, _, s_domain_all_subs = scope_sets(
-                s, sensitive_only=True
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
+            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip = (
+                scope_sets(s, sensitive_only=True)
             )
             subs = s.execute(select(Subdomain)).scalars().all()
             hosts = s.execute(select(Host)).scalars().all()
@@ -3493,11 +3593,44 @@ def create_app(
         for sub in subs:
             rd = (sub.root_domain or "").strip(".").lower()
             fq = sub.fqdn
-            sub_in = domain_in_scope(fq, domains, domain_all_subs)
-            dom_in = domain_in_scope(rd, domains, domain_all_subs) if rd else False
-            sub_sensitive = domain_in_scope(fq, s_domains, s_domain_all_subs)
+            sub_ips = list_subdomain_ips(s, fq)
+            sub_in = domain_in_scope(
+                fq, domains, domain_all_subs, domain_subs_if_ip, sub_ips, ips, subnets
+            )
+            dom_in = (
+                domain_in_scope(
+                    rd,
+                    domains,
+                    domain_all_subs,
+                    domain_subs_if_ip,
+                    sub_ips,
+                    ips,
+                    subnets,
+                )
+                if rd
+                else False
+            )
+            sub_sensitive = domain_in_scope(
+                fq,
+                s_domains,
+                s_domain_all_subs,
+                s_domain_subs_if_ip,
+                sub_ips,
+                s_ips,
+                s_subnets,
+            )
             dom_sensitive = (
-                domain_in_scope(rd, s_domains, s_domain_all_subs) if rd else False
+                domain_in_scope(
+                    rd,
+                    s_domains,
+                    s_domain_all_subs,
+                    s_domain_subs_if_ip,
+                    sub_ips,
+                    s_ips,
+                    s_subnets,
+                )
+                if rd
+                else False
             )
             if rd and rd not in domain_nodes:
                 did = nid("domain", rd)
@@ -3573,8 +3706,25 @@ def create_app(
             for fqdn in fqdn_list:
                 sub_id = nid("sub", fqdn)
                 if sub_id not in existing:
-                    sub_in = domain_in_scope(fqdn, domains, domain_all_subs)
-                    sub_sensitive = domain_in_scope(fqdn, s_domains, s_domain_all_subs)
+                    fqdn_ips = list_subdomain_ips(s, fqdn)
+                    sub_in = domain_in_scope(
+                        fqdn,
+                        domains,
+                        domain_all_subs,
+                        domain_subs_if_ip,
+                        fqdn_ips,
+                        ips,
+                        subnets,
+                    )
+                    sub_sensitive = domain_in_scope(
+                        fqdn,
+                        s_domains,
+                        s_domain_all_subs,
+                        s_domain_subs_if_ip,
+                        fqdn_ips,
+                        s_ips,
+                        s_subnets,
+                    )
                     add_node(
                         {
                             "id": sub_id,
@@ -3599,12 +3749,20 @@ def create_app(
     @app.get("/subdomains/export")
     def subdomains_export():
         with db() as s:
-            ips, subnets, domains, _, domain_all_subs = scope_sets(s)
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
             rows = s.execute(select(Subdomain)).scalars().all()
             out = []
             for x in rows:
                 ips_found = list_subdomain_ips(s, x.fqdn)
-                in_dom = domain_in_scope(x.fqdn, domains, domain_all_subs)
+                in_dom = domain_in_scope(
+                    x.fqdn,
+                    domains,
+                    domain_all_subs,
+                    domain_subs_if_ip,
+                    ips_found,
+                    ips,
+                    subnets,
+                )
                 in_ip = any(ip_in_scope(ip, ips, subnets) for ip in ips_found)
                 if in_dom or in_ip:
                     out.append(x.fqdn)
@@ -3900,9 +4058,9 @@ def create_app(
             return str(max(matches, key=lambda n: n.prefixlen))
 
         with db() as s:
-            ips, subnets, domains, _, domain_all_subs = scope_sets(s)
-            s_ips, s_subnets, s_domains, _, s_domain_all_subs = scope_sets(
-                s, sensitive_only=True
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
+            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip = (
+                scope_sets(s, sensitive_only=True)
             )
             rows = (
                 s.execute(
@@ -3922,12 +4080,28 @@ def create_app(
                     parsed_host = ""
 
                 in_dom = (
-                    domain_in_scope(x.domain, domains, domain_all_subs)
+                    domain_in_scope(
+                        x.domain,
+                        domains,
+                        domain_all_subs,
+                        domain_subs_if_ip,
+                        list_subdomain_ips(s, x.domain),
+                        ips,
+                        subnets,
+                    )
                     if x.domain
                     else False
                 )
                 sensitive_dom = (
-                    domain_in_scope(x.domain, s_domains, s_domain_all_subs)
+                    domain_in_scope(
+                        x.domain,
+                        s_domains,
+                        s_domain_all_subs,
+                        s_domain_subs_if_ip,
+                        list_subdomain_ips(s, x.domain),
+                        s_ips,
+                        s_subnets,
+                    )
                     if x.domain
                     else False
                 )

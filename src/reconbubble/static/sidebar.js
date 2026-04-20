@@ -7,15 +7,21 @@
   const closeBtn = document.getElementById("sidebarClose");
   let prevBodyOverflow = "";
   let prevHtmlOverflow = "";
+  let scrollLockDepth = 0;
 
   function lockBackgroundScroll() {
-    prevBodyOverflow = document.body.style.overflow || "";
-    prevHtmlOverflow = document.documentElement.style.overflow || "";
+    if (scrollLockDepth === 0) {
+      prevBodyOverflow = document.body.style.overflow || "";
+      prevHtmlOverflow = document.documentElement.style.overflow || "";
+    }
+    scrollLockDepth += 1;
     document.body.style.overflow = "hidden";
     document.documentElement.style.overflow = "hidden";
   }
 
   function unlockBackgroundScroll() {
+    if (scrollLockDepth > 0) scrollLockDepth -= 1;
+    if (scrollLockDepth > 0) return;
     document.body.style.overflow = prevBodyOverflow;
     document.documentElement.style.overflow = prevHtmlOverflow;
   }

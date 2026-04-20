@@ -71,6 +71,14 @@ document.getElementById("viewBtn").addEventListener("click", async () => {
     content.innerHTML = `<img src="/api/artifacts/${artifactId}" style="max-width:100%; max-height:80vh;" />`;
   } else if (mime === "application/pdf") {
     content.innerHTML = `<iframe src="/api/artifacts/${artifactId}" style="width:80vw; height:80vh; border:none;"></iframe>`;
+  } else if (mime.includes("wordprocessingml.document") || mime === "application/msword") {
+    const resp = await fetch(`/api/doc/{{ doc.id }}/text`);
+    if (resp.ok) {
+      const j = await resp.json();
+      content.innerHTML = `<pre style="white-space:pre-wrap; word-break:break-word; max-height:80vh; overflow:auto;">${(j.text||"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]))}</pre>`;
+    } else {
+      content.innerHTML = `<p>DOCX preview unavailable. <a href="/api/artifacts/${artifactId}" target="_blank">Download/Open file</a></p>`;
+    }
   } else if (mime.startsWith("text/")) {
     const resp = await fetch(`/api/artifacts/${artifactId}`);
     const text = await resp.text();

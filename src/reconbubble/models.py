@@ -28,6 +28,7 @@ class ScopeItem(Base):
     in_scope: Mapped[int] = mapped_column(Integer, default=1, index=True)
     note: Mapped[str] = mapped_column(String(255), default="")
     apply_all_subdomains: Mapped[int] = mapped_column(Integer, default=0)
+    apply_subdomains_with_in_scope_ip: Mapped[int] = mapped_column(Integer, default=0)
     sensitive: Mapped[int] = mapped_column(Integer, default=0, index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True

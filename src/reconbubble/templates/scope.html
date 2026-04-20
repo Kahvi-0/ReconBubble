@@ -36,6 +36,11 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
       <label for="applyAllSubs" style="margin:0;">For domain scope: mark all subdomains in-scope</label>
     </div>
 
+    <div id="domainIpWrap" style="display:flex; gap:10px; align-items:center; margin: 0 0 12px;">
+      <input type="checkbox" id="applySubsInScopeIp" name="apply_subdomains_with_in_scope_ip" value="1" />
+      <label for="applySubsInScopeIp" style="margin:0;">For domain scope: mark subdomains in-scope only when they resolve to in-scope IPs</label>
+    </div>
+
     <label class="checkbox-label">
       <input type="checkbox" id="markSensitive" name="sensitive" value="1" />
       Mark as sensitive
@@ -56,7 +61,11 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
         {% for it in domains %}
           <tr>
             <td><code>{{ it.value }}</code></td>
-            <td>{% if it.apply_all_subdomains == 1 %}<span class="pill inscope">ALL</span>{% else %}<span class="pill outscope">EXACT</span>{% endif %}</td>
+            <td>
+              {% if it.apply_all_subdomains == 1 %}<span class="pill inscope">ALL</span>{% endif %}
+              {% if it.apply_subdomains_with_in_scope_ip == 1 %}<span class="pill inscope">IP-RESOLVE</span>{% endif %}
+              {% if it.apply_all_subdomains != 1 and it.apply_subdomains_with_in_scope_ip != 1 %}<span class="pill outscope">EXACT</span>{% endif %}
+            </td>
             <td>{% if it.in_scope == 1 %}<span class="pill inscope">IN</span>{% else %}<span class="pill outscope">OUT</span>{% endif %}</td>
             <td>{% if it.sensitive == 1 %}<span class="pill sensitive">SENSITIVE</span>{% else %}<span class="muted">-</span>{% endif %}</td>
             <td class="muted">{{ it.note }}</td>
@@ -146,7 +155,9 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
 <script>
   const kindSel = document.getElementById("scopeKind");
   const domainWrap = document.getElementById("domainWrap");
+  const domainIpWrap = document.getElementById("domainIpWrap");
   const allSubs = document.getElementById("applyAllSubs");
+  const subsInScopeIp = document.getElementById("applySubsInScopeIp");
   const singleWrap = document.getElementById("singleWrap");
   const singleValue = document.getElementById("singleValue");
 
@@ -154,7 +165,9 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
     const k = kindSel.value;
     const isDomain = k === "domain";
     domainWrap.style.display = isDomain ? "flex" : "none";
+    domainIpWrap.style.display = isDomain ? "flex" : "none";
     if (!isDomain) allSubs.checked = false;
+    if (!isDomain) subsInScopeIp.checked = false;
 
     const showSingle = (k === "domain" || k === "email_domain");
     singleWrap.style.display = showSingle ? "block" : "none";

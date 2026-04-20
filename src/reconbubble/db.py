@@ -38,6 +38,14 @@ def migrate_sqlite(engine) -> None:
                             "ALTER TABLE scope_items ADD COLUMN apply_all_subdomains INTEGER DEFAULT 0"
                         )
                     )
+                if not _has_column(
+                    conn, "scope_items", "apply_subdomains_with_in_scope_ip"
+                ):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE scope_items ADD COLUMN apply_subdomains_with_in_scope_ip INTEGER DEFAULT 0"
+                        )
+                    )
                 if not _has_column(conn, "scope_items", "sensitive"):
                     conn.execute(
                         text(
