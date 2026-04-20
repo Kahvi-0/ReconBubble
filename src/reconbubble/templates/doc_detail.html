@@ -9,6 +9,10 @@
     <div><b>SHA256:</b> <code>{{ doc.sha256 }}</code></div>
     {% if artifact %}<div><b>Stored:</b> <code>{{ artifact.stored_path }}</code></div>{% endif %}
     <button class="btn" id="viewBtn" style="margin-top:12px;">View Document</button>
+    <form action="/api/doc/delete" method="post" onsubmit="return confirm('Delete this document and its metadata?');" style="margin-top:10px;">
+      <input type="hidden" name="doc_id" value="{{ doc.id }}"/>
+      <button class="btn" type="submit">Delete Document</button>
+    </form>
   </div>
   <div class="card">
     <h2>Add note</h2>

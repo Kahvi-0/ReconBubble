@@ -3122,6 +3122,57 @@ def create_app(
             {"request": request, "doc": d, "artifact": art, "meta": meta},
         )
 
+    @app.post("/api/doc/delete")
+    def api_doc_delete(doc_id: int = Form(...)):
+        file_to_delete: Path | None = None
+        with db() as s:
+            d = s.scalar(select(Document).where(Document.id == doc_id))
+            if not d:
+                return RedirectResponse(url="/docs", status_code=303)
+
+            artifact_id = d.artifact_id
+
+            note_rows = (
+                s.execute(
+                    select(Note).where(
+                        Note.object_type == "document", Note.object_id == doc_id
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for n in note_rows:
+                s.delete(n)
+
+            s.delete(d)
+            s.flush()
+
+            if artifact_id:
+                remaining = (
+                    s.scalar(
+                        select(func.count(Document.id)).where(
+                            Document.artifact_id == artifact_id
+                        )
+                    )
+                    or 0
+                )
+                if remaining == 0:
+                    art = s.scalar(select(Artifact).where(Artifact.id == artifact_id))
+                    if art:
+                        file_to_delete = Path(art.stored_path or "")
+                        s.delete(art)
+
+            s.commit()
+
+        if file_to_delete:
+            try:
+                if file_to_delete.exists() and file_to_delete.is_file():
+                    file_to_delete.unlink()
+            except Exception:
+                pass
+
+        return RedirectResponse(url="/docs", status_code=303)
+
     # Graph API
 
     @app.get("/cloud", response_class=HTMLResponse)
