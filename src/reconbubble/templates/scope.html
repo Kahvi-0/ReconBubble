@@ -52,14 +52,20 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
   </form>
 </div>
 
+<div class="card" style="margin-bottom:12px; display:flex; gap:8px; align-items:center;">
+  <button class="btn" type="button" id="deleteCheckedBtn">Delete all checked</button>
+  <span class="muted" id="checkedCount">0 selected</span>
+</div>
+
 <div class="split">
   <div class="card">
     <h2>Domains</h2>
     <table>
-      <thead><tr><th>Domain</th><th>Subdomains</th><th>Status</th><th>Sensitivity</th><th>Note</th><th>Actions</th></tr></thead>
+      <thead><tr><th><input type="checkbox" id="checkAllDomains"/></th><th>Domain</th><th>Subdomains</th><th>Status</th><th>Sensitivity</th><th>Note</th><th>Actions</th></tr></thead>
       <tbody>
         {% for it in domains %}
           <tr>
+            <td><input type="checkbox" class="scope-select" value="{{ it.id }}"/></td>
             <td><code>{{ it.value }}</code></td>
             <td>
               {% if it.apply_all_subdomains == 1 %}<span class="pill inscope">ALL</span>{% endif %}
@@ -92,10 +98,11 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
   <div class="card">
     <h2>IPs &amp; Subnets</h2>
     <table>
-      <thead><tr><th>Value</th><th>Status</th><th>Sensitivity</th><th>Note</th><th>Actions</th></tr></thead>
+      <thead><tr><th><input type="checkbox" id="checkAllIp"/></th><th>Value</th><th>Status</th><th>Sensitivity</th><th>Note</th><th>Actions</th></tr></thead>
       <tbody>
         {% for it in ip_items %}
           <tr>
+            <td><input type="checkbox" class="scope-select" value="{{ it.id }}"/></td>
             <td><code>{{ it.value }}</code></td>
             <td>{% if it.in_scope == 1 %}<span class="pill inscope">IN</span>{% else %}<span class="pill outscope">OUT</span>{% endif %}</td>
             <td>{% if it.sensitive == 1 %}<span class="pill sensitive">SENSITIVE</span>{% else %}<span class="muted">-</span>{% endif %}</td>
@@ -124,10 +131,11 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
 <div class="card">
   <h2>Email domains</h2>
   <table>
-    <thead><tr><th>Email domain</th><th>Status</th><th>Sensitivity</th><th>Note</th><th>Actions</th></tr></thead>
+    <thead><tr><th><input type="checkbox" id="checkAllEmail"/></th><th>Email domain</th><th>Status</th><th>Sensitivity</th><th>Note</th><th>Actions</th></tr></thead>
     <tbody>
       {% for it in email_items %}
         <tr>
+          <td><input type="checkbox" class="scope-select" value="{{ it.id }}"/></td>
           <td><code>{{ it.value }}</code></td>
           <td>{% if it.in_scope == 1 %}<span class="pill inscope">IN</span>{% else %}<span class="pill outscope">OUT</span>{% endif %}</td>
           <td>{% if it.sensitive == 1 %}<span class="pill sensitive">SENSITIVE</span>{% else %}<span class="muted">-</span>{% endif %}</td>
@@ -175,5 +183,46 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
   }
   kindSel.addEventListener("change", sync);
   sync();
+
+  const selectedBoxes = () => Array.from(document.querySelectorAll('.scope-select:checked'));
+  const checkedCount = document.getElementById('checkedCount');
+  function refreshCheckedCount() {
+    if (checkedCount) checkedCount.textContent = `${selectedBoxes().length} selected`;
+  }
+  document.querySelectorAll('.scope-select').forEach(cb => cb.addEventListener('change', refreshCheckedCount));
+
+  function bindCheckAll(allId) {
+    const el = document.getElementById(allId);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      const table = el.closest('table');
+      if (!table) return;
+      table.querySelectorAll('.scope-select').forEach(cb => { cb.checked = el.checked; });
+      refreshCheckedCount();
+    });
+  }
+  bindCheckAll('checkAllDomains');
+  bindCheckAll('checkAllIp');
+  bindCheckAll('checkAllEmail');
+
+  const deleteCheckedBtn = document.getElementById('deleteCheckedBtn');
+  deleteCheckedBtn && deleteCheckedBtn.addEventListener('click', () => {
+    const ids = selectedBoxes().map(cb => cb.value);
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} selected scope item(s)?`)) return;
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.action = '/scope/delete-checked';
+    ids.forEach(id => {
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'item_ids';
+      input.value = id;
+      form.appendChild(input);
+    });
+    document.body.appendChild(form);
+    form.submit();
+  });
+  refreshCheckedCount();
 </script>
 {% endblock %}

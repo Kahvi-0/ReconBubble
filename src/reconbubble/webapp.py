@@ -435,6 +435,22 @@ def create_app(
                 s.commit()
         return RedirectResponse(url="/scope", status_code=303)
 
+    @app.post("/scope/delete-checked")
+    def scope_delete_checked(item_ids: list[int] = Form([])):
+        ids = [int(x) for x in (item_ids or []) if int(x) > 0]
+        if not ids:
+            return RedirectResponse(url="/scope", status_code=303)
+        with db() as s:
+            rows = (
+                s.execute(select(ScopeItem).where(ScopeItem.id.in_(ids)))
+                .scalars()
+                .all()
+            )
+            for it in rows:
+                s.delete(it)
+            s.commit()
+        return RedirectResponse(url="/scope", status_code=303)
+
     # Upload
     @app.get("/upload", response_class=HTMLResponse)
     def upload_page(request: Request):
