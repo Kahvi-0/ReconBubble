@@ -617,6 +617,7 @@ def create_app(
                     Host.hostname,
                     Host.done,
                     Host.complete,
+                    Host.inprogress,
                     Host.waf,
                     func.count(Service.id).label("svc_count"),
                 )
@@ -661,6 +662,7 @@ def create_app(
                     "hostname": r.hostname,
                     "done": getattr(r, "done", 0),
                     "complete": getattr(r, "complete", 0),
+                    "inprogress": getattr(r, "inprogress", 0),
                     "waf": getattr(r, "waf", 0),
                     "svc_count": r.svc_count,
                     "ip_in_scope": ip_in,
@@ -3975,6 +3977,18 @@ def create_app(
             if not h:
                 return JSONResponse({"ok": False}, status_code=404)
             h.complete = 1 if int(complete) == 1 else 0
+            if h.complete == 1:
+                h.inprogress = 0
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/host/inprogress")
+    def api_host_inprogress(host_id: int = Form(...), inprogress: int = Form(...)):
+        with db() as s:
+            h = s.scalar(select(Host).where(Host.id == host_id))
+            if not h:
+                return JSONResponse({"ok": False}, status_code=404)
+            h.inprogress = 1 if int(inprogress) == 1 else 0
             s.commit()
         return {"ok": True}
 

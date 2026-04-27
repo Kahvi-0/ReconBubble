@@ -66,6 +66,10 @@ def migrate_sqlite(engine) -> None:
                     conn.execute(
                         text("ALTER TABLE hosts ADD COLUMN complete INTEGER DEFAULT 0")
                     )
+                if not _has_column(conn, "hosts", "inprogress"):
+                    conn.execute(
+                        text("ALTER TABLE hosts ADD COLUMN inprogress INTEGER DEFAULT 0")
+                    )
                 if not _has_column(conn, "hosts", "waf"):
                     conn.execute(
                         text("ALTER TABLE hosts ADD COLUMN waf INTEGER DEFAULT 0")

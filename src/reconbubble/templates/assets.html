@@ -47,11 +47,12 @@
   <details class="asset-subnet-group" open>
     <summary><strong>{{ subnet }}</strong> <span class="muted">({{ rows|length }} assets)</span></summary>
     <table>
-      <thead><tr><th>Complete</th><th>WAF</th><th>IP</th><th>Hostname</th><th># Services</th><th>Domains</th></tr></thead>
+      <thead><tr><th>Complete</th><th>In Progress</th><th>WAF</th><th>IP</th><th>Hostname</th><th># Services</th><th>Domains</th></tr></thead>
       <tbody>
         {% for r in rows %}
-          <tr class="{% if r.complete==1 %}row-complete{% endif %}">
+          <tr class="{% if r.complete==1 %}row-complete{% elif r.inprogress==1 %}row-inprogress{% endif %}">
             <td><input type="checkbox" class="completeHost" data-host-id="{{ r.id }}" {% if r.complete==1 %}checked{% endif %} /></td>
+            <td><input type="checkbox" class="inprogressHost" data-host-id="{{ r.id }}" {% if r.inprogress==1 %}checked{% endif %} {% if r.complete==1 %}disabled{% endif %} /></td>
             <td><input type="checkbox" class="wafHost" data-host-id="{{ r.id }}" {% if r.waf==1 %}checked{% endif %} /></td>
             <td>
               <span class="scope-dot {% if r.ip_in_scope %}in{% else %}out{% endif %}" title="IP scope: {% if r.ip_in_scope %}IN{% else %}OUT{% endif %}">●</span>
@@ -103,6 +104,7 @@
 
 <style>
 tr.row-complete { background: rgba(0, 255, 0, 0.1); }
+tr.row-inprogress { background: rgba(255, 153, 0, 0.16); }
 .scope-dot { font-size: 14px; margin-right: 2px; }
 .scope-dot.in { color: #00ff00; }
 .scope-dot.out { color: #ff3333; }
@@ -135,15 +137,41 @@ tr.row-complete { background: rgba(0, 255, 0, 0.1); }
       window.location.href = u.toString();
     });
 
+    const applyRowState = (row, completeCb, inprogressCb) => {
+      if (!row) return;
+      const isComplete = !!(completeCb && completeCb.checked);
+      const isInprogress = !!(inprogressCb && inprogressCb.checked);
+      row.classList.toggle("row-complete", isComplete);
+      row.classList.toggle("row-inprogress", !isComplete && isInprogress);
+      if (inprogressCb) {
+        inprogressCb.disabled = isComplete;
+      }
+    };
+
     document.querySelectorAll(".completeHost").forEach(cb => {
       cb.addEventListener("change", async () => {
+        const row = cb.closest("tr");
+        const inprogressCb = row ? row.querySelector(".inprogressHost") : null;
         const fd = new FormData();
         fd.append("host_id", cb.getAttribute("data-host-id"));
         fd.append("complete", cb.checked ? "1" : "0");
         await fetch("/api/host/complete", { method: "POST", body: fd });
+        if (cb.checked && inprogressCb) {
+          inprogressCb.checked = false;
+        }
+        applyRowState(row, cb, inprogressCb);
+      });
+    });
+
+    document.querySelectorAll(".inprogressHost").forEach(cb => {
+      cb.addEventListener("change", async () => {
         const row = cb.closest("tr");
-        if (cb.checked) row.classList.add("row-complete");
-        else row.classList.remove("row-complete");
+        const completeCb = row ? row.querySelector(".completeHost") : null;
+        const fd = new FormData();
+        fd.append("host_id", cb.getAttribute("data-host-id"));
+        fd.append("inprogress", cb.checked ? "1" : "0");
+        await fetch("/api/host/inprogress", { method: "POST", body: fd });
+        applyRowState(row, completeCb, cb);
       });
     });
 
@@ -154,6 +182,12 @@ tr.row-complete { background: rgba(0, 255, 0, 0.1); }
         fd.append("waf", cb.checked ? "1" : "0");
         await fetch("/api/host/waf", { method: "POST", body: fd });
       });
+    });
+
+    document.querySelectorAll("tbody tr").forEach(row => {
+      const completeCb = row.querySelector(".completeHost");
+      const inprogressCb = row.querySelector(".inprogressHost");
+      applyRowState(row, completeCb, inprogressCb);
     });
   });
 </script>

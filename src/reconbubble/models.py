@@ -66,6 +66,7 @@ class Host(Base):
     os_guess: Mapped[str] = mapped_column(String(255), default="")
     done: Mapped[int] = mapped_column(Integer, default=0)
     complete: Mapped[int] = mapped_column(Integer, default=0)
+    inprogress: Mapped[int] = mapped_column(Integer, default=0)
     waf: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
