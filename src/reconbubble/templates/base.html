@@ -50,7 +50,12 @@
     </div>
   <nav class="nav">
       <a href="/" {{ 'class=current' if request.url.path == '/' }}>Stats</a>
-      <a href="/scope" {{ 'class=current' if request.url.path == '/scope' }}>Scope</a>
+      <span class="nav-scope-wrap">
+        <a href="/scope" class="{% if request.url.path == '/scope' %}current {% endif %}{% if scope_is_empty|default(false) %}scope-attn{% endif %}">Scope</a>
+        {% if scope_is_empty|default(false) %}
+          <a class="top-scope-bubble" href="/scope">SET SCOPE<br/>TO GET STARTED</a>
+        {% endif %}
+      </span>
       <a href="/assets" {{ 'class=current' if request.url.path == '/assets' }}>Assets</a>
       <a href="/services" {{ 'class=current' if request.url.path == '/services' }}>Services</a>
       <a href="/cloud" {{ 'class=current' if request.url.path == '/cloud' }}>Cloud</a>

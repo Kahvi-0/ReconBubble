@@ -71,6 +71,16 @@ def create_app(
     templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
     templates.env.globals["project_name"] = (project_name or "").strip()
 
+    def _scope_is_empty() -> bool:
+        with SessionLocal() as s:
+            count = (
+                s.scalar(
+                    select(func.count(ScopeItem.id)).where(ScopeItem.in_scope == 1)
+                )
+                or 0
+            )
+        return count == 0
+
     # Starlette/FastAPI changed TemplateResponse call style across versions.
     # Support both:
     #   templates.TemplateResponse("name.html", {"request": request, ...})
@@ -82,6 +92,7 @@ def create_app(
         if len(args) >= 2 and isinstance(args[0], str) and isinstance(args[1], dict):
             template_name = args[0]
             context = args[1]
+            context.setdefault("scope_is_empty", _scope_is_empty())
             request = context.get("request")
             if request is not None:
                 try:
@@ -610,6 +621,7 @@ def create_app(
             s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip = (
                 scope_sets(s, sensitive_only=True)
             )
+            scope_is_empty = not bool(ips or subnets or domains)
             rows = s.execute(
                 select(
                     Host.id,
@@ -771,6 +783,7 @@ def create_app(
                 "total_count": total_before_limit,
                 "subnet_stats": subnet_stats_list,
                 "in_scope_total": len(in_scope_data),
+                "scope_is_empty": scope_is_empty,
             },
         )
 

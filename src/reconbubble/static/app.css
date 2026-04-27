@@ -99,6 +99,51 @@ pre.evidence, pre.note { white-space: pre-wrap; margin: 0; font-size: 12px; line
   font-weight: bold;
 }
 
+.nav a.scope-attn {
+  color: #ffd166;
+  text-shadow: 0 0 8px rgba(245, 158, 11, 0.45);
+  animation: scopeNavPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes scopeNavPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
+.nav-scope-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.top-scope-bubble {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translate(6px, -50%) rotate(-25deg);
+  margin-left: 0 !important;
+  white-space: nowrap;
+  text-align: center;
+  line-height: 1.2;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #f59e0b;
+  background: #7a3f00;
+  color: #ffd79a;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  z-index: 30;
+  animation: topScopeBubbleFloat 2.2s ease-in-out infinite;
+}
+.top-scope-bubble:hover {
+  text-decoration: none;
+  background: #9a5000;
+}
+@keyframes topScopeBubbleFloat {
+  0%, 100% { transform: translate(6px, -50%) rotate(-25deg); }
+  50% { transform: translate(6px, calc(-50% - 2px)) rotate(-25deg); }
+}
+
 /* Nav dropdown */
 .nav-dropdown {
   position: relative;
