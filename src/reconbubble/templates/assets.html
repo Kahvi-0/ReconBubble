@@ -103,8 +103,10 @@
 {% endif %}
 
 <style>
-tr.row-complete { background: rgba(0, 255, 0, 0.1); }
-tr.row-inprogress { background: rgba(255, 153, 0, 0.16); }
+tr.row-complete td { background: rgba(0, 255, 0, 0.1); }
+tr.row-complete:hover td { background: rgba(0, 255, 0, 0.06); }
+tr.row-inprogress td { background: rgba(255, 153, 0, 0.16); }
+tr.row-inprogress:hover td { background: rgba(255, 153, 0, 0.1); }
 .scope-dot { font-size: 14px; margin-right: 2px; }
 .scope-dot.in { color: #00ff00; }
 .scope-dot.out { color: #ff3333; }
