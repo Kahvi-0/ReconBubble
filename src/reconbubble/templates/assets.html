@@ -6,6 +6,9 @@
   <div class="card">
     <h2>Actions</h2>
     <button class="btn" id="createAssetBtn" type="button">Create asset</button>
+    <button class="btn" id="toggleCompletedBtn" type="button">
+      {% if hide_completed==1 %}Show completed assets{% else %}Hide completed assets{% endif %}
+    </button>
     <label class="checkbox-label">
       <input id="showOut" type="checkbox" {% if show_out==1 %}checked{% endif %}/>
       Show out-of-scope assets
@@ -130,6 +133,14 @@ html { scrollbar-gutter: stable; }
     showOut && showOut.addEventListener("change", () => {
       const u = new URL(window.location.href);
       u.searchParams.set("show_out", showOut.checked ? "1" : "0");
+      window.location.href = u.toString();
+    });
+
+    const toggleCompletedBtn = document.getElementById("toggleCompletedBtn");
+    toggleCompletedBtn && toggleCompletedBtn.addEventListener("click", () => {
+      const u = new URL(window.location.href);
+      const isHidden = u.searchParams.get("hide_completed") === "1";
+      u.searchParams.set("hide_completed", isHidden ? "0" : "1");
       window.location.href = u.toString();
     });
 

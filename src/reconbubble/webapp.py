@@ -607,6 +607,7 @@ def create_app(
     @app.get("/assets", response_class=HTMLResponse)
     def assets(request: Request):
         show_out = int(request.query_params.get("show_out", "0"))
+        hide_completed = int(request.query_params.get("hide_completed", "0"))
         row_limit_raw = (request.query_params.get("row_limit", "0") or "0").strip()
         try:
             row_limit = max(0, int(row_limit_raw))
@@ -688,6 +689,8 @@ def create_app(
 
         in_scope_data = [d for d in data if d.get("in_scope")]
         filtered_data = data if show_out == 1 else in_scope_data
+        if hide_completed == 1:
+            filtered_data = [d for d in filtered_data if int(d.get("complete", 0)) != 1]
 
         sorted_subnets = sorted(subnets, key=subnet_sort_key)
         subnet_stats: dict[str, int] = {str(net): 0 for net in sorted_subnets}
@@ -778,6 +781,7 @@ def create_app(
                 "request": request,
                 "grouped": grouped_ordered,
                 "show_out": show_out,
+                "hide_completed": hide_completed,
                 "row_limit": row_limit,
                 "shown_count": shown_count,
                 "total_count": total_before_limit,
