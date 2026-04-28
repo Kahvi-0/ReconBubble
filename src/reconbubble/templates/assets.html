@@ -6,14 +6,27 @@
   <div class="card">
     <h2>Actions</h2>
     <button class="btn" id="createAssetBtn" type="button">Create asset</button>
-    <button class="btn" id="toggleCompletedBtn" type="button">
-      {% if hide_completed==1 %}Show completed assets{% else %}Hide completed assets{% endif %}
-    </button>
-    <label class="checkbox-label">
-      <input id="showOut" type="checkbox" {% if show_out==1 %}checked{% endif %}/>
-      Show out-of-scope assets
-    </label>
-    <label>Max assets shown</label>
+    <ul class="filter-list">
+      <li>
+        <label class="checkbox-label">
+          <input id="showOut" type="checkbox" {% if show_out==1 %}checked{% endif %}/>
+          Show out-of-scope assets
+        </label>
+      </li>
+      <li>
+        <label class="checkbox-label">
+          <input id="hideCompleted" type="checkbox" {% if hide_completed==1 %}checked{% endif %}/>
+          Hide completed assets
+        </label>
+      </li>
+      <li>
+        <label class="checkbox-label">
+          <input id="hideZeroServices" type="checkbox" {% if hide_zero_services==1 %}checked{% endif %}/>
+          Hide assets with 0 services
+        </label>
+      </li>
+    </ul>
+    <label class="row-limit-label">Max assets shown</label>
     <select id="rowLimit">
       <option value="0" {% if row_limit == 0 %}selected{% endif %}>All</option>
       <option value="200" {% if row_limit == 200 %}selected{% endif %}>200</option>
@@ -22,7 +35,7 @@
       <option value="2000" {% if row_limit == 2000 %}selected{% endif %}>2000</option>
     </select>
     <p class="muted">Default hides out-of-scope.</p>
-    <p class="muted">Showing {{ shown_count }} of {{ total_count }} assets.</p>
+    <p class="muted actions-summary-note">Showing {{ shown_count }} of {{ total_count }} assets.</p>
   </div>
   <div class="card">
     <h2>In-Scope Assets by Subnet</h2>
@@ -115,6 +128,15 @@ tr.row-inprogress:hover td { background: rgba(255, 153, 0, 0.1); }
 .scope-dot.out { color: #ff3333; }
 .asset-subnet-group > summary { cursor: pointer; margin-bottom: 10px; }
 html { scrollbar-gutter: stable; }
+.filter-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  list-style: none;
+}
+.filter-list li { margin: 6px 0; }
+.row-limit-label { display: inline-block; margin-top: 26px; }
+#rowLimit { margin-top: 8px; }
+.actions-summary-note { margin-top: 24px; }
 </style>
 
 <script>
@@ -136,11 +158,17 @@ html { scrollbar-gutter: stable; }
       window.location.href = u.toString();
     });
 
-    const toggleCompletedBtn = document.getElementById("toggleCompletedBtn");
-    toggleCompletedBtn && toggleCompletedBtn.addEventListener("click", () => {
+    const hideCompleted = document.getElementById("hideCompleted");
+    hideCompleted && hideCompleted.addEventListener("change", () => {
       const u = new URL(window.location.href);
-      const isHidden = u.searchParams.get("hide_completed") === "1";
-      u.searchParams.set("hide_completed", isHidden ? "0" : "1");
+      u.searchParams.set("hide_completed", hideCompleted.checked ? "1" : "0");
+      window.location.href = u.toString();
+    });
+
+    const hideZeroServices = document.getElementById("hideZeroServices");
+    hideZeroServices && hideZeroServices.addEventListener("change", () => {
+      const u = new URL(window.location.href);
+      u.searchParams.set("hide_zero_services", hideZeroServices.checked ? "1" : "0");
       window.location.href = u.toString();
     });
 
