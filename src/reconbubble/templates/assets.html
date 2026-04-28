@@ -141,6 +141,39 @@ html { scrollbar-gutter: stable; }
 
 <script>
   window.addEventListener("DOMContentLoaded", () => {
+    const prefKey = "reconbubble.assets.filters.v1";
+    const url = new URL(window.location.href);
+
+    const loadPrefs = () => {
+      try {
+        return JSON.parse(localStorage.getItem(prefKey) || "{}");
+      } catch {
+        return {};
+      }
+    };
+
+    const savePrefs = (prefs) => {
+      try {
+        localStorage.setItem(prefKey, JSON.stringify(prefs));
+      } catch {
+        // ignore storage failures
+      }
+    };
+
+    const prefs = loadPrefs();
+    let needsReload = false;
+    const persistedKeys = ["show_out", "hide_completed", "hide_zero_services", "row_limit"];
+    persistedKeys.forEach((k) => {
+      if (!url.searchParams.has(k) && Object.prototype.hasOwnProperty.call(prefs, k)) {
+        url.searchParams.set(k, String(prefs[k]));
+        needsReload = true;
+      }
+    });
+    if (needsReload) {
+      window.location.href = url.toString();
+      return;
+    }
+
     document.querySelectorAll("[data-open-host]").forEach(a => {
       a.addEventListener("click", (ev) => {
         ev.preventDefault();
@@ -155,6 +188,7 @@ html { scrollbar-gutter: stable; }
     showOut && showOut.addEventListener("change", () => {
       const u = new URL(window.location.href);
       u.searchParams.set("show_out", showOut.checked ? "1" : "0");
+      savePrefs({ ...loadPrefs(), show_out: showOut.checked ? "1" : "0" });
       window.location.href = u.toString();
     });
 
@@ -162,6 +196,7 @@ html { scrollbar-gutter: stable; }
     hideCompleted && hideCompleted.addEventListener("change", () => {
       const u = new URL(window.location.href);
       u.searchParams.set("hide_completed", hideCompleted.checked ? "1" : "0");
+      savePrefs({ ...loadPrefs(), hide_completed: hideCompleted.checked ? "1" : "0" });
       window.location.href = u.toString();
     });
 
@@ -169,6 +204,7 @@ html { scrollbar-gutter: stable; }
     hideZeroServices && hideZeroServices.addEventListener("change", () => {
       const u = new URL(window.location.href);
       u.searchParams.set("hide_zero_services", hideZeroServices.checked ? "1" : "0");
+      savePrefs({ ...loadPrefs(), hide_zero_services: hideZeroServices.checked ? "1" : "0" });
       window.location.href = u.toString();
     });
 
@@ -176,6 +212,7 @@ html { scrollbar-gutter: stable; }
     rowLimit && rowLimit.addEventListener("change", () => {
       const u = new URL(window.location.href);
       u.searchParams.set("row_limit", rowLimit.value);
+      savePrefs({ ...loadPrefs(), row_limit: rowLimit.value });
       window.location.href = u.toString();
     });
 
