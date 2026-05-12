@@ -62,9 +62,10 @@
       <div class="nav-dropdown" id="credentialsDropdown">
         <a href="#" class="nav-dropbtn">Credentials ▾</a>
         <div class="nav-dropdown-content">
+          <a href="/password-spray" {{ 'class=current' if request.url.path == '/password-spray' }}>Password Spray</a>
           <a href="/user-discovery" {{ 'class=current' if request.url.path == '/user-discovery' or request.url.path == '/users' }}>User Discovery</a>
           <a href="/app-credentials" {{ 'class=current' if request.url.path == '/app-credentials' }}>App Credentials</a>
-          <a href="/ad-users" {{ 'class=current' if request.url.path == '/ad-users' }}>Active Directory Users</a>
+          <a href="/ad-users" {{ 'class=current' if request.url.path == '/ad-users' }}>Active Directory Credentials</a>
         </div>
       </div>
       <div class="nav-dropdown" id="osintDropdown">

@@ -30,6 +30,9 @@ from .models import (
     SocialMedia,
     WebUrl,
     DomainInfo,
+    PasswordSprayService,
+    PasswordSprayAttempt,
+    AdCredential,
 )
 from .parsers import (
     upsert_artifact,
@@ -4056,9 +4059,198 @@ def create_app(
             "app_credentials.html", {"request": request, "creds": creds}
         )
 
+    @app.get("/password-spray", response_class=HTMLResponse)
+    def password_spray_page(request: Request):
+        with db() as s:
+            services = (
+                s.execute(
+                    select(PasswordSprayService).order_by(PasswordSprayService.name.asc())
+                )
+                .scalars()
+                .all()
+            )
+            service_rows = []
+            for svc in services:
+                attempts = (
+                    s.execute(
+                        select(PasswordSprayAttempt)
+                        .where(PasswordSprayAttempt.service_id == svc.id)
+                        .order_by(PasswordSprayAttempt.created_at.asc())
+                    )
+                    .scalars()
+                    .all()
+                )
+                service_rows.append(
+                    {
+                        "id": svc.id,
+                        "name": svc.name,
+                        "attempts": attempts,
+                    }
+                )
+        return templates.TemplateResponse(
+            "password_spray.html", {"request": request, "services": service_rows}
+        )
+
+    @app.post("/api/password-spray/service")
+    def api_password_spray_service_create(name: str = Form("")):
+        name = (name or "").strip()
+        if not name:
+            return JSONResponse({"ok": False, "error": "Service name is required"}, status_code=400)
+        with db() as s:
+            existing = s.scalar(select(PasswordSprayService).where(PasswordSprayService.name == name))
+            if existing:
+                return {"ok": True, "id": existing.id, "name": existing.name}
+            svc = PasswordSprayService(name=name[:255])
+            s.add(svc)
+            s.commit()
+            s.refresh(svc)
+            return {"ok": True, "id": svc.id, "name": svc.name}
+
+    @app.post("/api/password-spray/attempt")
+    def api_password_spray_attempt_create(
+        service_id: int = Form(...),
+        password: str = Form(""),
+        attempted_at: str = Form(""),
+        notes: str = Form(""),
+    ):
+        pwd = (password or "").strip()
+        at = (attempted_at or "").strip()
+        note = (notes or "").strip()
+        if not pwd and not at and not note:
+            return JSONResponse({"ok": False, "error": "No attempt data provided"}, status_code=400)
+        with db() as s:
+            svc = s.scalar(select(PasswordSprayService).where(PasswordSprayService.id == int(service_id)))
+            if not svc:
+                return JSONResponse({"ok": False, "error": "Service not found"}, status_code=404)
+            row = PasswordSprayAttempt(
+                service_id=svc.id,
+                password=pwd[:255],
+                attempted_at=at[:64],
+                notes=note,
+            )
+            s.add(row)
+            s.commit()
+            s.refresh(row)
+            return {
+                "ok": True,
+                "id": row.id,
+                "service_id": svc.id,
+                "password": row.password,
+                "attempted_at": row.attempted_at,
+                "notes": row.notes,
+            }
+
+    @app.post("/api/password-spray/attempt/{attempt_id}")
+    def api_password_spray_attempt_update(
+        attempt_id: int,
+        password: str = Form(""),
+        attempted_at: str = Form(""),
+        notes: str = Form(""),
+    ):
+        pwd = (password or "").strip()
+        at = (attempted_at or "").strip()
+        note = (notes or "").strip()
+        with db() as s:
+            row = s.scalar(
+                select(PasswordSprayAttempt).where(PasswordSprayAttempt.id == attempt_id)
+            )
+            if not row:
+                return JSONResponse(
+                    {"ok": False, "error": "Attempt not found"}, status_code=404
+                )
+            row.password = pwd[:255]
+            row.attempted_at = at[:64]
+            row.notes = note
+            s.commit()
+            return {
+                "ok": True,
+                "id": row.id,
+                "password": row.password,
+                "attempted_at": row.attempted_at,
+                "notes": row.notes,
+            }
+
     @app.get("/ad-users", response_class=HTMLResponse)
     def ad_users_page(request: Request):
-        return templates.TemplateResponse("ad_users.html", {"request": request})
+        types = ["cracked", "cleartext", "sam", "dpapi", "lsass", "lsa"]
+        with db() as s:
+            rows = (
+                s.execute(select(AdCredential).order_by(AdCredential.created_at.desc()))
+                .scalars()
+                .all()
+            )
+            cracked_clear_domains = [
+                d
+                for d in (
+                    s.execute(
+                        select(AdCredential.domain)
+                        .where(
+                            AdCredential.cred_type.in_(["cracked", "cleartext"]),
+                            AdCredential.domain != "",
+                        )
+                        .distinct()
+                        .order_by(AdCredential.domain.asc())
+                    )
+                    .scalars()
+                    .all()
+                )
+                if (d or "").strip()
+            ]
+        grouped = {t: [] for t in types}
+        for r in rows:
+            t = (r.cred_type or "").strip().lower()
+            if t in grouped:
+                grouped[t].append(r)
+        return templates.TemplateResponse(
+            "ad_users.html",
+            {
+                "request": request,
+                "grouped": grouped,
+                "cracked_clear_domains": cracked_clear_domains,
+            },
+        )
+
+    @app.post("/api/ad-credentials/create")
+    def api_ad_credential_create(
+        cred_type: str = Form(...),
+        domain: str = Form(""),
+        username: str = Form(""),
+        password: str = Form(""),
+        hostname: str = Form(""),
+        dump_text: str = Form(""),
+        notes: str = Form(""),
+    ):
+        t = (cred_type or "").strip().lower()
+        if t not in {"cracked", "cleartext", "sam", "dpapi", "lsass", "lsa"}:
+            return JSONResponse({"ok": False, "error": "Invalid credential type"}, status_code=400)
+
+        d = (domain or "").strip()
+        u = (username or "").strip()
+        p = (password or "").strip()
+        h = (hostname or "").strip()
+        dump = (dump_text or "").strip()
+        n = (notes or "").strip()
+
+        if t in {"cracked", "cleartext"}:
+            if not u or not p:
+                return JSONResponse({"ok": False, "error": "Username and password are required"}, status_code=400)
+        else:
+            if not h or not dump:
+                return JSONResponse({"ok": False, "error": "Hostname and hash dump are required"}, status_code=400)
+
+        with db() as s:
+            row = AdCredential(
+                cred_type=t,
+                domain=d[:255],
+                username=u[:255],
+                password=p[:255],
+                hostname=h[:255],
+                dump_text=dump,
+                notes=n,
+            )
+            s.add(row)
+            s.commit()
+            return {"ok": True, "id": row.id}
 
     @app.post("/api/users/create")
     def api_user_create(

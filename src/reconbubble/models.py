@@ -257,3 +257,41 @@ class SmtpScan(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
     )
+
+
+class PasswordSprayService(Base):
+    __tablename__ = "password_spray_services"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
+class PasswordSprayAttempt(Base):
+    __tablename__ = "password_spray_attempts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    service_id: Mapped[int] = mapped_column(
+        ForeignKey("password_spray_services.id"), index=True
+    )
+    password: Mapped[str] = mapped_column(String(255), default="")
+    attempted_at: Mapped[str] = mapped_column(String(64), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
+class AdCredential(Base):
+    __tablename__ = "ad_credentials"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    cred_type: Mapped[str] = mapped_column(String(32), index=True)
+    domain: Mapped[str] = mapped_column(String(255), default="")
+    username: Mapped[str] = mapped_column(String(255), default="")
+    password: Mapped[str] = mapped_column(String(255), default="")
+    hostname: Mapped[str] = mapped_column(String(255), default="")
+    dump_text: Mapped[str] = mapped_column(Text, default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )

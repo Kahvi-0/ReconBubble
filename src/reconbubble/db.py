@@ -391,4 +391,59 @@ def migrate_sqlite(engine) -> None:
         )
         """)
         )
+
+        # password spray tracking tables
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS password_spray_services (
+          id INTEGER PRIMARY KEY,
+          name VARCHAR(255) NOT NULL UNIQUE,
+          created_at DATETIME
+        )
+        """)
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_password_spray_services_name ON password_spray_services(name)"
+            )
+        )
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS password_spray_attempts (
+          id INTEGER PRIMARY KEY,
+          service_id INTEGER NOT NULL,
+          password VARCHAR(255) DEFAULT '',
+          attempted_at VARCHAR(64) DEFAULT '',
+          notes TEXT DEFAULT '',
+          created_at DATETIME
+        )
+        """)
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_password_spray_attempts_service_id ON password_spray_attempts(service_id)"
+            )
+        )
+
+        # active directory credential tracking
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS ad_credentials (
+          id INTEGER PRIMARY KEY,
+          cred_type VARCHAR(32) NOT NULL,
+          domain VARCHAR(255) DEFAULT '',
+          username VARCHAR(255) DEFAULT '',
+          password VARCHAR(255) DEFAULT '',
+          hostname VARCHAR(255) DEFAULT '',
+          dump_text TEXT DEFAULT '',
+          notes TEXT DEFAULT '',
+          created_at DATETIME
+        )
+        """)
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_ad_credentials_type ON ad_credentials(cred_type)"
+            )
+        )
     conn.commit()

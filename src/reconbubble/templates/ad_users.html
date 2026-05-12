@@ -1,9 +1,171 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Active Directory Users</h1>
+<h1>Active Directory Credentials</h1>
 
-<div class="card">
-  <h2>Under Construction</h2>
-  <p class="muted">This page is reserved for AD user discovery workflows and will be wired in next.</p>
+<div class="card" style="margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; gap:12px;">
+  <button class="btn" id="createAdCredBtn" type="button">Add credentials</button>
+  <span class="muted">Track cracked creds and host hash dumps by source type.</span>
 </div>
+
+<div class="grid ad-cred-grid">
+  {% set cfg = [
+    ('cracked', 'Cracked', '#166534', '#14532d'),
+    ('cleartext', 'Cleartext', '#92400e', '#78350f'),
+    ('sam', 'SAM', '#1d4ed8', '#1e40af'),
+    ('dpapi', 'DPAPI', '#7c3aed', '#6d28d9'),
+    ('lsass', 'LSASS', '#be123c', '#9f1239'),
+    ('lsa', 'LSA', '#0f766e', '#115e59')
+  ] %}
+  {% for key, label, c1, c2 in cfg %}
+  <div class="card ad-cred-bubble" style="--bubble-start: {{ c1 }}; --bubble-end: {{ c2 }};">
+    <h2>{{ label }}</h2>
+    {% set rows = grouped.get(key, []) %}
+    {% if rows %}
+      {% if key in ['cracked', 'cleartext'] %}
+        {% for dom_group in rows|groupby('domain') %}
+          <div class="ad-cred-subbubble">
+            <h3>{{ dom_group.grouper or 'No Domain' }}</h3>
+            {% for r in dom_group.list %}
+              <div class="ad-cred-item">
+                <div><strong>{{ r.domain or '-' }}\{{ r.username or '-' }}</strong> <code>{{ r.password }}</code></div>
+                {% if r.notes %}<div class="muted">{{ r.notes }}</div>{% endif %}
+              </div>
+            {% endfor %}
+          </div>
+        {% endfor %}
+      {% else %}
+        {% for r in rows %}
+          <div class="ad-cred-item">
+            <div><strong>{{ r.hostname }}</strong></div>
+            <pre class="evidence" style="margin-top:6px; max-height:180px; overflow:auto;">{{ r.dump_text }}</pre>
+            {% if r.notes %}<div class="muted">{{ r.notes }}</div>{% endif %}
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% else %}
+      <p class="muted">No entries yet.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<style>
+.ad-cred-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.ad-cred-bubble {
+  background:
+    radial-gradient(120% 120% at 0% 0%, rgba(255,255,255,0.08), rgba(255,255,255,0) 42%),
+    linear-gradient(140deg, var(--bubble-start), var(--bubble-end));
+}
+.ad-cred-item {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(255,255,255,0.14);
+  border-radius: 10px;
+  background: rgba(0,0,0,0.22);
+}
+.ad-cred-subbubble {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(0,0,0,0.2);
+}
+.ad-cred-subbubble h3 {
+  margin: 0;
+  font-size: 14px;
+  letter-spacing: 0.3px;
+}
+@media (max-width: 1200px) { .ad-cred-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 760px) { .ad-cred-grid { grid-template-columns: 1fr; } }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const overlay = document.getElementById("sidebarOverlay");
+  const sidebar = document.getElementById("sidebar");
+  const title = document.getElementById("sidebarTitle");
+  const body = document.getElementById("sidebarBody");
+
+  function showSidebar() {
+    overlay.classList.remove("hidden");
+    sidebar.classList.remove("hidden");
+    sidebar.setAttribute("aria-hidden", "false");
+  }
+
+  function toggleTypeFields(type) {
+    const crackedWrap = document.getElementById("adCrackedFields");
+    const dumpWrap = document.getElementById("adDumpFields");
+    const crackedMode = type === "cracked" || type === "cleartext";
+    crackedWrap.style.display = crackedMode ? "block" : "none";
+    dumpWrap.style.display = crackedMode ? "none" : "block";
+  }
+
+  document.getElementById("createAdCredBtn").addEventListener("click", () => {
+    title.textContent = "Add AD Credential Data";
+    body.innerHTML = `
+      <div class="card">
+        <form id="adCredForm">
+          <label>Type *</label>
+          <select name="cred_type" id="adCredType">
+            <option value="cracked">Cracked</option>
+            <option value="cleartext">Cleartext</option>
+            <option value="sam">SAM</option>
+            <option value="dpapi">DPAPI</option>
+            <option value="lsass">LSASS</option>
+            <option value="lsa">LSA</option>
+          </select>
+
+          <div id="adCrackedFields">
+            <label style="margin-top:8px;">Domain</label>
+            <input name="domain" list="adDomainList" placeholder="corp.local" />
+            <datalist id="adDomainList">
+              {% for d in cracked_clear_domains %}
+              <option value="{{ d }}"></option>
+              {% endfor %}
+            </datalist>
+            <label style="margin-top:8px;">Username</label>
+            <input name="username" placeholder="jdoe" />
+            <label style="margin-top:8px;">Password</label>
+            <input name="password" placeholder="Password123!" />
+            <label style="margin-top:8px;">Notes</label>
+            <textarea name="notes" rows="3"></textarea>
+          </div>
+
+          <div id="adDumpFields" style="display:none;">
+            <label style="margin-top:8px;">Hostname</label>
+            <input name="hostname" placeholder="DC01" />
+            <label style="margin-top:8px;">Hash Output</label>
+            <textarea name="dump_text" rows="10" placeholder="Paste full hash output..."></textarea>
+            <label style="margin-top:8px;">Notes</label>
+            <textarea name="notes" rows="3"></textarea>
+          </div>
+
+          <button class="btn" type="submit" style="margin-top:12px;">Save</button>
+          <div id="adCredMsg" class="muted" style="margin-top:8px;"></div>
+        </form>
+      </div>
+    `;
+    showSidebar();
+
+    const typeSel = document.getElementById("adCredType");
+    toggleTypeFields(typeSel.value);
+    typeSel.addEventListener("change", () => toggleTypeFields(typeSel.value));
+
+    document.getElementById("adCredForm").addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(ev.target);
+      const msg = document.getElementById("adCredMsg");
+      msg.textContent = "Saving...";
+      const r = await fetch("/api/ad-credentials/create", { method: "POST", body: fd });
+      const j = await r.json().catch(() => ({ ok: false, error: "Error" }));
+      if (j.ok) {
+        msg.textContent = "Saved";
+        setTimeout(() => location.reload(), 350);
+      } else {
+        msg.textContent = j.error || "Failed";
+      }
+    });
+  });
+</script>
 {% endblock %}
