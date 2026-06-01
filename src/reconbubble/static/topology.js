@@ -31,6 +31,7 @@
         notes: n.notes || "",
         floating_notes: Array.isArray(n.floating_notes) ? n.floating_notes : [],
         compromised: !!n.compromised,
+        linked_asset_id: n.linked_asset_id || "",
         display: `${icon} ${label}`,
       },
       position: { x: n.x || 120, y: n.y || 120 },
@@ -108,7 +109,7 @@
           "color": "#fee2e2",
           "text-valign": "center",
           "text-halign": "center",
-          "z-index": 998,
+          "z-index": 10001,
         },
       },
       {
@@ -129,6 +130,32 @@
           "text-wrap": "ellipsis",
           "text-max-width": 138,
           "z-index": 5,
+        },
+      },
+      {
+        selector: 'node[type = "note_indicator"]',
+        style: {
+          "shape": "ellipse",
+          "width": 16,
+          "height": 16,
+          "background-color": "#64748b",
+          "border-width": 1,
+          "border-color": "#334155",
+          "label": "data(display)",
+          "font-size": 9,
+          "font-weight": 700,
+          "color": "#f1f5f9",
+          "text-valign": "center",
+          "text-halign": "center",
+          "opacity": 0.5,
+          "z-index": 10002,
+        },
+      },
+      {
+        selector: 'node[type = "note_indicator"]:active',
+        style: {
+          "opacity": 0.9,
+          "background-color": "#94a3b8",
         },
       },
       {
@@ -201,6 +228,38 @@
   ctxMenu.style.display = "none";
   document.body.appendChild(ctxMenu);
 
+  const notesTooltip = document.createElement("div");
+  notesTooltip.style.position = "fixed";
+  notesTooltip.style.zIndex = "2000";
+  notesTooltip.style.maxWidth = "320px";
+  notesTooltip.style.maxHeight = "240px";
+  notesTooltip.style.overflowY = "auto";
+  notesTooltip.style.background = "#0f172a";
+  notesTooltip.style.border = "1px solid #334155";
+  notesTooltip.style.borderRadius = "8px";
+  notesTooltip.style.boxShadow = "0 12px 28px rgba(0,0,0,0.5)";
+  notesTooltip.style.padding = "10px 12px";
+  notesTooltip.style.fontSize = "11px";
+  notesTooltip.style.color = "#cbd5e1";
+  notesTooltip.style.whiteSpace = "pre-wrap";
+  notesTooltip.style.display = "none";
+  notesTooltip.style.lineHeight = "1.5";
+  notesTooltip.style.fontFamily = "'JetBrains Mono', monospace";
+  document.body.appendChild(notesTooltip);
+
+  function showNotesTooltip(clientX, clientY, text) {
+    const maxX = Math.max(8, window.innerWidth - 340);
+    const maxY = Math.max(8, window.innerHeight - 260);
+    notesTooltip.style.left = `${Math.min(clientX + 14, maxX)}px`;
+    notesTooltip.style.top = `${Math.min(clientY - 10, maxY)}px`;
+    notesTooltip.textContent = text;
+    notesTooltip.style.display = "block";
+  }
+
+  function hideNotesTooltip() {
+    notesTooltip.style.display = "none";
+  }
+
   function hideContextMenu() {
     ctxMenu.style.display = "none";
     ctxMenu.innerHTML = "";
@@ -245,8 +304,12 @@
     return node && node.isNode && node.isNode() && node.data("type") === "floating_note";
   }
 
+  function isNoteIndicator(node) {
+    return node && node.isNode && node.isNode() && node.data("type") === "note_indicator";
+  }
+
   function isVirtualNode(node) {
-    return isHandle(node) || isBadge(node) || isPreview(node) || isFloatingNote(node);
+    return isHandle(node) || isBadge(node) || isPreview(node) || isFloatingNote(node) || isNoteIndicator(node);
   }
 
   function realNodes() {
@@ -263,6 +326,61 @@
 
   function floatingNoteId(ownerId, noteId) {
     return `fn_${ownerId}_${noteId}`;
+  }
+
+  function noteIndicatorIdFor(nodeId) {
+    return `ni_${nodeId}`;
+  }
+
+  function syncNoteIndicatorPosition(nodeId) {
+    const owner = cy.getElementById(nodeId);
+    const indicator = cy.getElementById(noteIndicatorIdFor(nodeId));
+    if (!owner || !owner.length || !indicator || !indicator.length) return;
+    const p = owner.position();
+    indicator.position({ x: p.x - 46, y: p.y - 28 });
+  }
+
+  function ensureNoteIndicator(nodeId) {
+    const owner = cy.getElementById(nodeId);
+    if (!owner || !owner.length) return;
+    const notes = owner.data("notes") || "";
+    if (!notes.trim()) {
+      removeNoteIndicator(nodeId);
+      return;
+    }
+    if (cy.getElementById(noteIndicatorIdFor(nodeId)).length) return;
+    cy.add({
+      group: "nodes",
+      data: { id: noteIndicatorIdFor(nodeId), type: "note_indicator", owner: nodeId, label: "", display: "💬", notes: notes },
+      position: { x: 0, y: 0 },
+      grabbable: false,
+      selectable: true,
+    });
+    syncNoteIndicatorPosition(nodeId);
+  }
+
+  function removeNoteIndicator(nodeId) {
+    const ind = cy.getElementById(noteIndicatorIdFor(nodeId));
+    if (ind && ind.length) ind.remove();
+  }
+
+  function refreshNoteIndicator(nodeId) {
+    const owner = cy.getElementById(nodeId);
+    if (!owner || !owner.length) return;
+    const notes = owner.data("notes") || "";
+    if (notes.trim()) {
+      const existing = cy.getElementById(noteIndicatorIdFor(nodeId));
+      if (existing && existing.length) {
+        existing.data("notes", notes);
+        syncNoteIndicatorPosition(nodeId);
+        return;
+      }
+    }
+    ensureNoteIndicator(nodeId);
+  }
+
+  function ensureAllNoteIndicators() {
+    realNodes().forEach((n) => ensureNoteIndicator(n.id()));
   }
 
   function syncHandlePosition(nodeId) {
@@ -386,6 +504,7 @@
       notes: n.data("notes") || "",
       floating_notes: Array.isArray(n.data("floating_notes")) ? n.data("floating_notes") : [],
       compromised: !!n.data("compromised"),
+      linked_asset_id: n.data("linked_asset_id") || "",
       x: n.position("x"),
       y: n.position("y"),
     }));
@@ -438,6 +557,7 @@
         notes: "",
         floating_notes: [],
         compromised: false,
+        linked_asset_id: "",
         display: `${icon} ${label} ${nextNodeId - 1}`,
       },
       position: { x, y },
@@ -499,12 +619,203 @@
     }
   }
 
+  let allHostsCache = [];
+  let currentAssetHosts = [];
+
+  async function loadHosts() {
+    if (allHostsCache.length) return allHostsCache;
+    try {
+      const r = await fetch("/api/hosts/list");
+      const j = await r.json();
+      allHostsCache = j.hosts || [];
+    } catch (_) {}
+    return allHostsCache;
+  }
+
+  function buildAssetCombobox(targetNode, selectedId) {
+    const wrapId = "topoAssetWrap";
+    const inputId = "topoAssetInput";
+    const listId = "topoAssetList";
+
+    const currentHost = currentAssetHosts.find((h) => String(h.id) === String(selectedId));
+    const displayVal = currentHost ? `${currentHost.ip} ${currentHost.hostname}`.trim() : "";
+
+    const wrap = document.createElement("div");
+    wrap.id = wrapId;
+    wrap.style.position = "relative";
+
+    const input = document.createElement("input");
+    input.id = inputId;
+    input.type = "text";
+    input.placeholder = "Type IP or hostname to filter assets...";
+    input.value = displayVal;
+    input.autocomplete = "off";
+
+    const list = document.createElement("div");
+    list.id = listId;
+    list.style.position = "absolute";
+    list.style.top = "100%";
+    list.style.left = "0";
+    list.style.right = "0";
+    list.style.maxHeight = "180px";
+    list.style.overflowY = "auto";
+    list.style.background = "#0f172a";
+    list.style.border = "1px solid #334155";
+    list.style.borderRadius = "6px";
+    list.style.zIndex = "100";
+    list.style.display = "none";
+    list.style.marginTop = "2px";
+
+    wrap.appendChild(input);
+    wrap.appendChild(list);
+
+    function renderList(filter) {
+      list.innerHTML = "";
+      const q = (filter || "").toLowerCase().trim();
+      const filtered = currentAssetHosts.filter((h) => {
+        if (!q) return true;
+        const search = `${h.ip} ${h.hostname} ${h.os_guess}`.toLowerCase();
+        return search.includes(q);
+      });
+      if (filtered.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "muted";
+        empty.style.padding = "6px 8px";
+        empty.style.fontSize = "12px";
+        empty.textContent = q ? "No matching assets" : "No assets";
+        list.appendChild(empty);
+      }
+      filtered.forEach((h) => {
+        const opt = document.createElement("div");
+        opt.style.padding = "6px 8px";
+        opt.style.cursor = "pointer";
+        opt.style.fontSize = "12px";
+        opt.style.borderBottom = "1px solid #1e293b";
+        opt.style.color = String(h.id) === String(selectedId) ? "#60a5fa" : "#cbd5e1";
+        const label = `${h.ip}`;
+        const sub = `${h.hostname} ${h.os_guess}`.trim();
+        opt.innerHTML = `<div>${escapeHtml(label)}</div>${sub ? `<div class="muted" style="font-size:10px;">${escapeHtml(sub)}</div>` : ""}`;
+        opt.addEventListener("click", () => {
+          input.value = `${h.ip} ${h.hostname}`.trim();
+          list.style.display = "none";
+          onAssetSelect(targetNode, h.id);
+        });
+        opt.addEventListener("mouseenter", () => { opt.style.background = "#1e293b"; });
+        opt.addEventListener("mouseleave", () => { opt.style.background = ""; });
+        list.appendChild(opt);
+      });
+    }
+
+    function showList() {
+      list.style.display = "block";
+      renderList(input.value);
+    }
+
+    function hideList() {
+      list.style.display = "none";
+    }
+
+    input.addEventListener("focus", showList);
+    input.addEventListener("input", () => {
+      showList();
+    });
+    input.addEventListener("blur", () => {
+      setTimeout(hideList, 150);
+    });
+
+    renderList(input.value);
+
+    return { wrap, input, list, showList, hideList, renderList };
+  }
+
+  async function onAssetSelect(targetNode, assetId) {
+    const newId = String(assetId || "");
+    targetNode.data("linked_asset_id", newId);
+    queueSave();
+    await renderAssetInfo(targetNode, newId);
+  }
+
+  async function renderAssetInfo(node, assetId) {
+    const infoDiv = document.getElementById("topoAssetInfo");
+    if (!infoDiv) return;
+
+    if (!assetId) {
+      infoDiv.innerHTML = '<div class="muted" style="margin-top:4px;">No asset linked</div>';
+      return;
+    }
+
+    infoDiv.innerHTML = '<div class="muted" style="margin-top:4px;">Loading asset info...</div>';
+
+    try {
+      const r = await fetch(`/api/host/${assetId}`);
+      const j = await r.json();
+      if (!j.ok) {
+        infoDiv.innerHTML = '<div class="muted" style="margin-top:4px;">Asset not found</div>';
+        return;
+      }
+
+      const host = j.host || {};
+      const services = j.services || [];
+      const notes = j.notes || [];
+
+      let html = `
+        <div style="margin-top:4px; padding:8px; background:#0f172a; border-radius:8px; border:1px solid #2a3545;">
+          <div style="font-weight:600; margin-bottom:4px;">${escapeHtml(host.ip)} ${escapeHtml(host.hostname)}</div>
+          ${host.os_guess ? `<div class="muted" style="font-size:11px;">${escapeHtml(host.os_guess)}</div>` : ""}
+      `;
+
+      if (services.length) {
+        html += `<div style="margin-top:8px; font-size:12px; font-weight:600;">Ports (${services.length})</div>`;
+        html += `<table style="width:100%; margin-top:4px; font-size:11px; border-collapse:collapse;">`;
+        html += `<tr style="border-bottom:1px solid #2a3545;"><th style="text-align:left;padding:2px 4px;color:#94a3b8;">Port</th><th style="text-align:left;padding:2px 4px;color:#94a3b8;">Proto</th><th style="text-align:left;padding:2px 4px;color:#94a3b8;">State</th><th style="text-align:left;padding:2px 4px;color:#94a3b8;">Service</th></tr>`;
+        services.forEach((s) => {
+          const stateColor = s.state === "open" ? "#4ade80" : s.state === "filtered" ? "#fbbf24" : "#94a3b8";
+          html += `<tr style="border-bottom:1px solid #1e293b;">`;
+          html += `<td style="padding:2px 4px;"><code>${s.port}</code></td>`;
+          html += `<td style="padding:2px 4px;">${escapeHtml(s.proto)}</td>`;
+          html += `<td style="padding:2px 4px; color:${stateColor};">${escapeHtml(s.state)}</td>`;
+          html += `<td style="padding:2px 4px;">${escapeHtml(s.service_name)}${s.product ? ` <span class="muted">${escapeHtml(s.product)}</span>` : ""}</td>`;
+          html += `</tr>`;
+        });
+        html += `</table>`;
+      }
+
+      if (notes.length) {
+        html += `<div style="margin-top:8px; font-size:12px; font-weight:600;">Notes (${notes.length})</div>`;
+        notes.forEach((n) => {
+          const sevColors = { info: "#60a5fa", low: "#a3e635", med: "#fbbf24", high: "#f87171" };
+          const sevColor = sevColors[(n.severity || "info").toLowerCase()] || "#60a5fa";
+          html += `<div style="margin-top:4px; padding:6px; background:#0b1220; border-radius:6px; border-left:3px solid ${sevColor};">`;
+          html += `<div style="font-size:10px; color:${sevColor}; text-transform:uppercase; font-weight:600;">${escapeHtml(n.severity || "info")}</div>`;
+          html += `<div style="font-size:11px; margin-top:2px; white-space:pre-wrap;">${escapeHtml(n.body)}</div>`;
+          if (n.tags) {
+            html += `<div style="font-size:10px; color:#64748b; margin-top:2px;">${escapeHtml(n.tags)}</div>`;
+          }
+          html += `</div>`;
+        });
+      }
+
+      if (!services.length && !notes.length) {
+        html += `<div class="muted" style="margin-top:6px; font-size:11px;">No ports or notes</div>`;
+      }
+
+      html += `</div>`;
+      infoDiv.innerHTML = html;
+
+    } catch (e) {
+      infoDiv.innerHTML = '<div class="muted" style="margin-top:4px;">Failed to load asset info</div>';
+    }
+  }
+
   function renderInspector(node) {
     if (!node || !node.isNode()) {
       inspector.innerHTML = '<span class="muted">Click a node to edit label, notes, color, and compromise state.</span>';
+      currentAssetHosts = [];
       return;
     }
     const d = node.data();
+    const linkedId = d.linked_asset_id || "";
+
     inspector.innerHTML = `
       <label>Label</label>
       <input id="topoLabel" value="${escapeHtml(d.label || "")}" />
@@ -514,8 +825,11 @@
         <input id="topoCompromised" type="checkbox" ${d.compromised ? "checked" : ""} />
         Mark as compromised
       </label>
+      <label style="margin-top:8px;">Link Asset</label>
+      <div id="topoAssetSelector"></div>
+      <div id="topoAssetInfo"></div>
       <label style="margin-top:8px;">Notes</label>
-      <textarea id="topoNotes" rows="10" style="resize:vertical;">${escapeHtml(d.notes || "")}</textarea>
+      <textarea id="topoNotes" rows="6" style="resize:vertical;">${escapeHtml(d.notes || "")}</textarea>
       <div class="muted" style="margin-top:8px;">Tip: Drag the small orange bubble on a node to another node to create a link.</div>
     `;
 
@@ -523,6 +837,7 @@
     const colorEl = document.getElementById("topoColor");
     const notesEl = document.getElementById("topoNotes");
     const compEl = document.getElementById("topoCompromised");
+    const selectorDiv = document.getElementById("topoAssetSelector");
 
     function applyDisplay() {
       const icon = ICONS[node.data("type")] || "📍";
@@ -540,6 +855,7 @@
     });
     notesEl && notesEl.addEventListener("input", () => {
       node.data("notes", notesEl.value || "");
+      refreshNoteIndicator(node.id());
       queueSave();
     });
     compEl && compEl.addEventListener("change", () => {
@@ -547,6 +863,16 @@
       updateNodeClass(node);
       queueSave();
     });
+
+    (async () => {
+      const hosts = await loadHosts();
+      currentAssetHosts = hosts;
+      if (selectorDiv) {
+        const combo = buildAssetCombobox(node, linkedId);
+        selectorDiv.appendChild(combo.wrap);
+        await renderAssetInfo(node, linkedId);
+      }
+    })();
   }
 
   function escapeHtml(s) {
@@ -555,6 +881,7 @@
 
   cy.nodes().forEach(updateNodeClass);
   ensureAllHandles();
+  ensureAllNoteIndicators();
   realNodes().forEach((n) => refreshFloatingNotes(n.id()));
   cy.on("tap", "node", (evt) => {
     const node = evt.target;
@@ -568,11 +895,30 @@
     if (evt.target === cy) renderInspector(null);
   });
 
+  cy.on("mouseover", 'node[type = "note_indicator"]', (evt) => {
+    const ind = evt.target;
+    const notes = ind.data("notes") || "";
+    if (!notes.trim()) return;
+    const oe = evt.originalEvent || {};
+    showNotesTooltip(oe.clientX || 200, oe.clientY || 200, notes);
+  });
+
+  cy.on("mouseout", 'node[type = "note_indicator"]', () => {
+    hideNotesTooltip();
+  });
+
+  cy.on("mousemove", 'node[type = "note_indicator"]', (evt) => {
+    const oe = evt.originalEvent || {};
+    notesTooltip.style.left = `${Math.min(oe.clientX + 14, window.innerWidth - 340)}px`;
+    notesTooltip.style.top = `${Math.min(oe.clientY - 10, window.innerHeight - 260)}px`;
+  });
+
   cy.on("dragfree", "node", (evt) => {
     const n = evt.target;
     if (!isVirtualNode(n)) {
       syncHandlePosition(n.id());
       syncBadgePosition(n.id());
+      syncNoteIndicatorPosition(n.id());
       refreshFloatingNotes(n.id());
       saveNow();
     }
@@ -583,6 +929,7 @@
     if (!isVirtualNode(n)) {
       syncHandlePosition(n.id());
       syncBadgePosition(n.id());
+      syncNoteIndicatorPosition(n.id());
       refreshFloatingNotes(n.id());
     }
   });
@@ -591,6 +938,7 @@
     const n = evt.target;
     if (!isVirtualNode(n)) {
       ensureHandle(n.id());
+      ensureNoteIndicator(n.id());
       updateNodeClass(n);
       refreshFloatingNotes(n.id());
     }
@@ -602,6 +950,7 @@
       const h = cy.getElementById(handleIdFor(n.id()));
       if (h && h.length) h.remove();
       removeBadge(n.id());
+      removeNoteIndicator(n.id());
       removeFloatingNotes(n.id());
       queueSave();
     }

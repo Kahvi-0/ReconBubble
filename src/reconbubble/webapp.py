@@ -981,6 +981,23 @@ def create_app(
             ],
         }
 
+    @app.get("/api/hosts/list")
+    def api_hosts_list():
+        with db() as s:
+            hosts = s.execute(select(Host).order_by(Host.ip.asc())).scalars().all()
+        return {
+            "ok": True,
+            "hosts": [
+                {
+                    "id": h.id,
+                    "ip": h.ip,
+                    "hostname": h.hostname,
+                    "os_guess": h.os_guess,
+                }
+                for h in hosts
+            ],
+        }
+
     @app.post("/api/host/update")
     def api_host_update(
         host_id: int = Form(...),
@@ -4294,6 +4311,42 @@ def create_app(
                     notes=notes.strip(),
                 )
             )
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/creds/update")
+    def api_cred_update(
+        cred_id: int = Form(...),
+        username: str = Form(...),
+        password: str = Form(""),
+        service: str = Form(""),
+        url: str = Form(""),
+        notes: str = Form(""),
+    ):
+        username = username.strip()
+        if not username:
+            return JSONResponse(
+                {"ok": False, "error": "Username is required"}, status_code=400
+            )
+        with db() as s:
+            cred = s.scalar(select(Credential).where(Credential.id == cred_id))
+            if not cred:
+                return JSONResponse({"ok": False, "error": "Credential not found"}, status_code=404)
+            cred.username = username
+            cred.password = password
+            cred.service = service
+            cred.url = url.strip()
+            cred.notes = notes.strip()
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/creds/delete")
+    def api_cred_delete(cred_id: int = Form(...)):
+        with db() as s:
+            cred = s.scalar(select(Credential).where(Credential.id == cred_id))
+            if not cred:
+                return JSONResponse({"ok": False, "error": "Credential not found"}, status_code=404)
+            s.delete(cred)
             s.commit()
         return {"ok": True}
 

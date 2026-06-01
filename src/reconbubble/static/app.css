@@ -269,3 +269,42 @@ input[type="checkbox"]:checked {
 #globalNotesStatus {
   padding: 0 10px 10px;
 }
+
+/* Row action buttons (hover reveal) */
+.cred-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  opacity: 0.2;
+  transition: opacity 0.2s ease;
+  white-space: nowrap;
+}
+.cred-row:hover .cred-actions {
+  opacity: 1;
+}
+.cred-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 1px solid #2a3545;
+  background: #151d26;
+  color: #7a8a9a;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.cred-action-btn:hover {
+  background: #1e2a38;
+  color: #c8d4e0;
+  border-color: #3a4a5c;
+}
+.cred-action-btn.del:hover {
+  background: #2a1a1a;
+  color: #f87171;
+  border-color: #4a2a2a;
+}

@@ -17,9 +17,12 @@ src/reconbubble/static/checklist_blocks.js
 src/reconbubble/static/checklist_cyto_edit.js
 src/reconbubble/static/checklist_flow_edit.js
 src/reconbubble/static/checklist_flow_view.js
+src/reconbubble/static/favicon.svg
 src/reconbubble/static/fire.gif
+src/reconbubble/static/global_notes_panel.js
 src/reconbubble/static/graph.js
 src/reconbubble/static/sidebar.js
+src/reconbubble/static/topology.js
 src/reconbubble/static/vendor/cytoscape.min.js
 src/reconbubble/static/vendor/react-dom.production.min.js
 src/reconbubble/static/vendor/react.production.min.js
@@ -31,6 +34,7 @@ src/reconbubble/templates/asset_detail.html
 src/reconbubble/templates/assets.html
 src/reconbubble/templates/base.html
 src/reconbubble/templates/checklist.html
+src/reconbubble/templates/checklist_attack_path.html
 src/reconbubble/templates/checklist_edit.html
 src/reconbubble/templates/checklist_unauthenticated.html
 src/reconbubble/templates/cloud.html
@@ -40,6 +44,7 @@ src/reconbubble/templates/docs.html
 src/reconbubble/templates/emails.html
 src/reconbubble/templates/graph.html
 src/reconbubble/templates/home.html
+src/reconbubble/templates/password_spray.html
 src/reconbubble/templates/scope.html
 src/reconbubble/templates/service_detail.html
 src/reconbubble/templates/services.html
@@ -47,6 +52,7 @@ src/reconbubble/templates/smb_shares.html
 src/reconbubble/templates/smtp.html
 src/reconbubble/templates/social.html
 src/reconbubble/templates/subdomains.html
+src/reconbubble/templates/topology.html
 src/reconbubble/templates/upload.html
 src/reconbubble/templates/urls.html
 src/reconbubble/templates/user_discovery.html
