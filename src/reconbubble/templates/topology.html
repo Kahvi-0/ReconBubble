@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Topology</h1>
+<h1>Attack Topology</h1>
 <div class="card" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
   <button class="btn" draggable="true" data-node-type="computer">Drag Computer</button>
   <button class="btn" draggable="true" data-node-type="server">Drag Server</button>
@@ -28,5 +28,5 @@
   window.TOPOLOGY_DATA = {{ topology_data | tojson }};
 </script>
 <script src="/static/vendor/cytoscape.min.js"></script>
-<script src="/static/topology.js?v=5"></script>
+<script src="/static/topology.js?v=9"></script>
 {% endblock %}

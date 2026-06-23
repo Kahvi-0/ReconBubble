@@ -2,6 +2,7 @@
 {% block content %}
 <h1>Asset: {{ host.ip }}</h1>
 {% if in_scope %}<div class="pill inscope">IN SCOPE</div>{% else %}<div class="pill outscope">OUT OF SCOPE</div>{% endif %}
+<button class="btn" id="add-topology-btn">Add to Attack Topology</button>
 
 <div class="split">
   <div class="card">
@@ -52,4 +53,33 @@
 {% else %}
   <p class="muted">No notes yet.</p>
 {% endif %}
+<script>
+  document.getElementById('add-topology-btn').addEventListener('click', async () => {
+    const btn = document.getElementById('add-topology-btn');
+    btn.disabled = true;
+    btn.textContent = 'Adding...';
+    try {
+      const res = await fetch('/api/topology/add-node', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          asset_id: {{ host.id }},
+          hostname: {{ host.hostname | tojson }},
+          ip: {{ host.ip | tojson }}
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        btn.textContent = 'Added!';
+        setTimeout(() => { btn.textContent = 'Add to Topology'; btn.disabled = false; }, 1500);
+      } else {
+        btn.textContent = 'Failed';
+        setTimeout(() => { btn.textContent = 'Add to Topology'; btn.disabled = false; }, 2000);
+      }
+    } catch {
+      btn.textContent = 'Error';
+      setTimeout(() => { btn.textContent = 'Add to Topology'; btn.disabled = false; }, 2000);
+    }
+  });
+</script>
 {% endblock %}

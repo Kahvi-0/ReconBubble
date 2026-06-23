@@ -23,12 +23,9 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
       <option value="email_domain">Email domain</option>
     </select>
 
-    <div id="singleWrap">
-      <label>Single value (optional)</label>
-      <input name="value" id="singleValue" placeholder="example.com | example.org" />
-    </div>
+ 
 
-    <label>OR paste a list (one per line)</label>
+    <label>Paste a list (one per line)</label>
     <textarea name="values_raw" rows="7" placeholder="Paste multiple items..."></textarea>
 
     <div id="domainWrap" style="display:flex; gap:10px; align-items:center; margin: 6px 0 12px;">
@@ -166,8 +163,6 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
   const domainIpWrap = document.getElementById("domainIpWrap");
   const allSubs = document.getElementById("applyAllSubs");
   const subsInScopeIp = document.getElementById("applySubsInScopeIp");
-  const singleWrap = document.getElementById("singleWrap");
-  const singleValue = document.getElementById("singleValue");
 
   function sync() {
     const k = kindSel.value;
@@ -176,10 +171,6 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
     domainIpWrap.style.display = isDomain ? "flex" : "none";
     if (!isDomain) allSubs.checked = false;
     if (!isDomain) subsInScopeIp.checked = false;
-
-    const showSingle = (k === "domain" || k === "email_domain");
-    singleWrap.style.display = showSingle ? "block" : "none";
-    if (!showSingle) singleValue.value = "";
   }
   kindSel.addEventListener("change", sync);
   sync();

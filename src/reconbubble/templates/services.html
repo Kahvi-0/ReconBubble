@@ -41,6 +41,18 @@
     <div id="popupContent"></div>
   </div>
 </div>
+<div id="hostOverlay" class="overlay hidden" style="cursor:pointer;">
+  <div id="hostPopup" style="max-width:650px; width:92vw; max-height:85vh; overflow:auto; background:#10161d; border:2px solid #fff; border-radius:8px; padding:20px; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
+      <div style="display:flex; gap:8px; align-items:center;">
+        <h2 id="hostPopupTitle" style="margin:0;"></h2>
+        <button class="btn" id="hostPopupBack" style="font-size:12px;">Back to service</button>
+      </div>
+      <button class="btn" id="hostPopupClose">Close</button>
+    </div>
+    <div id="hostPopupContent"></div>
+  </div>
+</div>
 
 <style>
 .service-row:hover td { background:#0f141b; }
@@ -142,20 +154,27 @@ function getServiceDetails(svc) {
   if (svc.hosts && svc.hosts.length > 0) {
     for (const h of svc.hosts) {
       const label = h.hostname ? `${h.ip} (${h.hostname})` : h.ip;
-      html += `<div class="host-item"><a href="/host/${h.id}">${label}</a></div>`;
+      html += `<div class="host-item"><a href="#" data-host-id="${h.id}" data-host-ip="${h.ip}" onclick="event.stopPropagation(); openHostFromService(${h.id}, '${label}')">${label}</a></div>`;
     }
   }
   html += `</div>`;
   
-  if (svc.outputs && svc.outputs.length > 0) {
-    html += `<div class="section-header">Scanner Output</div>`;
-    for (const out of svc.outputs) {
-      html += `<pre class="evidence" style="margin:8px 0;">${out.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
+  if (svc.host_outputs && svc.host_outputs.length > 0) {
+    for (const ho of svc.host_outputs) {
+      if (ho.outputs && ho.outputs.length > 0) {
+        const hostLabel = ho.host.hostname ? `${ho.host.ip} (${ho.host.hostname})` : ho.host.ip;
+        html += `<div class="section-header">Scanner Output: ${hostLabel}</div>`;
+        for (const out of ho.outputs) {
+          html += `<pre class="evidence" style="margin:8px 0;">${out.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
+        }
+      }
     }
   }
   
   return html;
 }
+
+let currentServicePopupService = null;
 
 document.getElementById("popupClose").addEventListener("click", () => {
   document.getElementById("serviceOverlay").classList.add("hidden");
@@ -164,6 +183,86 @@ document.getElementById("popupClose").addEventListener("click", () => {
 document.getElementById("serviceOverlay").addEventListener("click", (e) => {
   if (e.target.id === "serviceOverlay") {
     document.getElementById("serviceOverlay").classList.add("hidden");
+  }
+});
+
+async function openHostFromService(hostId, hostLabel) {
+  document.getElementById("serviceOverlay").classList.add("hidden");
+  currentServicePopupService = document.getElementById("popupTitle").textContent;
+  
+  document.getElementById("hostPopupTitle").textContent = hostLabel;
+  document.getElementById("hostPopupContent").innerHTML = `<p class="muted">Loading host details...</p>`;
+  document.getElementById("hostOverlay").classList.remove("hidden");
+  
+  try {
+    const resp = await fetch(`/api/hosts/${hostId}`);
+    const data = await resp.json();
+    if (!data.ok || !data.host) {
+      document.getElementById("hostPopupContent").innerHTML = `<p class="muted">Failed to load host details.</p>`;
+      return;
+    }
+    document.getElementById("hostPopupContent").innerHTML = renderHostPopupContent(data.host);
+  } catch (err) {
+    document.getElementById("hostPopupContent").innerHTML = `<p class="muted">Failed to load host details: ${err.message}</p>`;
+  }
+}
+
+function renderHostPopupContent(host) {
+  let html = "";
+  html += `<div class="section-header">Basic Info</div>`;
+  html += `<p><strong>IP:</strong> ${host.ip || '-'}</p>`;
+  html += `<p><strong>Hostname:</strong> ${host.hostname || '-'}</p>`;
+  html += `<p><strong>OS:</strong> ${host.os || '-'}</p>`;
+  html += `<p><strong>Status:</strong> ${host.status || '-'}</p>`;
+  
+  if (host.services && host.services.length > 0) {
+    html += `<div class="section-header">Services (${host.services.length})</div>`;
+    html += `<div class="collapsible" onclick="this.classList.toggle('open'); this.nextElementSibling.classList.toggle('open');">`;
+    html += `<span>Show ${host.services.length} services</span>`;
+    html += `<span class="collapsible-arrow">▶</span>`;
+    html += `</div>`;
+    html += `<div class="collapsible-content">`;
+    for (const svc of host.services) {
+      const svcLabel = svc.service ? `${svc.port}/${svc.service}` : `${svc.port}`;
+      html += `<div class="host-item">${svcLabel}</div>`;
+    }
+    html += `</div>`;
+  }
+  
+  if (host.tags && host.tags.length > 0) {
+    html += `<div class="section-header">Tags</div>`;
+    for (const tag of host.tags) {
+      html += `<span class="tag">${tag}</span>`;
+    }
+  }
+  
+  return html;
+}
+
+document.getElementById("hostPopupClose").addEventListener("click", () => {
+  document.getElementById("hostOverlay").classList.add("hidden");
+  currentServicePopupService = null;
+});
+
+document.getElementById("hostPopupBack").addEventListener("click", (e) => {
+  e.stopPropagation();
+  document.getElementById("hostOverlay").classList.add("hidden");
+  if (currentServicePopupService) {
+    const titleEl = document.getElementById("popupTitle");
+    if (titleEl.textContent === currentServicePopupService) {
+      document.getElementById("servicePopup").style.display = "";
+      document.getElementById("serviceOverlay").classList.remove("hidden");
+    } else {
+      document.getElementById("serviceOverlay").classList.add("hidden");
+    }
+  }
+  currentServicePopupService = null;
+});
+
+document.getElementById("hostOverlay").addEventListener("click", (e) => {
+  if (e.target.id === "hostOverlay") {
+    document.getElementById("hostOverlay").classList.add("hidden");
+    currentServicePopupService = null;
   }
 });
 </script>

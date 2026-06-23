@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>OSINT Checklist</h1>
+<div class="card" style="max-width:800px;">
+   <div class="checklist-item" style="margin-bottom:20px;">
+    <h3>Prowler</h3>
+    <p>A single-binary OSINT toolkit written in Go for authorized security assessments. Performs comprehensive domain reconnaissance and document metadata extraction to identify usernames, software versions, and organizational intel from publicly available data.</p>
+    <div class="code-box-row">
+      <div class="code-box">
+        <strong>Install</strong>
+        <pre data-code="install"><code>git clone https://github.com/waffl3ss/Prowler.git
+cd Prowler
+go build -o Prowler .
+make all</code></pre>
+        <div class="copy-icon">📋</div>
+      </div>
+    </div>
+    <div class="code-box-row">
+      <div class="code-box">
+        <strong>syntax</strong>
+        <pre data-code="syntax"><code>./prowler full example.com</code></pre>
+        <div class="copy-icon">📋</div>
+      </div>
+    </div>
+    <div class="checklist-actions">
+      <input type="checkbox" id="prowlerRun" class="checklist-checkbox"> <label for="prowlerRun">Run Prowler</label>
+      <input type="checkbox" id="prowlerUpload" class="checklist-checkbox"> <label for="prowlerUpload">Upload Results</label>
+    </div>
+  </div>
+  <div class="checklist-item">
+    <h3>BBOT</h3>
+    <p>Automated OSINT tool for recon and enumeration. Can cloud enumerate targets and generate reports.</p>
+    <div class="code-box-row">
+      <div class="code-box">
+        <strong>Install</strong>
+        <pre data-code="install"><code>pipx install bbot
+pipx ensurepath</code></pre>
+        <div class="copy-icon">📋</div>
+      </div>
+    </div>
+    <div class="code-box-row">
+      <div class="code-box">
+        <strong>syntax</strong>
+        <pre data-code="syntax"><code># cloud enum
+bbot -t ./scope.txt -f cloud-enum -n bbot-cloud -o .
+
+# email enum
+bbot -t domain.com -f email-enum -n bbot-email -o . 
+
+# To enumerate Subdomains AND automatically run GoWitness
+bbot -t optiv.com -f subdomain-enum -n bbot-sub -o . -m gowitness</code></pre>
+        <div class="copy-icon">📋</div>
+      </div>
+    </div>
+    <div class="checklist-actions">
+      <input type="checkbox" id="bbotRun" class="checklist-checkbox"> <label for="bbotRun">Run BBOT</label>
+      <input type="checkbox" id="bbotUpload" class="checklist-checkbox"> <label for="bbotUpload">Upload Results</label>
+    </div>
+  </div>
+</div>
+<script src="/static/osint_checklist.js"></script>
+{% endblock %}

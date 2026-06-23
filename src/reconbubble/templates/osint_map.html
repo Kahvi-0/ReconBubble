@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>OSINT Map</h1>
+<div class="card" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
+  <button class="btn" draggable="true" data-node-type="domain">Drag Domain</button>
+  <button class="btn" draggable="true" data-node-type="ip">Drag IP</button>
+  <button class="btn" draggable="true" data-node-type="email">Drag Email</button>
+  <button class="btn" draggable="true" data-node-type="person">Drag Person</button>
+  <button class="btn" draggable="true" data-node-type="organization">Drag Organization</button>
+  <button class="btn" draggable="true" data-node-type="vulnerability">Drag Vulnerability</button>
+  <button class="btn" draggable="true" data-node-type="evidence">Drag Evidence</button>
+  <button class="btn" draggable="true" data-node-type="social_media">Drag Social Media</button>
+  <button class="btn" draggable="true" data-node-type="document">Drag Document</button>
+  <span style="border-left:1px solid #334155; height:20px;"></span>
+  <button class="btn" id="fitView">Fit</button>
+  <span id="osintStatus" class="muted">Ready</span>
+</div>
+
+<div style="display:flex; gap:10px; align-items:center;">
+   <div class="card" style="flex:1; height:750px;">
+     <div id="osintResources" style="padding:10px;">
+       <h3 style="margin:0 0 10px 0;">OSINT Resources</h3>
+       <div class="muted">Resources will be added here</div>
+     </div>
+   </div>
+   <div class="card" style="flex:2; height:750px;">
+     <div id="osintCy" style="height:100%; border:1px solid #223046; border-radius:12px; background: radial-gradient(circle at 20% 20%, #111827 0%, #0b1220 100%);"></div>
+   </div>
+   <div class="card" style="flex:1.5; height:750px;">
+     <div id="osintInspector" class="muted" style="padding:10px;">Click a node to edit details.</div>
+   </div>
+ </div>
+
+<script>
+  window.OSINT_DATA = {{ osint_data | tojson }};
+</script>
+<script src="/static/vendor/cytoscape.min.js"></script>
+<script src="/static/osint_map.js?v=1"></script>
+{% endblock %}

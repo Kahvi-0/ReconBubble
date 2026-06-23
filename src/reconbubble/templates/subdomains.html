@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Subdomains</h1>
+<h1>Web Apps</h1>
 
 <div class="card" style="margin-bottom:20px;">
   <h2>Filters</h2>
@@ -26,9 +26,11 @@
       {% if subs|selectattr('sensitive')|list|length > 0 %}<span class="sensitive-banner">Sensitive</span>{% endif %}
     </summary>
     <table style="margin-top:8px;">
-      <thead><tr><th style="width:30px;"></th><th>Subdomain</th><th>Prowler IPs</th><th>Resolved IPs</th></tr></thead>
+      <thead><tr><th style="width:30px;"></th><th>Subdomain</th><th>Prowler IPs</th><th>Resolved IPs</th><th>URLs</th></tr></thead>
       <tbody>
         {% for s in subs %}
+        {% set has_urls = s.urls|length > 0 %}
+        {% set url_id = 'urls-' ~ loop.index0 ~ '-' ~ s.fqdn|replace('.', '-') %}
         <tr>
           <td>
             <span class="scope-dot {% if s.in_scope %}in{% else %}out{% endif %}">●</span>
@@ -37,7 +39,32 @@
           <td><a href="#" class="sub-link" data-fqdn="{{ s.fqdn }}" data-prowl='{{ s.prowl | tojson }}'>{{ s.fqdn }}</a></td>
           <td>{% if s.prowl and s.prowl.ips %}<code>{{ s.prowl.ips }}</code>{% else %}<span class="muted">-</span>{% endif %}</td>
           <td>{% if s.ips %}{% for ip in s.ips %}<code>{{ ip }}</code> {% endfor %}{% else %}<span class="muted">-</span>{% endif %}</td>
+          {% if has_urls %}
+          <td style="white-space:nowrap;">
+            <button class="btn btn-sm url-toggle" onclick="toggleDetails('{{ url_id }}')">URLs ({{ s.urls|length }})</button>
+          </td>
+          {% else %}
+          <td></td>
+          {% endif %}
         </tr>
+        {% if has_urls %}
+        <tr class="url-row">
+          <td colspan="5">
+            <details class="url-details" id="{{ url_id }}">
+              <summary><strong>🌐 URLs ({{ s.urls|length }})</strong></summary>
+              <ul class="url-list">
+                {% for u in s.urls %}
+                <li>
+                  <a href="{{ u.url }}" target="_blank" class="url-link">{{ u.url }}</a>
+                  {% if u.title %} <span class="muted">— {{ u.title }}</span>{% endif %}
+                  {% if u.status_code %} <span class="status-pill {% if u.status_code >= 400 %}err{% else %}ok{% endif %}">{{ u.status_code }}</span>{% endif %}
+                </li>
+                {% endfor %}
+              </ul>
+            </details>
+          </td>
+        </tr>
+        {% endif %}
         {% endfor %}
       </tbody>
     </table>
@@ -64,6 +91,19 @@
 .scope-dot.out { color: #ff3333; }
 .domain-link { color:#4a9eff; text-decoration:none; }
 .domain-link:hover { text-decoration:underline; }
+.url-row td { padding: 4px 8px; }
+.url-details { margin: 0; padding: 8px 12px; background: rgba(74,158,255,0.08); border-radius: 4px; }
+.url-details summary { cursor: pointer; font-size: 13px; color: #4a9eff; list-style: none; }
+.url-details summary::before { content: "▶ "; font-size: 10px; }
+.url-details[open] summary::before { content: "▼ "; }
+.url-list { list-style: none; margin: 8px 0 4px 0; padding: 0; }
+.url-list li { margin: 3px 0; font-size: 13px; line-height: 1.6; }
+.url-link { color: #4a9eff; text-decoration: none; word-break: break-all; }
+.url-link:hover { text-decoration: underline; }
+.status-pill { font-size: 11px; padding: 1px 6px; border-radius: 3px; }
+.status-pill.ok { background: rgba(0,255,0,0.2); color: #00ff00; }
+.status-pill.err { background: rgba(255,0,0,0.2); color: #ff3333; }
+.url-toggle { cursor: pointer; }
 </style>
 
 <script>
@@ -150,6 +190,13 @@
       });
     });
   });
+
+  window.toggleDetails = function(id) {
+    const el = document.getElementById(id);
+    if (el) {
+      el.open = !el.open;
+    }
+  };
 
   window.fetchRdap = async function(domain, btn) {
     btn.textContent = "Loading...";

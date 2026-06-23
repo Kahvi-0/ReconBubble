@@ -20,6 +20,8 @@ th { text-align:left; color:#aab; font-weight:600; background:#0f141b; }
 tr:hover td { background:#0f141b; }
 .btn { display:inline-block; padding: 8px 12px; border-radius: 10px; background:#1a2a3a; border:1px solid #29445f; color:#e8e8e8; cursor:pointer; }
 .btn:hover { background:#213a52; text-decoration:none; }
+.btn--disabled { background:#14181c; border-color:#1e2630; color:#555e66; cursor:not-allowed; }
+.btn--disabled:hover { background:#14181c; }
 input, select, textarea { width:100%; background:#0f141b; border:1px solid #243041; border-radius: 10px; padding: 8px 10px; color:#e8e8e8; margin: 6px 0 10px; box-sizing:border-box; }
 textarea { resize: vertical; }
 pre.evidence, pre.note { white-space: pre-wrap; margin: 0; font-size: 12px; line-height: 1.35; color:#d8e1ea; }
@@ -177,8 +179,7 @@ pre.evidence, pre.note { white-space: pre-wrap; margin: 0; font-size: 12px; line
   padding: 10px 14px;
   margin: 0;
 }
-.nav-dropdown.show .nav-dropdown-content,
-.nav-dropdown:hover .nav-dropdown-content {
+.nav-dropdown.show .nav-dropdown-content {
   opacity: 1;
   visibility: visible;
 }
@@ -271,17 +272,44 @@ input[type="checkbox"]:checked {
 }
 
 /* Row action buttons (hover reveal) */
-.cred-actions {
-  display: flex;
-  gap: 4px;
-  justify-content: flex-end;
-  opacity: 0.2;
-  transition: opacity 0.2s ease;
-  white-space: nowrap;
-}
-.cred-row:hover .cred-actions {
-  opacity: 1;
-}
+   .cred-actions {
+     display: flex;
+     gap: 4px;
+     justify-content: flex-end;
+     opacity: 0.2;
+     transition: opacity 0.2s ease;
+     white-space: nowrap;
+   }
+   .cred-row:hover .cred-actions {
+     opacity: 1;
+   }
+   
+   /* Checklist code box styling */
+   .code-box-row {
+     display: flex;
+     gap: 10px;
+     margin-top: 10px;
+   }
+   .code-box {
+     position: relative;
+     background: #0f141b;
+     border: 1px solid #1e2630;
+     border-radius: 8px;
+     padding: 8px;
+   }
+   .copy-icon {
+     position: absolute;
+     right: 8px;
+     top: 8px;
+     cursor: pointer;
+     opacity: 0;
+     transition: opacity 0.2s ease;
+     padding: 0;
+     font-size: 14px;
+   }
+   .code-box:hover .copy-icon {
+     opacity: 1;
+   }
 .cred-action-btn {
   display: inline-flex;
   align-items: center;
@@ -307,4 +335,16 @@ input[type="checkbox"]:checked {
   background: #2a1a1a;
   color: #f87171;
   border-color: #4a2a2a;
+}
+
+/* Checklist styling */
+.checklist-item h3 {
+  font-size: 22px;
+  font-weight: 600;
+  padding-bottom: 6px;
+  border-bottom: 2px solid #2a3545;
+}
+.checklist-item p {
+  margin-top: 8px;
+  color: #9aa6b2;
 }

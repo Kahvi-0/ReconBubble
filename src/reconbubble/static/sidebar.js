@@ -5,6 +5,7 @@
   const title = document.getElementById("sidebarTitle");
   const body = document.getElementById("sidebarBody");
   const closeBtn = document.getElementById("sidebarClose");
+  const topoBtn = document.getElementById("sidebarTopologyBtn");
   let prevBodyOverflow = "";
   let prevHtmlOverflow = "";
   let scrollLockDepth = 0;
@@ -44,6 +45,12 @@
     sidebar.classList.add("hidden");
     sidebar.setAttribute("aria-hidden", "true");
     body.innerHTML = "";
+    const existing = document.getElementById("sidebarBack");
+    if (existing) existing.remove();
+    if (topoBtn) {
+      topoBtn.classList.add("hidden");
+      topoBtn.onclick = null;
+    }
     resetBackgroundScroll();
   }
   overlay && overlay.addEventListener("click", hide);
@@ -89,6 +96,8 @@ function bindNoteHandlers() {
 }
 
   async function openHostCreate() {
+    const backBtnCreate = document.getElementById("sidebarBack");
+    if (backBtnCreate) backBtnCreate.style.display = "none";
     title.textContent = "Create asset";
     body.innerHTML = `
       <div class="card">
@@ -136,6 +145,8 @@ function bindNoteHandlers() {
     } catch (e) {}
     if (!data.ok) return;
 
+    const backBtnHost = document.getElementById("sidebarBack");
+    if (backBtnHost) backBtnHost.style.display = "none";
     title.textContent = `Asset ${data.host.ip}`;
     body.innerHTML = `
       <div class="card">
@@ -207,6 +218,67 @@ function bindNoteHandlers() {
     show();
     bindNoteHandlers();
 
+    /* ----- Add to Attack Topology ----- */
+    const onAssetPage = window.location.pathname.startsWith("/assets");
+    if (topoBtn && onAssetPage) {
+      topoBtn.classList.remove("hidden");
+      topoBtn.classList.remove("btn--disabled");
+      const h = data.host;
+      const alreadyInTopology = async () => {
+        try {
+          const r = await fetch("/api/topology");
+          if (!r.ok) return false;
+          const j = await r.json();
+          if (!j.ok) return false;
+          const nodes = (j.map && j.map.nodes) || [];
+          return nodes.some((n) => n.linked_asset_id == h.id);
+        } catch {
+          return false;
+        }
+      };
+      const setDisabled = (disabled) => {
+        topoBtn.disabled = disabled;
+        topoBtn.classList.toggle("btn--disabled", disabled);
+      };
+      const isDuplicate = await alreadyInTopology();
+      if (isDuplicate) {
+        topoBtn.textContent = "Already in Attack Topology";
+        setDisabled(true);
+        topoBtn.onclick = null;
+      } else {
+        setDisabled(false);
+        topoBtn.textContent = "Add to Attack Topology";
+        topoBtn.onclick = async () => {
+          try {
+            topoBtn.disabled = true;
+            topoBtn.textContent = "Adding...";
+            const r = await fetch("/api/topology/add-node", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                asset_id: h.id,
+                hostname: h.hostname || "",
+                ip: h.ip || "",
+              }),
+            });
+            if (r.ok) {
+              topoBtn.textContent = "Already in Attack Topology";
+              setDisabled(true);
+            } else {
+              const err = await r.json().catch(() => ({}));
+              alert(err.detail || "Failed to add node");
+              topoBtn.textContent = "Add to Attack Topology";
+              setDisabled(false);
+            }
+          } catch (e) {
+            alert("Error: " + e.message);
+            topoBtn.textContent = "Add to Attack Topology";
+            setDisabled(false);
+          }
+        };
+      }
+    }
+
     const form = document.getElementById("hostUpdateForm");
     const msg = document.getElementById("hostUpdateMsg");
     form && form.addEventListener("submit", async (ev) => {
@@ -253,7 +325,6 @@ function bindNoteHandlers() {
         <div><b>Version:</b> ${esc(data.service.version || "")}</div>
         <div><b>Extra:</b> ${esc(data.service.extra_info || "")}</div>
         <button class="btn" id="editServiceBtn" type="button" style="margin-top:10px;">Edit service</button>
-        ${data.host ? `<div class="muted"><a href="#" id="backToHost">Back to asset</a></div>` : ""}
       </div>
 
       <div class="card">
@@ -270,11 +341,24 @@ function bindNoteHandlers() {
     editBtn && editBtn.addEventListener("click", () => {
       openServiceEditPopup(data);
     });
-    const back = document.getElementById("backToHost");
-    back && back.addEventListener("click", (ev) => {
-      ev.preventDefault();
-      if (data.host) openHost(data.host.id);
-    });
+    const header = sidebar.querySelector(".sidebarHeader");
+    let backBtn = document.getElementById("sidebarBack");
+    if (!backBtn) {
+      backBtn = document.createElement("a");
+      backBtn.id = "sidebarBack";
+      backBtn.className = "btn";
+      backBtn.style.marginRight = "8px";
+      header.insertBefore(backBtn, header.lastElementChild);
+    }
+    if (data.host) {
+      backBtn.href = "#";
+      backBtn.textContent = "Back to asset";
+      backBtn.style.display = "";
+      const hostId = data.host.id;
+      backBtn.onclick = (ev) => { ev.preventDefault(); openHost(hostId); };
+    } else {
+      backBtn.style.display = "none";
+    }
   }
 
   function openServiceEditPopup(serviceData) {
@@ -430,6 +514,8 @@ function bindNoteHandlers() {
     if (!resp.ok) return;
     const data = await resp.json();
     if (!data.ok) return;
+    const backBtnSub = document.getElementById("sidebarBack");
+    if (backBtnSub) backBtnSub.style.display = "none";
     title.textContent = `Subdomain ${data.fqdn}`;
     body.innerHTML = `
       <div class="card">
@@ -455,6 +541,8 @@ function bindNoteHandlers() {
   }
 
 async function openCloudCreate() {
+  const backBtnCloudCreate = document.getElementById("sidebarBack");
+  if (backBtnCloudCreate) backBtnCloudCreate.style.display = "none";
   title.textContent = "Create cloud item";
   body.innerHTML = `
     <div class="card">
@@ -562,6 +650,8 @@ async function openCloud(id) {
   const resp = await fetch("/api/cloud/" + id);
   if (!resp.ok) return;
   const data = await resp.json();
+  const backBtnCloud = document.getElementById("sidebarBack");
+  if (backBtnCloud) backBtnCloud.style.display = "none";
   title.textContent = (data.provider || "Cloud") + " • " + (data.name || ("#" + id));
   const d = data.data || {};
 

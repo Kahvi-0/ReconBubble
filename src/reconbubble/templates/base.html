@@ -57,39 +57,46 @@
         {% endif %}
       </span>
       <a href="/assets" {{ 'class=current' if request.url.path == '/assets' }}>Assets</a>
-      <a href="/services" {{ 'class=current' if request.url.path == '/services' }}>Services</a>
-      <a href="/cloud" {{ 'class=current' if request.url.path == '/cloud' }}>Cloud</a>
-      <div class="nav-dropdown" id="credentialsDropdown">
-        <a href="#" class="nav-dropbtn">Credentials ▾</a>
-        <div class="nav-dropdown-content">
-          <a href="/password-spray" {{ 'class=current' if request.url.path == '/password-spray' }}>Password Spray</a>
-          <a href="/user-discovery" {{ 'class=current' if request.url.path == '/user-discovery' or request.url.path == '/users' }}>User Discovery</a>
-          <a href="/app-credentials" {{ 'class=current' if request.url.path == '/app-credentials' }}>App Credentials</a>
-          <a href="/ad-users" {{ 'class=current' if request.url.path == '/ad-users' }}>Active Directory Credentials</a>
+       <a href="/services" {{ 'class=current' if request.url.path == '/services' }}>Services</a>
+       <a href="/profiling" {{ 'class=current' if request.url.path == '/profiling' }}>Profiling</a>
+        <div class="nav-dropdown" id="osintDropdown">
+           <a href="#" class="nav-dropbtn">OSINT ▾</a>
+           <div class="nav-dropdown-content">
+             <a href="/osint/checklist" {{ 'class=current' if request.url.path == '/osint/checklist' }}>Checklist</a>
+             <a href="/social" {{ 'class=current' if request.url.path == '/social' }}>Social Media</a>
+             <a href="/emails" {{ 'class=current' if request.url.path == '/emails' }}>Emails</a>
+             <a href="/docs" {{ 'class=current' if request.url.path == '/docs' }}>Documents & Exif</a>
+             <a href="/dns" {{ 'class=current' if request.url.path == '/dns' }}>DNS</a>
+             <a href="/smtp" {{ 'class=current' if request.url.path == '/smtp' }}>SMTP</a>
+           </div>
+         </div>
+          <div class="nav-dropdown" id="perimeterDropdown">
+             <a href="#" class="nav-dropbtn">Perimeter ▾</a>
+             <div class="nav-dropdown-content">
+               <a href="/cloud" {{ 'class=current' if request.url.path == '/cloud' }}>Cloud</a>
+             </div>
+           </div>
+          <a href="/subdomains" {{ 'class=current' if request.url.path in ('/subdomains', '/urls') }}>Web Apps</a>
+        <div class="nav-dropdown" id="internalDropdown">
+          <a href="#" class="nav-dropbtn">Internal ▾</a>
+          <div class="nav-dropdown-content">
+            <a href="/checklist-unauthenticated" {{ 'class=current' if request.url.path == '/checklist-unauthenticated' }}>Domain Unauth Checklist</a>
+            <a href="/checklist" {{ 'class=current' if request.url.path == '/checklist' }}>Domain Auth Checklist</a>
+            <a href="/checklist-attack-path" {{ 'class=current' if request.url.path == '/checklist-attack-path' }}>Attack Path</a>
+            <a href="/smb-shares" {{ 'class=current' if request.url.path == '/smb-shares' }}>SMB Shares</a>
+          </div>
         </div>
-      </div>
-      <div class="nav-dropdown" id="osintDropdown">
-        <a href="#" class="nav-dropbtn">OSINT ▾</a>
-        <div class="nav-dropdown-content">
-          <a href="/social" {{ 'class=current' if request.url.path == '/social' }}>Social Media</a>
-          <a href="/emails" {{ 'class=current' if request.url.path == '/emails' }}>Emails</a>
-          <a href="/docs" {{ 'class=current' if request.url.path == '/docs' }}>Documents & Exif</a>
-          <a href="/dns" {{ 'class=current' if request.url.path == '/dns' }}>DNS</a>
-          <a href="/smtp" {{ 'class=current' if request.url.path == '/smtp' }}>SMTP</a>
+        <a href="/topology" {{ 'class=current' if request.url.path == '/topology' }}>Attack Topology</a>
+        <a href="/osint/topology" {{ 'class=current' if request.url.path == '/osint/topology' }}>OSINT Map</a>
+          <div class="nav-dropdown" id="credentialsDropdown">
+          <a href="#" class="nav-dropbtn">Credentials ▾</a>
+          <div class="nav-dropdown-content">
+            <a href="/password-spray" {{ 'class=current' if request.url.path == '/password-spray' }}>Password Spray</a>
+            <a href="/user-discovery" {{ 'class=current' if request.url.path == '/user-discovery' or request.url.path == '/users' }}>User Discovery</a>
+            <a href="/app-credentials" {{ 'class=current' if request.url.path == '/app-credentials' }}>App Credentials</a>
+            <a href="/ad-users" {{ 'class=current' if request.url.path == '/ad-users' }}>Active Directory Credentials</a>
+          </div>
         </div>
-      </div>
-      <a href="/urls" {{ 'class=current' if request.url.path == '/urls' }}>URLs</a>
-      <a href="/subdomains" {{ 'class=current' if request.url.path == '/subdomains' }}>Subdomains</a>
-      <a href="/topology" {{ 'class=current' if request.url.path == '/topology' }}>Topology</a>
-      <div class="nav-dropdown" id="internalDropdown">
-        <a href="#" class="nav-dropbtn">Internal ▾</a>
-        <div class="nav-dropdown-content">
-          <a href="/checklist-unauthenticated" {{ 'class=current' if request.url.path == '/checklist-unauthenticated' }}>Domain Unauth Checklist</a>
-          <a href="/checklist" {{ 'class=current' if request.url.path == '/checklist' }}>Domain Auth Checklist</a>
-          <a href="/checklist-attack-path" {{ 'class=current' if request.url.path == '/checklist-attack-path' }}>Attack Path</a>
-          <a href="/smb-shares" {{ 'class=current' if request.url.path == '/smb-shares' }}>SMB Shares</a>
-        </div>
-      </div>
       <a class="btn" href="/upload">Upload</a>
     </nav>
     <img class="firegif firegif-right" src="/static/fire.gif" alt="retro fire"/>
@@ -114,30 +121,38 @@
   <aside id="sidebar" class="sidebar hidden" aria-hidden="true">
     <div class="sidebarHeader">
       <div id="sidebarTitle" class="sidebarTitle">Details</div>
+      <button id="sidebarTopologyBtn" class="btn hidden" type="button">Add to Attack Topology</button>
       <button id="sidebarClose" class="btn" type="button">Close</button>
     </div>
     <div id="sidebarBody" class="sidebarBody"></div>
   </aside>
 
   {% block scripts %}{% endblock %}
-  <script src="/static/sidebar.js?v=2"></script>
+  <script src="/static/sidebar.js?v=4"></script>
   <script src="/static/global_notes_panel.js?v=1"></script>
   <script>
-    const osintDropdown = document.getElementById("osintDropdown");
-    const internalDropdown = document.getElementById("internalDropdown");
-    const credentialsDropdown = document.getElementById("credentialsDropdown");
-    let dropdownTimeout;
-    
-    [osintDropdown, internalDropdown, credentialsDropdown].forEach(dropdown => {
-      if (!dropdown) return;
-      dropdown.addEventListener("mouseenter", () => {
-        clearTimeout(dropdownTimeout);
-        dropdown.classList.add("show");
+    const allDropdowns = [
+      document.getElementById("perimeterDropdown"),
+      document.getElementById("osintDropdown"),
+      document.getElementById("internalDropdown"),
+      document.getElementById("credentialsDropdown")
+    ].filter(Boolean);
+
+    const dropdownTimers = new Map();
+
+    allDropdowns.forEach(dd => {
+      dd.addEventListener("mouseenter", () => {
+        allDropdowns.forEach(other => {
+          if (other !== dd) other.classList.remove("show");
+        });
+        clearTimeout(dropdownTimers.get(dd));
+        dd.classList.add("show");
       });
-      dropdown.addEventListener("mouseleave", () => {
-        dropdownTimeout = setTimeout(() => {
-          dropdown.classList.remove("show");
-        }, 1200);
+      dd.addEventListener("mouseleave", () => {
+        const t = setTimeout(() => {
+          dd.classList.remove("show");
+        }, 200);
+        dropdownTimers.set(dd, t);
       });
     });
   </script>

@@ -33,6 +33,7 @@ from .models import (
     PasswordSprayService,
     PasswordSprayAttempt,
     AdCredential,
+    ProfilingRow,
 )
 from .parsers import (
     upsert_artifact,
@@ -172,9 +173,14 @@ def create_app(
         if not f:
             return False
         needs_ip_match = bool(domain_subs_if_ip and f in domain_subs_if_ip)
-        if f in domains and not needs_ip_match:
+        if needs_ip_match:
+            ipset = ips or set()
+            nets = subnets or []
+            result = any(ip_in_scope(ip, ipset, nets) for ip in (resolved_ips or []))
+            return result
+        if f in domains:
             return True
-        if any(f.endswith("." + d) for d in domain_all_subs):
+        if any(f.endswith("." + d) for d in domain_all_subs if d not in (domain_subs_if_ip or set())):
             return True
         if domain_subs_if_ip:
             matched = any(f == d or f.endswith("." + d) for d in domain_subs_if_ip)
@@ -997,6 +1003,39 @@ def create_app(
                 for h in hosts
             ],
         }
+
+    @app.get("/api/hosts/{host_id}")
+    def api_host_detail(host_id: int):
+        with db() as s:
+            host = s.scalar(select(Host).where(Host.id == host_id))
+            if not host:
+                return JSONResponse({"ok": False, "error": "Host not found"}, status_code=404)
+            
+            services = s.execute(
+                select(Service).where(Service.host_id == host.id)
+            ).scalars().all()
+            
+            return {
+                "ok": True,
+                "host": {
+                    "id": host.id,
+                    "ip": host.ip,
+                    "hostname": host.hostname,
+                    "os": host.os_guess,
+                    "status": "active",
+                    "services": [
+                        {
+                            "id": svc.id,
+                            "port": svc.port,
+                            "protocol": svc.proto,
+                            "service": svc.service_name,
+                            "version": svc.version,
+                        }
+                        for svc in services
+                    ],
+                    "tags": [],
+                },
+            }
 
     @app.post("/api/host/update")
     def api_host_update(
@@ -3024,6 +3063,88 @@ def create_app(
             "topology.html", {"request": request, "topology_data": data}
         )
 
+    @app.get("/osint/checklist", response_class=HTMLResponse)
+    def osint_checklist_page(request: Request):
+        return templates.TemplateResponse("osint_checklist.html", {"request": request})
+
+    @app.get("/osint/topology", response_class=HTMLResponse)
+    def osint_topology_page(request: Request):
+        with db() as s:
+            row = (
+                s.execute(
+                    select(Note)
+                    .where(Note.object_type == "osint_map", Note.object_id == 0)
+                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+        data = {"nodes": [], "edges": []}
+        if row and (row.body or "").strip():
+            try:
+                raw = json.loads(row.body)
+                if isinstance(raw.get("nodes"), list):
+                    data["nodes"] = raw.get("nodes")
+                if isinstance(raw.get("edges"), list):
+                    data["edges"] = raw.get("edges")
+            except Exception:
+                pass
+        return templates.TemplateResponse(
+            "osint_map.html", {"request": request, "osint_data": data}
+        )
+
+    @app.get("/api/osint/checklist")
+    def api_osint_checklist_get():
+        with db() as s:
+            row = (
+                s.execute(
+                    select(Note)
+                    .where(Note.object_type == "osint_checklist", Note.object_id == 0)
+                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+        data = {}
+        if row and (row.body or "").strip():
+            try:
+                raw = json.loads(row.body)
+                data = raw
+            except Exception:
+                pass
+        return data
+
+    @app.post("/api/osint/checklist")
+    async def api_osint_checklist_save(request: Request):
+        body = await request.json()
+        with db() as s:
+            row = (
+                s.execute(
+                    select(Note)
+                    .where(Note.object_type == "osint_checklist", Note.object_id == 0)
+                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+            if row:
+                raw = {}
+                try:
+                    if row.body:
+                        raw = json.loads(row.body)
+                except Exception:
+                    pass
+                raw.update(body)
+                row.body = json.dumps(raw)
+                row.updated_at = datetime.utcnow()
+                s.commit()
+            else:
+                 s.add(
+                     Note(object_type="osint_checklist", object_id=0, body=json.dumps(body), created_at=datetime.utcnow())
+                 )
+                 s.commit()
+        return {"success": True}
+
     @app.get("/api/topology")
     def api_topology_get():
         with db() as s:
@@ -3047,6 +3168,30 @@ def create_app(
             except Exception:
                 pass
         return {"ok": True, "map": data}
+
+    @app.get("/api/osint/topology")
+    def api_osint_topology_get():
+        with db() as s:
+            row = (
+                s.execute(
+                    select(Note)
+                    .where(Note.object_type == "osint_map", Note.object_id == 0)
+                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+        data = {"nodes": [], "edges": []}
+        if row and (row.body or "").strip():
+            try:
+                raw = json.loads(row.body)
+                if isinstance(raw.get("nodes"), list):
+                    data["nodes"] = raw.get("nodes")
+                if isinstance(raw.get("edges"), list):
+                    data["edges"] = raw.get("edges")
+            except Exception:
+               pass
+            return {"ok": True, "map": data}
 
     @app.post("/api/topology")
     async def api_topology_save(request: Request):
@@ -3080,6 +3225,108 @@ def create_app(
                 )
             s.commit()
         return {"ok": True}
+
+    @app.post("/api/osint/topology")
+    async def api_osint_topology_save(request: Request):
+        body = await request.json()
+        nodes = body.get("nodes") if isinstance(body.get("nodes"), list) else []
+        edges = body.get("edges") if isinstance(body.get("edges"), list) else []
+        payload = json.dumps({"nodes": nodes, "edges": edges})
+
+        with db() as s:
+            row = (
+                s.execute(
+                    select(Note)
+                    .where(Note.object_type == "osint_map", Note.object_id == 0)
+                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+            if row:
+                row.body = payload
+                row.updated_at = datetime.utcnow()
+            else:
+                s.add(
+                    Note(
+                        object_type="osint_map",
+                        object_id=0,
+                        severity="info",
+                        tags="osint",
+                        body=payload,
+                    )
+                )
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/topology/add-node")
+    async def api_topology_add_node(request: Request):
+        body = await request.json()
+        asset_id = body.get("asset_id")
+        hostname = body.get("hostname", "unknown")
+        ip = body.get("ip", "")
+
+        # Load current topology
+        with db() as s:
+            row = (
+                s.execute(
+                    select(Note)
+                    .where(Note.object_type == "topology_map", Note.object_id == 0)
+                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+            data = {"nodes": [], "edges": []}
+            if row and (row.body or "").strip():
+                try:
+                    raw = json.loads(row.body)
+                    if isinstance(raw.get("nodes"), list):
+                        data["nodes"] = raw.get("nodes")
+                    if isinstance(raw.get("edges"), list):
+                        data["edges"] = raw.get("edges")
+                except Exception:
+                    pass
+
+            # Generate unique node ID
+            import time
+            node_id = f"n_asset_{asset_id}_{int(time.time())}"
+
+            # Check if node for this asset already exists
+            existing = [n for n in data["nodes"] if n.get("linked_asset_id") == asset_id]
+            if existing:
+                return {"ok": False, "error": "Node for this asset already exists in topology"}
+
+            new_node = {
+                "id": node_id,
+                "label": f"{hostname} ({ip})" if hostname != "unknown" else ip,
+                "type": "computer",
+                "color": "#4a90d9",
+                "notes": "",
+                "compromised": False,
+                "linked_asset_id": asset_id,
+                "x": 400,
+                "y": 300,
+            }
+            data["nodes"].append(new_node)
+
+            payload = json.dumps(data)
+            if row:
+                row.body = payload
+                row.updated_at = datetime.utcnow()
+            else:
+                s.add(
+                    Note(
+                        object_type="topology_map",
+                        object_id=0,
+                        severity="info",
+                        tags="topology",
+                        body=payload,
+                    )
+                )
+            s.commit()
+
+        return {"ok": True, "node": new_node}
 
     @app.get("/checklist/edit", response_class=HTMLResponse)
     def checklist_edit(request: Request, map_name: str = Query("authenticated")):
@@ -3293,12 +3540,45 @@ def create_app(
                 if x.root_domain and x.root_domain not in root_domains:
                     root_domains[x.root_domain] = rdap
 
-        # Group by root domain
+            # Query all WebUrl records
+            url_rows = (
+                s.execute(
+                    select(WebUrl).order_by(WebUrl.domain.asc(), WebUrl.url.asc())
+                )
+                .scalars()
+                .all()
+            )
+            # Build hostname -> urls lookup
+            url_by_host: dict[str, list[dict]] = {}
+            for u in url_rows:
+                try:
+                    hostname = (urlsplit(u.url).hostname or "").strip().lower().strip(".")
+                    if not hostname:
+                        hostname = (urlsplit("http://" + u.url).hostname or "").strip().lower().strip(".")
+                except Exception:
+                    hostname = ""
+                if not hostname:
+                    continue
+                if hostname not in url_by_host:
+                    url_by_host[hostname] = []
+                url_by_host[hostname].append(
+                    {
+                        "id": u.id,
+                        "url": u.url,
+                        "domain": u.domain,
+                        "title": u.title,
+                        "status_code": u.status_code,
+                    }
+                )
+
+        # Group by root domain, attaching matched URLs to each subdomain
         grouped = {}
         for r in out:
             rd = r["root_domain"] or "unknown"
             if rd not in grouped:
                 grouped[rd] = {"subs": [], "rdap": root_domains.get(rd, {})}
+            # Attach URLs matching this subdomain's FQDN
+            r["urls"] = url_by_host.get(r["fqdn"], [])
             grouped[rd]["subs"].append(r)
 
         out = out if show_out == 1 else [r for r in out if r.get("in_scope")]
@@ -3683,6 +3963,92 @@ def create_app(
             s.commit()
         return {"ok": True}
 
+    # Profiling page
+    @app.get("/profiling", response_class=HTMLResponse)
+    def profiling_page(request: Request):
+        return templates.TemplateResponse("profiling.html", {"request": request})
+
+    @app.get("/api/profiling")
+    def api_profiling_list():
+        with db() as s:
+            rows = (
+                s.execute(select(ProfilingRow).order_by(ProfilingRow.order_index))
+                .scalars()
+                .all()
+            )
+        return [
+            {
+                "id": r.id,
+                "category": r.category,
+                "description": r.description,
+                "comments": r.comments,
+                "order_index": r.order_index,
+            }
+            for r in rows
+        ]
+
+    @app.post("/api/profiling")
+    def api_profiling_create(
+        category: str = Form(""),
+        description: str = Form(""),
+        comments: str = Form(""),
+        order_index: int = Form(0),
+    ):
+        with db() as s:
+            row = ProfilingRow(
+                category=category,
+                description=description,
+                comments=comments,
+                order_index=order_index,
+            )
+            s.add(row)
+            s.commit()
+            row_id = row.id
+        return {"ok": True, "id": row_id}
+
+    @app.post("/api/profiling/update")
+    def api_profiling_update(
+        id: int = Form(...),
+        category: str = Form(""),
+        description: str = Form(""),
+        comments: str = Form(""),
+        order_index: int = Form(0),
+    ):
+        with db() as s:
+            row = s.scalar(select(ProfilingRow).where(ProfilingRow.id == id))
+            if not row:
+                return JSONResponse({"ok": False}, status_code=404)
+            row.category = category
+            row.description = description
+            row.comments = comments
+            row.order_index = order_index
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/profiling/delete")
+    def api_profiling_delete(id: int = Form(...)):
+        with db() as s:
+            row = s.scalar(select(ProfilingRow).where(ProfilingRow.id == id))
+            if not row:
+                return JSONResponse({"ok": False}, status_code=404)
+            s.delete(row)
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/profiling/reorder")
+    def api_profiling_reorder(order_json: str = Form(...)):
+        try:
+            order = json.loads(order_json)
+        except Exception:
+            return JSONResponse({"ok": False}, status_code=400)
+        with db() as s:
+            for idx, row_id in enumerate(order):
+                row = s.scalar(select(ProfilingRow).where(ProfilingRow.id == row_id))
+                if row:
+                    row.order_index = idx
+            s.commit()
+        return {"ok": True}
+
     @app.get("/api/port-research/{port}")
     def api_port_research(port: int):
         from sqlalchemy import text
@@ -3728,7 +4094,7 @@ def create_app(
                         "hosts": [],
                         "service_types": set(),
                         "products": set(),
-                        "outputs": set(),
+                        "host_outputs": {},
                     }
 
                 if host_in:
@@ -3744,6 +4110,13 @@ def create_app(
                         f"{svc.product} {svc.version}".strip()
                     )
 
+                host_label = host.hostname or host.ip
+                if host_label not in service_map[key]["host_outputs"]:
+                    service_map[key]["host_outputs"][host_label] = {
+                        "host": {"id": host.id, "ip": host.ip, "hostname": host.hostname or ""},
+                        "outputs": set(),
+                    }
+
                 ev = (
                     s.execute(
                         select(ServiceEvidence).where(
@@ -3756,14 +4129,20 @@ def create_app(
                 for e in ev:
                     if e.raw_output:
                         cleaned = e.raw_output
-                        for h in service_map[key]["hosts"]:
-                            cleaned = cleaned.replace(h["ip"], "<IP>")
-                            if h["hostname"]:
-                                cleaned = cleaned.replace(h["hostname"], "<HOST>")
-                        service_map[key]["outputs"].add(cleaned[:800])
+                        cleaned = cleaned.replace(host.ip, "<IP>")
+                        if host.hostname:
+                            cleaned = cleaned.replace(host.hostname, "<HOST>")
+                        service_map[key]["host_outputs"][host_label]["outputs"].add(cleaned[:800])
 
             rows = []
             for key, data in service_map.items():
+                output_rows = []
+                for label, ho in data["host_outputs"].items():
+                    if ho["outputs"]:
+                        output_rows.append({
+                            "host": ho["host"],
+                            "outputs": list(ho["outputs"]),
+                        })
                 if data["hosts"]:
                     rows.append(
                         {
@@ -3773,14 +4152,21 @@ def create_app(
                             "products": list(data["products"]),
                             "host_count": len(data["hosts"]),
                             "hosts": data["hosts"],
-                            "outputs": list(data["outputs"]),
+                            "outputs": [],
+                            "host_outputs": output_rows,
                         }
                     )
 
             rows.sort(key=lambda x: (x["port"], x["proto"]))
 
         return templates.TemplateResponse(
-            "services.html", {"request": request, "rows": rows}
+             "services.html", {"request": request, "rows": rows}
+         )
+
+    @app.get("/profiling", response_class=HTMLResponse)
+    def profiling_page(request: Request):
+        return templates.TemplateResponse(
+            "profiling.html", {"request": request}
         )
 
     @app.get("/api/graph")
@@ -4495,116 +4881,12 @@ def create_app(
             return FileResponse(path, media_type=mime)
 
     # Web URLs
-    @app.get("/urls", response_class=HTMLResponse)
-    def urls_page(request: Request):
-        show_out = int(request.query_params.get("show_out", "0"))
-
-        def best_matching_subnet_label(host: str, subnets: list) -> str:
-            try:
-                ip_obj = ipaddress.ip_address(host)
-            except ValueError:
-                return ""
-            matches = [n for n in subnets if ip_obj in n]
-            if not matches:
-                return ""
-            return str(max(matches, key=lambda n: n.prefixlen))
-
-        with db() as s:
-            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
-            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip = (
-                scope_sets(s, sensitive_only=True)
-            )
-            rows = (
-                s.execute(
-                    select(WebUrl).order_by(WebUrl.domain.asc(), WebUrl.url.asc())
-                )
-                .scalars()
-                .all()
-            )
-            out = []
-            for x in rows:
-                parsed_host = ""
-                try:
-                    parsed_host = (
-                        (urlsplit(x.url).hostname or "").strip().lower().strip(".")
-                    )
-                except Exception:
-                    parsed_host = ""
-
-                in_dom = (
-                    domain_in_scope(
-                        x.domain,
-                        domains,
-                        domain_all_subs,
-                        domain_subs_if_ip,
-                        list_subdomain_ips(s, x.domain),
-                        ips,
-                        subnets,
-                    )
-                    if x.domain
-                    else False
-                )
-                sensitive_dom = (
-                    domain_in_scope(
-                        x.domain,
-                        s_domains,
-                        s_domain_all_subs,
-                        s_domain_subs_if_ip,
-                        list_subdomain_ips(s, x.domain),
-                        s_ips,
-                        s_subnets,
-                    )
-                    if x.domain
-                    else False
-                )
-                subnet_label = ""
-                in_ip_or_subnet = False
-                sensitive_ip_or_subnet = False
-                if parsed_host:
-                    if parsed_host in ips:
-                        in_ip_or_subnet = True
-                    subnet_label = best_matching_subnet_label(parsed_host, subnets)
-                    if subnet_label:
-                        in_ip_or_subnet = True
-                    if parsed_host in s_ips:
-                        sensitive_ip_or_subnet = True
-                    if best_matching_subnet_label(parsed_host, s_subnets):
-                        sensitive_ip_or_subnet = True
-
-                in_scope = bool(in_dom or in_ip_or_subnet)
-                sensitive = bool(sensitive_dom or sensitive_ip_or_subnet)
-                if x.domain:
-                    group_key = x.domain
-                elif subnet_label:
-                    group_key = f"subnet:{subnet_label}"
-                elif parsed_host:
-                    group_key = f"ip:{parsed_host}"
-                else:
-                    group_key = "unknown"
-
-                out.append(
-                    {
-                        "id": x.id,
-                        "url": x.url,
-                        "domain": x.domain,
-                        "host": parsed_host,
-                        "subnet": subnet_label,
-                        "group_key": group_key,
-                        "title": x.title,
-                        "in_scope": in_scope,
-                        "sensitive": sensitive,
-                    }
-                )
-        out = out if show_out == 1 else [r for r in out if r.get("in_scope")]
-        grouped = {}
-        for r in out:
-            d = r.get("group_key") or r.get("domain") or "unknown"
-            if d not in grouped:
-                grouped[d] = []
-            grouped[d].append(r)
-        return templates.TemplateResponse(
-            "urls.html", {"request": request, "grouped": grouped, "show_out": show_out}
-        )
+    @app.get("/urls")
+    def urls_redirect(request: Request):
+        from fastapi import Response as FResponse
+        show_out = request.query_params.get("show_out", "0")
+        target = f"/subdomains?show_out={show_out}"
+        return FResponse(status_code=302, headers={"Location": target})
 
     @app.get("/urls/export")
     def export_urls():

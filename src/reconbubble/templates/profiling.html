@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Profiling</h1>
+<p class="muted" style="margin-bottom:20px;">Editable profiling table — rows persist in the workspace database.</p>
+
+<div style="margin-bottom:12px;">
+  <button class="btn" id="addRow">+ Add Row</button>
+  <button class="btn" id="exportWord" style="margin-left:8px;">Copy to Word</button>
+</div>
+
+<table id="profileTable">
+  <thead>
+    <tr>
+      <th style="width:200px;">Category</th>
+      <th style="width:350px;">Description</th>
+      <th>Comments</th>
+      <th style="width:40px;"></th>
+    </tr>
+  </thead>
+  <tbody id="profileBody">
+  </tbody>
+</table>
+
+<script>
+let rows = [];
+let nextId = 1;
+
+function esc(s) {
+  return (s || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+}
+
+function renderRows() {
+  const body = document.getElementById("profileBody");
+  body.innerHTML = "";
+  rows.forEach(r => {
+    const tr = document.createElement("tr");
+    tr.dataset.id = r.id;
+    tr.innerHTML = `
+      <td><input type="text" class="cell-input" data-field="category" value="${esc(r.category)}" /></td>
+      <td><input type="text" class="cell-input" data-field="description" value="${esc(r.description)}" /></td>
+      <td><input type="text" class="cell-input" data-field="comments" value="${esc(r.comments)}" /></td>
+      <td style="width:40px;"><button class="btn del-row" title="Delete row">x</button></td>
+    `;
+    tr.querySelectorAll(".cell-input").forEach(inp => {
+      inp.addEventListener("input", debounce(() => {
+        r[inp.dataset.field] = inp.value;
+        saveRow(r.id, r);
+      }, 300));
+    });
+    tr.querySelector(".del-row").addEventListener("click", () => {
+      deleteRow(r.id);
+    });
+    body.appendChild(tr);
+  });
+}
+
+function debounce(fn, ms) {
+  let t;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
+function saveRow(id, data) {
+  const fd = new FormData();
+  fd.append("id", id);
+  fd.append("category", data.category);
+  fd.append("description", data.description);
+  fd.append("comments", data.comments);
+  fd.append("order_index", rows.indexOf(data));
+  fetch("/api/profiling/update", { method: "POST", body: fd });
+}
+
+function deleteRow(id) {
+  const fd = new FormData();
+  fd.append("id", id);
+  fetch("/api/profiling/delete", { method: "POST", body: fd }).then(() => {
+    rows = rows.filter(r => r.id !== id);
+    renderRows();
+  });
+}
+
+function addRow() {
+  const fd = new FormData();
+  fd.append("category", "");
+  fd.append("description", "");
+  fd.append("comments", "");
+  fd.append("order_index", rows.length);
+  fetch("/api/profiling", { method: "POST", body: fd }).then(res => res.json()).then(data => {
+    if (data.ok) {
+      rows.push({ id: data.id, category: "", description: "", comments: "", order_index: rows.length - 1 });
+      renderRows();
+      const body = document.getElementById("profileBody");
+      const lastInput = body.lastElementChild?.querySelector(".cell-input");
+      if (lastInput) lastInput.focus();
+    }
+  });
+}
+
+function exportWord() {
+    let html = "<table style=\"border-collapse:collapse; font-family:Calibri,sans-serif; font-size:11pt;\">";
+    html += "<tr><th style=\"padding:6px;\">Category</th><th style=\"padding:6px;\">Description</th><th style=\"padding:6px;\">Comments</th></tr>";
+    rows.forEach(r => {
+      if ([r.category, r.description, r.comments].some(c => c.trim())) {
+        html += `<tr><td style=\"padding:6px; width:200px;\">${r.category}</td><td style=\"padding:6px; width:350px;\">${r.description}</td><td style=\"padding:6px;\">${r.comments}</td></tr>`;
+      }
+    });
+    html += "</table>";
+
+  const blobHtml = new Blob([html], { type: "text/html" });
+  navigator.clipboard.write([new ClipboardItem({ "text/html": blobHtml })]).then(() => {
+    const btn = document.getElementById("exportWord");
+    btn.textContent = "Copied!";
+    setTimeout(() => btn.textContent = "Copy to Word", 1500);
+  }).catch(() => {
+    let md = rows.filter(r => [r.category, r.description, r.comments].some(c => c.trim()))
+      .map(r => `${r.category}\t${r.description}\t${r.comments}`).join("\n");
+    navigator.clipboard.writeText(md).then(() => {
+      const btn = document.getElementById("exportWord");
+      btn.textContent = "Copied (tab-separated)!";
+      setTimeout(() => btn.textContent = "Copy to Word", 1500);
+    });
+  });
+}
+
+document.getElementById("addRow").addEventListener("click", addRow);
+document.getElementById("exportWord").addEventListener("click", exportWord);
+
+fetch("/api/profiling").then(res => res.json()).then(data => {
+  rows = data.map(r => ({
+    id: r.id,
+    category: r.category,
+    description: r.description,
+    comments: r.comments,
+    order_index: r.order_index,
+  }));
+  nextId = Math.max(0, ...rows.map(r => r.id)) + 1;
+  renderRows();
+});
+</script>
+{% endblock %}

@@ -1,24 +1,26 @@
 (function () {
-  const el = document.getElementById("topologyCy");
-  const inspector = document.getElementById("topologyInspector");
-  const statusEl = document.getElementById("topologyStatus");
+  const el = document.getElementById("osintCy");
+  const inspector = document.getElementById("osintInspector");
+  const statusEl = document.getElementById("osintStatus");
   if (!el || !window.cytoscape) return;
 
   const ICONS = {
-    computer: "💻",
-    server: "🗄️",
-    router: "📡",
-    switch: "🔀",
-    firewall: "🧱",
-    user: "👤",
     domain: "🌐",
+    ip: "🖥️",
+    email: "✉️",
+    person: "👤",
+    organization: "🏢",
+    vulnerability: "⚠️",
+    evidence: "📋",
+    social_media: "💬",
+    document: "📄",
   };
 
-  const initial = window.TOPOLOGY_DATA || { nodes: [], edges: [] };
+  const initial = window.OSINT_DATA || { nodes: [], edges: [] };
   const elements = [];
   (initial.nodes || []).forEach((n, i) => {
     const label = (n.label || "Node").trim();
-    const type = (n.type || "computer").trim();
+    const type = (n.type || "domain").trim();
     const icon = ICONS[type] || "📍";
     const nodeId = String(n.id || `nseed${i + 1}`);
     elements.push({
@@ -27,7 +29,7 @@
         id: nodeId,
         label: label,
         type: type,
-        color: n.color || "#1f6feb",
+        color: n.color || "#3b82f6",
         notes: n.notes || "",
         floating_notes: Array.isArray(n.floating_notes) ? n.floating_notes : [],
         compromised: !!n.compromised,
@@ -514,7 +516,7 @@
       .map((e) => ({ id: e.id(), source: e.source().id(), target: e.target().id(), label: e.data("label") || "" }));
     setStatus("Saving...");
     try {
-      await fetch("/api/topology", {
+      await fetch("/api/osint/topology", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         keepalive: true,
@@ -1097,8 +1099,8 @@
 
   document.querySelectorAll("[data-node-type]").forEach((tool) => {
     tool.addEventListener("dragstart", (ev) => {
-      const type = tool.getAttribute("data-node-type") || "computer";
-      ev.dataTransfer && ev.dataTransfer.setData("text/topology-node", type);
+      const type = tool.getAttribute("data-node-type") || "domain";
+      ev.dataTransfer && ev.dataTransfer.setData("text/osint-node", type);
       ev.dataTransfer && (ev.dataTransfer.effectAllowed = "copy");
       setStatus(`Dragging ${type}... drop onto map`);
     });
@@ -1110,7 +1112,7 @@
 
   el.addEventListener("dragover", (ev) => {
     ev.preventDefault();
-    const type = (ev.dataTransfer && ev.dataTransfer.getData("text/topology-node")) || "";
+    const type = (ev.dataTransfer && ev.dataTransfer.getData("text/osint-node")) || "";
     if (!type) return;
     const p = clientToGraphPosition(ev.clientX, ev.clientY);
     ensurePalettePreview(type, p.x, p.y);
@@ -1118,7 +1120,7 @@
 
   el.addEventListener("drop", (ev) => {
     ev.preventDefault();
-    const type = (ev.dataTransfer && ev.dataTransfer.getData("text/topology-node")) || "";
+    const type = (ev.dataTransfer && ev.dataTransfer.getData("text/osint-node")) || "";
     if (!type) return;
     const p = clientToGraphPosition(ev.clientX, ev.clientY);
     clearPalettePreview();

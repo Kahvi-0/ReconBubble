@@ -446,4 +446,18 @@ def migrate_sqlite(engine) -> None:
                 "CREATE INDEX IF NOT EXISTS ix_ad_credentials_type ON ad_credentials(cred_type)"
             )
         )
+
+        # profiling_rows table - editable profiling items
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS profiling_rows (
+          id INTEGER PRIMARY KEY,
+          category VARCHAR(256) DEFAULT '',
+          description TEXT DEFAULT '',
+          comments TEXT DEFAULT '',
+          order_index INTEGER DEFAULT 0,
+          created_at DATETIME
+        )
+        """)
+        )
     conn.commit()
