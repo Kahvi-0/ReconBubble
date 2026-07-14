@@ -34,6 +34,7 @@ from .models import (
     PasswordSprayAttempt,
     AdCredential,
     ProfilingRow,
+    AppSettings,
 )
 from .parsers import (
     upsert_artifact,
@@ -294,16 +295,95 @@ def create_app(
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request):
         with db() as s:
+            # Get scope sets
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
+
+            # Get all hosts
+            hosts = s.execute(select(Host)).scalars().all()
+
+            # Count hosts in scope
+            hosts_in_scope = sum(1 for h in hosts if host_in_scope(
+                h.ip or "",
+                h.hostname or "",
+                ips, subnets, domains, domain_all_subs
+            ))
+            hosts_total = len(hosts)
+            hosts_out_scope = hosts_total - hosts_in_scope
+
+            # Get all services
+            services = s.execute(select(Service)).scalars().all()
+            services_total = len(services)
+
+            # Count services by port
+            services_by_port = {}
+            for svc in services:
+                port = str(svc.port)
+                services_by_port[port] = services_by_port.get(port, 0) + 1
+
+            # Convert to list for template
+            services_by_port_list = list(services_by_port.items())
+
             stats = {
-                "hosts": s.scalar(select(func.count(Host.id))) or 0,
-                "services": s.scalar(select(func.count(Service.id))) or 0,
-                "subdomains": s.scalar(select(func.count(Subdomain.id))) or 0,
-                "emails": s.scalar(select(func.count(Email.id))) or 0,
-                "docs": s.scalar(select(func.count(Document.id))) or 0,
-                "notes": s.scalar(select(func.count(Note.id))) or 0,
+                "hosts_total": hosts_total,
+                "hosts_in_scope": hosts_in_scope,
+                "hosts_out_scope": hosts_out_scope,
+                "services_total": services_total,
+                "services_by_port": services_by_port_list,
             }
+
         return templates.TemplateResponse(
-            "home.html", {"request": request, "stats": stats}
+            "stats.html", {"request": request, "stats": stats}
+        )
+
+    # Stats
+    @app.get("/stats", response_class=HTMLResponse)
+    def stats_page(request: Request):
+        with db() as s:
+            # Get scope sets
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
+
+            # Get all hosts
+            hosts = s.execute(select(Host)).scalars().all()
+
+            # Count hosts in scope
+            hosts_in_scope = sum(1 for h in hosts if host_in_scope(
+                h.ip or "",
+                h.hostname or "",
+                ips, subnets, domains, domain_all_subs
+            ))
+            hosts_total = len(hosts)
+            hosts_out_scope = hosts_total - hosts_in_scope
+
+            # Get all services
+            services = s.execute(select(Service)).scalars().all()
+            services_total = len(services)
+
+            # Count services by port (only in-scope services)
+            services_by_port = {}
+            for svc in services:
+                # Check if host is in scope
+                host = s.get(Host, svc.host_id)
+                if host and host_in_scope(
+                    host.ip or "",
+                    host.hostname or "",
+                    ips, subnets, domains, domain_all_subs
+                ):
+                    port = str(svc.port)
+                    services_by_port[port] = services_by_port.get(port, 0) + 1
+
+            # Convert to list for template
+            services_by_port_list = list(services_by_port.items())
+
+            stats = {
+                "hosts_total": hosts_total,
+                "hosts_in_scope": hosts_in_scope,
+                "hosts_out_scope": hosts_out_scope,
+                "services_total": services_total,
+                "services_by_port": services_by_port_list,
+            }
+
+        return templates.TemplateResponse(
+            "stats.html", {"request": request, "stats": stats}
         )
 
     # Scope
@@ -642,6 +722,7 @@ def create_app(
                     Host.complete,
                     Host.inprogress,
                     Host.waf,
+                    Host.tag,
                     func.count(Service.id).label("svc_count"),
                 )
                 .outerjoin(Service, Service.host_id == Host.id)
@@ -687,6 +768,7 @@ def create_app(
                     "complete": getattr(r, "complete", 0),
                     "inprogress": getattr(r, "inprogress", 0),
                     "waf": getattr(r, "waf", 0),
+                    "tag": getattr(r, "tag", ""),
                     "svc_count": r.svc_count,
                     "ip_in_scope": ip_in,
                     "ip_sensitive": ip_sensitive,
@@ -738,7 +820,7 @@ def create_app(
                 inferred_stats[label] = inferred_stats.get(label, 0) + 1
 
         grouped: dict[str, list[dict]] = {}
-        for row in filtered_data:
+        for row in data:
             group_name = "Unscoped / Other"
             label = classify_subnet_label(row.get("ip", ""), allow_infer=True)
             if label:
@@ -806,18 +888,26 @@ def create_app(
 
     @app.post("/api/host/create")
     def api_host_create(
-        ip: str = Form(...), hostname: str = Form(""), domains_raw: str = Form("")
+        ip: str = Form(...), hostname: str = Form(""), tag: str = Form(""), domains_raw: str = Form("")
     ):
         ip = ip.strip()
         hostname = (hostname or "").strip()
+        tag = (tag or "").strip()
         domains = [
             ln.strip().lower().rstrip(".")
             for ln in (domains_raw or "").splitlines()
             if ln.strip() and not ln.strip().startswith("#")
         ]
         with db() as s:
+            # Check for duplicate IP
+            existing = s.scalar(select(Host).where(Host.ip == ip))
+            if existing:
+                return {"ok": False, "error": f"IP {ip} already exists as an asset."}
+
             try:
                 host = upsert_host(s, ip, hostname, "")
+                if tag:
+                    host.tag = tag
             except Exception as e:
                 return {"ok": False, "error": str(e)}
             for d in domains:
@@ -952,16 +1042,16 @@ def create_app(
                 highest_severity, 0
             ):
                 highest_severity = sv
-
         return {
             "ok": True,
             "highest_severity": highest_severity,
-            "host": {
-                "id": host.id,
-                "ip": host.ip,
-                "hostname": host.hostname,
-                "os_guess": host.os_guess,
-            },
+                "host": {
+                    "id": host.id,
+                    "ip": host.ip,
+                    "hostname": host.hostname,
+                    "os_guess": host.os_guess,
+                    "tag": host.tag,
+                },
             "domains": domains,
             "services": [
                 {
@@ -1033,9 +1123,24 @@ def create_app(
                         }
                         for svc in services
                     ],
-                    "tags": [],
+                    "tags": [t.strip() for t in host.tag.split(",") if t.strip()],
                 },
             }
+
+    @app.post("/api/host/tag/delete")
+    def api_host_tag_delete(host_id: int = Form(...), tag: str = Form(...)):
+        with db() as s:
+            host = s.scalar(select(Host).where(Host.id == host_id))
+            if not host or not host.tag:
+                return JSONResponse({"ok": False}, status_code=404)
+            
+            tags = [t.strip() for t in host.tag.split(",") if t.strip()]
+            if tag in tags:
+                tags.remove(tag)
+                host.tag = ",".join(tags)
+                s.commit()
+                return {"ok": True}
+            return JSONResponse({"ok": False, "error": "Tag not found"}, status_code=404)
 
     @app.post("/api/host/update")
     def api_host_update(
@@ -1043,11 +1148,13 @@ def create_app(
         ip: str = Form(...),
         hostname: str = Form(""),
         os_guess: str = Form(""),
+        tag: str = Form(""),
         domains_raw: str = Form(""),
     ):
         ip = ip.strip()
         hostname = (hostname or "").strip()
         os_guess = (os_guess or "").strip()
+        tag = (tag or "").strip()
         domains = [
             ln.strip().lower().rstrip(".")
             for ln in (domains_raw or "").splitlines()
@@ -1056,18 +1163,33 @@ def create_app(
         with db() as s:
             host = s.scalar(select(Host).where(Host.id == host_id))
             if not host:
-                return JSONResponse({"ok": False}, status_code=404)
+                return JSONResponse({"ok": False, "error": "Host not found"}, status_code=404)
+
+            # Check for duplicate IP on another host
+            if ip != host.ip:
+                clash = s.scalar(select(Host).where(Host.ip == ip, Host.id != host_id))
+                if clash:
+                    return {"ok": False, "error": f"IP {ip} already belongs to another host."}
+
             host.ip = ip
             host.hostname = hostname
             host.os_guess = os_guess
+            if tag:
+                host.tag = tag
+
             try:
                 s.commit()
             except Exception:
                 s.rollback()
-                return {"ok": False, "error": "IP already exists (or invalid update)."}
-            for d in domains:
-                if DOMAIN_RE.match(d):
-                    link_host_domain(s, host.id, d)
+                return {"ok": False, "error": "Failed to save host (check for duplicate IP)."}
+
+            try:
+                for d in domains:
+                    if DOMAIN_RE.match(d):
+                        link_host_domain(s, host.id, d)
+            except Exception as e:
+                return {"ok": True, "warning": f"Saved but failed to link domains: {e}"}
+
         return {"ok": True}
 
     @app.get("/api/service/{service_id}")
@@ -4068,6 +4190,12 @@ def create_app(
     @app.get("/services", response_class=HTMLResponse)
     def services_page(request: Request):
         with db() as s:
+            qs = request.query_params.get("hide_completed", "")
+            if qs:
+                hide_completed = int(qs)
+            else:
+                row = s.scalar(select(AppSettings).where(AppSettings.key == "services_hide_completed"))
+                hide_completed = int(row.value) if row else 0
             ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
 
             services = (
@@ -4080,6 +4208,9 @@ def create_app(
             for svc in services:
                 host = s.scalar(select(Host).where(Host.id == svc.host_id))
                 if not host:
+                    continue
+
+                if hide_completed and host.complete:
                     continue
 
                 key = f"{svc.port}/{svc.proto}"
@@ -4160,7 +4291,7 @@ def create_app(
             rows.sort(key=lambda x: (x["port"], x["proto"]))
 
         return templates.TemplateResponse(
-             "services.html", {"request": request, "rows": rows}
+             "services.html", {"request": request, "rows": rows, "hide_completed": hide_completed}
          )
 
     @app.get("/profiling", response_class=HTMLResponse)
@@ -4426,6 +4557,27 @@ def create_app(
             if not h:
                 return JSONResponse({"ok": False}, status_code=404)
             h.waf = 1 if int(waf) == 1 else 0
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/settings")
+    def api_settings_set(key: str = Form(...), value: str = Form("")):
+        with db() as s:
+            row = s.scalar(select(AppSettings).where(AppSettings.key == key))
+            if row:
+                row.value = value
+            else:
+                s.add(AppSettings(key=key, value=value))
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/host/tag")
+    def api_host_tag(asset_id: int = Form(...), tag: str = Form("")):
+        with db() as s:
+            h = s.scalar(select(Host).where(Host.id == asset_id))
+            if not h:
+                return JSONResponse({"ok": False}, status_code=404)
+            h.tag = tag
             s.commit()
         return {"ok": True}
 

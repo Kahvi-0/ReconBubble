@@ -3,6 +3,14 @@
 <h1>Services</h1>
 <p class="muted" style="margin-bottom:20px;">Unique in-scope open ports across all hosts.</p>
 
+<div style="margin-bottom:16px; display:flex; align-items:center; gap:10px;">
+  <label class="toggle-switch">
+    <input id="hideCompleted" type="checkbox" {% if hide_completed==1 %}checked{% endif %}/>
+    <span class="toggle-slider"></span>
+  </label>
+  <span style="font-size:14px; color:#aab;">Hide services from completed hosts</span>
+</div>
+
 <div class="card">
   <table>
     <thead>
@@ -55,6 +63,14 @@
 </div>
 
 <style>
+/* --- Toggle switch --- */
+.toggle-switch { position:relative; display:inline-block; width:40px; height:22px; }
+.toggle-switch input { opacity:0; width:0; height:0; position:absolute; }
+.toggle-slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#3a3f47; border-radius:22px; transition:background 0.25s ease; }
+.toggle-slider::before { content:""; position:absolute; height:16px; width:16px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:transform 0.25s ease; }
+.toggle-switch input:checked + .toggle-slider { background:#58a6ff; }
+.toggle-switch input:checked + .toggle-slider::before { transform:translateX(18px); }
+.toggle-switch input:focus-visible + .toggle-slider { box-shadow:0 0 0 2px #58a6ff44; }
 .service-row:hover td { background:#0f141b; }
 .service-link { color:#9ad; text-decoration:none; }
 .service-link:hover { text-decoration:underline; }
@@ -265,5 +281,24 @@ document.getElementById("hostOverlay").addEventListener("click", (e) => {
     currentServicePopupService = null;
   }
 });
+
+/* --- Hide completed hosts toggle --- */
+(function() {
+  const cb = document.getElementById("hideCompleted");
+  if (!cb) return;
+
+  cb.addEventListener("change", async () => {
+    const val = cb.checked ? "1" : "0";
+    try {
+      const fd = new FormData();
+      fd.append("key", "services_hide_completed");
+      fd.append("value", val);
+      await fetch("/api/settings", { method: "POST", body: fd });
+    } catch {}
+    const url = new URL(window.location.href);
+    url.searchParams.set("hide_completed", val);
+    window.location.href = url.toString();
+  });
+})();
 </script>
 {% endblock %}

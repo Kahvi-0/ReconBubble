@@ -1,5 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+.toggle-switch { position:relative; display:inline-block; width:40px; height:22px; flex-shrink:0; }
+.toggle-switch input { opacity:0; width:0; height:0; position:absolute; }
+.toggle-slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#3a3f47; border-radius:22px; transition:background 0.25s ease; }
+.toggle-slider::before { content:""; position:absolute; height:16px; width:16px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:transform 0.25s ease; }
+.toggle-switch input:checked + .toggle-slider { background:#58a6ff; }
+.toggle-switch input:checked + .toggle-slider::before { transform:translateX(18px); }
+.toggle-switch input:focus-visible + .toggle-slider { box-shadow:0 0 0 2px #58a6ff44; }
+.toggle-row { display:flex; align-items:center; gap:10px; margin:6px 0 12px; }
+.toggle-row .filter-label { font-size:14px; color:#aab; margin:0; }
+</style>
 <h1>Scope</h1>
 {% if scope_error %}
 <div class="card" style="border-color:#ef4444; margin-bottom:16px;">
@@ -7,12 +18,12 @@
   <span>{{ scope_error }}</span>
 </div>
 {% endif %}
- 
+
 <p> IP/Subnet: everything on this is in scope unless toggled otherwise</p>
-<p> Domain: By default does not could subdomains. Toggle to enable this. Domains in-scope not associated to 
+<p> Domain: By default does not could subdomains. Toggle to enable this. Domains in-scope not associated to
 in-scope IPs will only inscope the domain and not the IP automatically</p>
 <p> Email domain:</p>
- 
+
 <div class="card">
   <h2>Add scope item(s)</h2>
   <form action="/scope/add" method="post">
@@ -23,25 +34,32 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
       <option value="email_domain">Email domain</option>
     </select>
 
- 
-
     <label>Paste a list (one per line)</label>
     <textarea name="values_raw" rows="7" placeholder="Paste multiple items..."></textarea>
 
-    <div id="domainWrap" style="display:flex; gap:10px; align-items:center; margin: 6px 0 12px;">
-      <input type="checkbox" id="applyAllSubs" name="apply_all_subdomains" value="1" />
-      <label for="applyAllSubs" style="margin:0;">For domain scope: mark all subdomains in-scope</label>
+    <div id="domainWrap" class="toggle-row">
+      <label class="toggle-switch">
+        <input type="checkbox" id="applyAllSubs" name="apply_all_subdomains" value="1" />
+        <span class="toggle-slider"></span>
+      </label>
+      <span class="filter-label">For domain scope: mark all subdomains in-scope</span>
     </div>
 
-    <div id="domainIpWrap" style="display:flex; gap:10px; align-items:center; margin: 0 0 12px;">
-      <input type="checkbox" id="applySubsInScopeIp" name="apply_subdomains_with_in_scope_ip" value="1" />
-      <label for="applySubsInScopeIp" style="margin:0;">For domain scope: mark domain and subdomains in-scope only when they resolve to in-scope IPs</label>
+    <div id="domainIpWrap" class="toggle-row">
+      <label class="toggle-switch">
+        <input type="checkbox" id="applySubsInScopeIp" name="apply_subdomains_with_in_scope_ip" value="1" />
+        <span class="toggle-slider"></span>
+      </label>
+      <span class="filter-label">For domain scope: mark domain and subdomains in-scope only when they resolve to in-scope IPs</span>
     </div>
 
-    <label class="checkbox-label">
-      <input type="checkbox" id="markSensitive" name="sensitive" value="1" />
-      Mark as sensitive
-    </label>
+    <div class="toggle-row">
+      <label class="toggle-switch">
+        <input type="checkbox" id="markSensitive" name="sensitive" value="1" />
+        <span class="toggle-slider"></span>
+      </label>
+      <span class="filter-label">Mark as sensitive</span>
+    </div>
 
     <label>Note (optional)</label>
     <input name="note" placeholder="Prod scope, provided by client" />

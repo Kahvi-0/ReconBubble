@@ -8,33 +8,40 @@
     <button class="btn" id="createAssetBtn" type="button">Create asset</button>
     <ul class="filter-list">
       <li>
-        <label class="checkbox-label">
+        <label class="toggle-switch">
           <input id="showOut" type="checkbox" {% if show_out==1 %}checked{% endif %}/>
-          Show out-of-scope assets
+          <span class="toggle-slider"></span>
         </label>
+        <span class="filter-label">Show out-of-scope assets</span>
       </li>
       <li>
-        <label class="checkbox-label">
+        <label class="toggle-switch">
           <input id="hideCompleted" type="checkbox" {% if hide_completed==1 %}checked{% endif %}/>
-          Hide completed assets
+          <span class="toggle-slider"></span>
         </label>
+        <span class="filter-label">Hide completed assets</span>
       </li>
       <li>
-        <label class="checkbox-label">
+        <label class="toggle-switch">
           <input id="hideZeroServices" type="checkbox" {% if hide_zero_services==1 %}checked{% endif %}/>
-          Hide assets with 0 services
+          <span class="toggle-slider"></span>
         </label>
+        <span class="filter-label">Hide assets with 0 services</span>
       </li>
     </ul>
     <label class="row-limit-label">Max assets shown</label>
+    <span class="muted" style="font-size:11px;">Limit rows per subnet group.</span>
     <select id="rowLimit">
-      <option value="0" {% if row_limit == 0 %}selected{% endif %}>All</option>
-      <option value="200" {% if row_limit == 200 %}selected{% endif %}>200</option>
-      <option value="500" {% if row_limit == 500 %}selected{% endif %}>500</option>
-      <option value="1000" {% if row_limit == 1000 %}selected{% endif %}>1000</option>
-      <option value="2000" {% if row_limit == 2000 %}selected{% endif %}>2000</option>
+      <option value="50">50</option>
+      <option value="100">100</option>
+      <option value="200">200</option>
+      <option value="500">500</option>
+      <option value="0">All</option>
     </select>
-    <p class="muted">Default hides out-of-scope.</p>
+    <label class="tag-filter-label">Host Tag Filter</label>
+    <select id="tagFilter">
+      <option value="">All</option>
+    </select>
     <p class="muted actions-summary-note">Showing <span id="shownCountValue">{{ shown_count }}</span> of <span id="totalCountValue">{{ total_count }}</span> assets.</p>
   </div>
   <div class="card">
@@ -63,7 +70,7 @@
   <details class="asset-subnet-group" open>
     <summary><strong>{{ subnet }}</strong> <span class="muted">({{ rows|length }} assets)</span></summary>
     <table>
-      <thead><tr><th>Complete</th><th>In Progress</th><th>WAF</th><th>IP</th><th>Hostname</th><th># Services</th><th>Domains</th></tr></thead>
+      <thead><tr><th>Complete</th><th>In Progress</th><th>WAF</th><th>IP</th><th>Hostname</th><th># Services</th><th>Domains</th><th>Tag</th></tr></thead>
       <tbody>
         {% for r in rows %}
           <tr
@@ -71,6 +78,7 @@
             data-complete="{{ 1 if r.complete==1 else 0 }}"
             data-svc-count="{{ r.svc_count }}"
             data-in-scope="{{ 1 if r.in_scope else 0 }}"
+            data-tag="{{ r.tag or '' }}"
           >
             <td><input type="checkbox" class="completeHost" data-host-id="{{ r.id }}" {% if r.complete==1 %}checked{% endif %} /></td>
             <td><input type="checkbox" class="inprogressHost" data-host-id="{{ r.id }}" {% if r.inprogress==1 %}checked{% endif %} {% if r.complete==1 %}disabled{% endif %} /></td>
@@ -111,6 +119,7 @@
                 {% endif %}
               </details>
             </td>
+            <td>{{ r.tag or '' }}</td>
           </tr>
         {% endfor %}
       </tbody>
@@ -138,10 +147,20 @@ html { scrollbar-gutter: stable; }
   padding-left: 18px;
   list-style: none;
 }
-.filter-list li { margin: 6px 0; }
+.filter-list li { display:flex; align-items:center; gap:10px; margin:8px 0; }
+.filter-label { font-size:14px; color:#aab; }
+.toggle-switch { position:relative; display:inline-block; width:40px; height:22px; flex-shrink:0; }
+.toggle-switch input { opacity:0; width:0; height:0; position:absolute; }
+.toggle-slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#3a3f47; border-radius:22px; transition:background 0.25s ease; }
+.toggle-slider::before { content:""; position:absolute; height:16px; width:16px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:transform 0.25s ease; }
+.toggle-switch input:checked + .toggle-slider { background:#58a6ff; }
+.toggle-switch input:checked + .toggle-slider::before { transform:translateX(18px); }
+.toggle-switch input:focus-visible + .toggle-slider { box-shadow:0 0 0 2px #58a6ff44; }
 .row-limit-label { display: inline-block; margin-top: 26px; }
 #rowLimit { margin-top: 8px; }
 .actions-summary-note { margin-top: 24px; }
+.tag-filter-label { display: inline-block; margin-top: 16px; }
+#tagFilter { margin-top: 8px; }
 </style>
 
 <script>
@@ -167,17 +186,23 @@ html { scrollbar-gutter: stable; }
 
     const prefs = loadPrefs();
     let needsReload = false;
-    const persistedKeys = ["show_out", "hide_completed", "hide_zero_services", "row_limit"];
+    const persistedKeys = ["show_out", "hide_completed", "hide_zero_services", "row_limit", "tag_filter"];
+    const persistedKeySet = new Set(persistedKeys);
     persistedKeys.forEach((k) => {
       if (!url.searchParams.has(k) && Object.prototype.hasOwnProperty.call(prefs, k)) {
         url.searchParams.set(k, String(prefs[k]));
         needsReload = true;
       }
     });
-    if (needsReload) {
-      window.location.href = url.toString();
-      return;
-    }
+      // Default row_limit to "0" (All) if not in URL or prefs
+      if (!url.searchParams.has("row_limit") && !Object.prototype.hasOwnProperty.call(prefs, "row_limit")) {
+        url.searchParams.set("row_limit", "0");
+        needsReload = true;
+      }
+      if (needsReload) {
+        window.location.href = url.toString();
+        return;
+      }
 
     const updateQueryNoReload = (key, value) => {
       const u = new URL(window.location.href);
@@ -185,13 +210,38 @@ html { scrollbar-gutter: stable; }
       window.history.replaceState({}, "", u.toString());
     };
 
+    const getUniqueTags = () => {
+      const tagSet = new Set();
+      document.querySelectorAll("[data-tag]").forEach(row => {
+        const tag = row.getAttribute("data-tag") || "";
+        if (tag) tagSet.add(tag.toLowerCase());
+      });
+      return Array.from(tagSet).sort();
+    };
+
+    const populateTagFilter = () => {
+      const tags = getUniqueTags();
+      const tagFilterEl = document.getElementById("tagFilter");
+      if (tagFilterEl) {
+        tagFilterEl.innerHTML = '<option value="">All</option>';
+        tags.forEach(tag => {
+          const option = document.createElement("option");
+          option.value = tag;
+          option.textContent = tag.charAt(0).toUpperCase() + tag.slice(1);
+          tagFilterEl.appendChild(option);
+        });
+      }
+    };
+
     const applyClientFilters = () => {
       const showOutCb = document.getElementById("showOut");
       const hideCompletedCb = document.getElementById("hideCompleted");
       const hideZeroServicesCb = document.getElementById("hideZeroServices");
+      const tagFilterEl = document.getElementById("tagFilter");
       const showOutOn = !!(showOutCb && showOutCb.checked);
       const hideCompletedOn = !!(hideCompletedCb && hideCompletedCb.checked);
       const hideZeroServicesOn = !!(hideZeroServicesCb && hideZeroServicesCb.checked);
+      const tagFilter = tagFilterEl ? tagFilterEl.value : "";
 
       let shown = 0;
       document.querySelectorAll(".asset-subnet-group").forEach(group => {
@@ -201,11 +251,13 @@ html { scrollbar-gutter: stable; }
           const isComplete = row.getAttribute("data-complete") === "1";
           const svcCount = parseInt(row.getAttribute("data-svc-count") || "0", 10);
           const inScope = row.getAttribute("data-in-scope") === "1";
+          const rowTag = row.getAttribute("data-tag") || "";
 
           let visible = true;
           if (!showOutOn && !inScope) visible = false;
           if (hideCompletedOn && isComplete) visible = false;
           if (hideZeroServicesOn && svcCount === 0) visible = false;
+           if (tagFilter && rowTag.trim().toLowerCase() !== tagFilter.trim().toLowerCase()) visible = false;
 
           row.style.display = visible ? "" : "none";
           if (visible) {
@@ -266,6 +318,18 @@ html { scrollbar-gutter: stable; }
       savePrefs({ ...loadPrefs(), row_limit: rowLimit.value });
       window.location.href = u.toString();
     });
+    // Set default to "All" (0)
+    if (rowLimit && !url.searchParams.has("row_limit")) {
+      rowLimit.value = "0";
+    }
+
+    const tagFilter = document.getElementById("tagFilter");
+    tagFilter && tagFilter.addEventListener("change", () => {
+      const val = tagFilter ? tagFilter.value : "";
+      savePrefs({ ...loadPrefs(), tag_filter: val });
+      updateQueryNoReload("tag_filter", val);
+      applyClientFilters();
+    });
 
     const applyRowState = (row, completeCb, inprogressCb) => {
       if (!row) return;
@@ -323,6 +387,7 @@ html { scrollbar-gutter: stable; }
       const inprogressCb = row.querySelector(".inprogressHost");
       applyRowState(row, completeCb, inprogressCb);
     });
+    populateTagFilter();
     applyClientFilters();
   });
 </script>

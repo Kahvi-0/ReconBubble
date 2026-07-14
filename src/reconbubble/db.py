@@ -55,7 +55,7 @@ def migrate_sqlite(engine) -> None:
         except Exception:
             pass
 
-        # hosts: add complete and waf columns if missing
+        # hosts: add complete, waf, and tag columns if missing
         try:
             if conn.execute(
                 text(
@@ -74,6 +74,16 @@ def migrate_sqlite(engine) -> None:
                     conn.execute(
                         text("ALTER TABLE hosts ADD COLUMN waf INTEGER DEFAULT 0")
                     )
+                if not _has_column(conn, "hosts", "tag"):
+                    conn.execute(
+                        text("ALTER TABLE hosts ADD COLUMN tag VARCHAR(64) DEFAULT ''")
+                    )
+                try:
+                    conn.execute(
+                        text("CREATE INDEX IF NOT EXISTS idx_hosts_tag ON hosts(tag)")
+                    )
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -457,6 +467,40 @@ def migrate_sqlite(engine) -> None:
           comments TEXT DEFAULT '',
           order_index INTEGER DEFAULT 0,
           created_at DATETIME
+        )
+        """)
+        )
+
+        # Seed default profiling rows if table is empty
+        count = conn.execute(text("SELECT COUNT(*) FROM profiling_rows")).scalar()
+        if count == 0:
+            defaults = [
+                ("Operating Systems", "[ 1.1.1.1 - Microsoft Server 2000 ]", "End-of-life OS; known CVEs with no vendor patches available.", 0),
+                ("Exposed Services", "", "This service was exposed on an Internet-facing system.", 1),
+                ("Exposed Files", "", "The configuration file was directly accessible from the Internet.", 2),
+                ("Exposed Transports", "", "Internal or legacy transport protocols were reachable externally.", 3),
+                ("Configuration Information", "", "System or application configuration details were discoverable.", 4),
+                ("Unencrypted Protocols", "", "Cleartext protocols such as HTTP, FTP, or Telnet were in use.", 5),
+                ("Domain Registrars", "", "Domain registrar and WHOIS details were publicly accessible.", 6),
+                ("Application Virtual Hosts", "", "Internal or staging virtual hosts were resolvable externally.", 7),
+                ("Web Management Interfaces", "", "Administrative web interfaces were exposed without adequate protection.", 8),
+                ("Exposed Database Details", "[Database version, driver, or error messages were visible in responses.]", "", 9),
+            ]
+            for cat, desc, comm, idx in defaults:
+                conn.execute(
+                    text(
+                        "INSERT INTO profiling_rows (category, description, comments, order_index, created_at) VALUES (:cat, :desc, :comm, :idx, datetime('now'))"
+                    ),
+                    {"cat": cat, "desc": desc, "comm": comm, "idx": idx},
+                )
+
+        # app_settings table - key-value prefs
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS app_settings (
+          id INTEGER PRIMARY KEY,
+          key VARCHAR(128) NOT NULL UNIQUE,
+          value TEXT DEFAULT ''
         )
         """)
         )

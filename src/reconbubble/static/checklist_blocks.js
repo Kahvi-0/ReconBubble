@@ -326,11 +326,15 @@
       const row = document.createElement('div');
       row.className = 'chain-row';
 
-      const nodeBg = gradient(n.color_start, n.color_end);
-      const nodeCardId = `card-n-${n.key}`;
-      const nodeCard = makeCard(n.label, nodeBg, nodeCardId);
-      const vulnState = state.status[`${n.key}_vuln`] || 'unchecked';
-      if (n.initial && vulnState === 'notvuln') nodeCard.classList.add('is-greyed');
+       const nodeBg = gradient(n.color_start, n.color_end);
+       const nodeCardId = `card-n-${n.key}`;
+       const nodeCard = makeCard(n.label, nodeBg, nodeCardId);
+       const desc = document.createElement('div');
+       desc.className = 'item-description';
+       desc.textContent = n.exploit_text;
+       nodeCard.appendChild(desc);
+       const vulnState = state.status[`${n.key}_vuln`] || 'unchecked';
+       if (n.initial && vulnState === 'notvuln') nodeCard.classList.add('is-greyed');
 
       if (n.initial) {
         const btns = document.createElement('div');
@@ -386,7 +390,7 @@
         const exploit = makeCard('Exploitation Notes', nodeBg, exploitId);
         pendingLinks.push([nodeCardId, exploitId]);
         const tx = document.createElement('div');
-        tx.textContent = n.exploit_text;
+        tx.textContent = n.static_text;
         tx.style.fontSize = '13px';
         tx.style.marginBottom = '6px';
         exploit.appendChild(tx);

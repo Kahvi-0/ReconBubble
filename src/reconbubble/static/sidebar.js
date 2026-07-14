@@ -60,40 +60,59 @@
   function esc(s) { return (""+s).replace(/[&<>"']/g,c=>({ "&":"&amp;","<":"&gt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
 
   
-function bindNoteHandlers() {
-  const noteForm = document.getElementById("noteAddForm");
-  const noteMsg = document.getElementById("noteAddMsg");
-  if (noteForm) {
-    noteForm.addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      noteMsg.textContent = "Saving...";
-      const fd = new FormData(noteForm);
-      const r = await fetch("/api/note/add", { method: "POST", body: fd });
-      const j = await r.json().catch(() => ({ ok: false }));
-      if (j.ok) {
-        noteMsg.textContent = "Saved.";
-        noteForm.reset();
-        const hostId = noteForm.querySelector('input[name="object_id"]').value;
-        setTimeout(() => openHost(parseInt(hostId, 10)), 300);
-      } else {
-        noteMsg.textContent = j.error || "Failed to save note.";
-      }
-    });
-  }
-
-  document.querySelectorAll("[data-note-del]").forEach(btn => {
+function bindTagHandlers() {
+  document.querySelectorAll("[data-tag-del]").forEach(btn => {
     btn.addEventListener("click", async () => {
-      if (!confirm("Delete this note?")) return;
+      const hostId = btn.getAttribute("data-host-id");
+      const tag = btn.getAttribute("data-tag");
+      if (!confirm(`Delete tag "${tag}"?`)) return;
       const fd = new FormData();
-      fd.append("note_id", btn.getAttribute("data-note-del"));
-      await fetch("/api/note/delete", { method: "POST", body: fd });
-      const hostId = document.querySelector('input[name="object_id"]');
-      if (hostId) {
-        openHost(parseInt(hostId.value, 10));
+      fd.append("host_id", hostId);
+      fd.append("tag", tag);
+      const r = await fetch("/api/host/tag/delete", { method: "POST", body: fd });
+      if (r.ok) {
+        openHost(parseInt(hostId, 10));
+      } else {
+        alert("Failed to delete tag.");
       }
     });
   });
 }
+
+  function bindNoteHandlers() {
+    const noteForm = document.getElementById("noteAddForm");
+    const noteMsg = document.getElementById("noteAddMsg");
+    if (noteForm) {
+      noteForm.addEventListener("submit", async (ev) => {
+        ev.preventDefault();
+        noteMsg.textContent = "Saving...";
+        const fd = new FormData(noteForm);
+        const r = await fetch("/api/note/add", { method: "POST", body: fd });
+        const j = await r.json().catch(() => ({ ok: false }));
+        if (j.ok) {
+          noteMsg.textContent = "Saved.";
+          noteForm.reset();
+          const hostId = noteForm.querySelector('input[name="object_id"]').value;
+          setTimeout(() => openHost(parseInt(hostId, 10)), 300);
+        } else {
+          noteMsg.textContent = j.error || "Failed to save note.";
+        }
+      });
+    }
+
+    document.querySelectorAll("[data-note-del]").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        if (!confirm("Delete this note?")) return;
+        const fd = new FormData();
+        fd.append("note_id", btn.getAttribute("data-note-del"));
+        await fetch("/api/note/delete", { method: "POST", body: fd });
+        const hostId = document.querySelector('input[name="object_id"]');
+        if (hostId) {
+          openHost(parseInt(hostId.value, 10));
+        }
+      });
+    });
+  }
 
   async function openHostCreate() {
     const backBtnCreate = document.getElementById("sidebarBack");
@@ -107,6 +126,8 @@ function bindNoteHandlers() {
           <input name="ip" placeholder="192.168.1.1" required />
           <label style="margin-top:8px;">Hostname</label>
           <input name="hostname" placeholder="server.example.com"/>
+          <label style="margin-top:8px;">Tag</label>
+          <input name="tag" placeholder="e.g., pivot, critical, external"/>
           <label style="margin-top:8px;">Associate domains/subdomains (one per line)</label>
           <textarea name="domains_raw" rows="6" placeholder="app.example.com"></textarea>
           <button class="btn" type="submit" style="margin-top:12px;">Create</button>
@@ -121,6 +142,7 @@ function bindNoteHandlers() {
     form && form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       msg.textContent = "Creating...";
+      msg.style.color = "";
       const fd = new FormData(form);
       const r = await fetch("/api/host/create", { method: "POST", body: fd });
       const j = await r.json().catch(() => ({ ok: false }));
@@ -129,6 +151,7 @@ function bindNoteHandlers() {
         setTimeout(() => location.reload(), 450);
       } else {
         msg.textContent = j.error || "Create failed.";
+        msg.style.color = "#f87171";
       }
     });
   }
@@ -157,6 +180,8 @@ function bindNoteHandlers() {
           <input name="ip" value="${esc(data.host.ip)}" required />
           <label>Hostname</label>
           <input name="hostname" value="${esc(data.host.hostname || "")}" />
+          <label>Tag</label>
+          <input name="tag" value="${esc(data.host.tag || "")}" placeholder="e.g., pivot, critical, external"/>
           <label>OS Guess</label>
           <input name="os_guess" value="${esc(data.host.os_guess || "")}" />
           <label>Associate domains/subdomains (one per line)</label>
@@ -284,6 +309,7 @@ function bindNoteHandlers() {
     form && form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       msg.textContent = "Saving...";
+      msg.style.color = "";
       const fd = new FormData(form);
       const r = await fetch("/api/host/update", { method: "POST", body: fd });
       const j = await r.json().catch(()=>({ok:false}));
@@ -292,6 +318,7 @@ function bindNoteHandlers() {
         setTimeout(() => location.reload(), 450);
       } else {
         msg.textContent = j.error || "Update failed.";
+        msg.style.color = "#f87171";
       }
     });
 

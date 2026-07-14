@@ -348,3 +348,17 @@ input[type="checkbox"]:checked {
   margin-top: 8px;
   color: #9aa6b2;
 }
+
+.card .item-description {
+  font-size: 13px;
+  color: #e8e8e8;
+  margin-top: 14px;
+  padding: 6px 0 12px;
+  opacity: 1;
+}
+
+#add-topology-btn {
+  font-size: 12px;
+  padding: 6px 10px;
+  margin-top: 8px;
+}

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Asset: {{ host.ip }}</h1>
+<h1 class="mt-4">Asset: {{ host.ip }}</h1>
 {% if in_scope %}<div class="pill inscope">IN SCOPE</div>{% else %}<div class="pill outscope">OUT OF SCOPE</div>{% endif %}
 <button class="btn" id="add-topology-btn">Add to Attack Topology</button>
 
@@ -8,7 +8,12 @@
   <div class="card">
     <h2>Details</h2>
     <div><b>Hostname:</b> {{ host.hostname }}</div>
+    <div><b>Tag:</b> <span id="hostTag">{{ host.tag or '' }}</span></div>
     <div><b>OS Guess:</b> {{ host.os_guess }}</div>
+    <div><label>Set Host Tag</label><input id="hostTagInput" name="tag" placeholder="e.g., pivot, critical, external"/></div>
+    <div id="tagPills" style="margin-top: 10px; display: flex; flex-wrap: wrap; gap: 5px;"></div>
+    <button class="btn" id="saveTagBtn" type="button">Save Tag</button>
+    <p class="muted" style="margin-top:6px;">Tags can be used to filter assets.</p>
   </div>
   <div class="card">
     <h2>Add note</h2>
@@ -25,7 +30,7 @@
   </div>
 </div>
 
-<h2>Services</h2>
+<h2 class="mt-4">Services</h2>
 <table>
   <thead><tr><th>Port</th><th>Proto</th><th>State</th><th>Service</th><th>Product</th><th>Version</th></tr></thead>
   <tbody>
@@ -42,7 +47,7 @@
   </tbody>
 </table>
 
-<h2>Notes</h2>
+<h2 class="mt-4">Notes</h2>
 {% if notes %}
   {% for n in notes %}
     <div class="card">
@@ -53,33 +58,102 @@
 {% else %}
   <p class="muted">No notes yet.</p>
 {% endif %}
+
 <script>
-  document.getElementById('add-topology-btn').addEventListener('click', async () => {
-    const btn = document.getElementById('add-topology-btn');
-    btn.disabled = true;
-    btn.textContent = 'Adding...';
+  const hostId = {{ host.id }};
+  const hostTagSpan = document.getElementById('hostTag');
+  const hostTagInput = document.getElementById('hostTagInput');
+  const saveTagBtn = document.getElementById('saveTagBtn');
+  const tagPillsContainer = document.getElementById('tagPills');
+
+  async function updateTagsUI() {
     try {
-      const res = await fetch('/api/topology/add-node', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          asset_id: {{ host.id }},
-          hostname: {{ host.hostname | tojson }},
-          ip: {{ host.ip | tojson }}
-        })
-      });
+      const res = await fetch(`/api/host/${hostId}`);
       const data = await res.json();
-      if (res.ok) {
-        btn.textContent = 'Added!';
-        setTimeout(() => { btn.textContent = 'Add to Topology'; btn.disabled = false; }, 1500);
-      } else {
-        btn.textContent = 'Failed';
-        setTimeout(() => { btn.textContent = 'Add to Topology'; btn.disabled = false; }, 2000);
+      if (data.ok && data.host) {
+        const tags = data.host.tags || [];
+        renderTags(tags);
+        hostTagSpan.textContent = data.host.tag || '(none)';
       }
-    } catch {
-      btn.textContent = 'Error';
-      setTimeout(() => { btn.textContent = 'Add to Topology'; btn.disabled = false; }, 2000);
+    } catch (err) {
+      console.error("Failed to update tags UI", err);
     }
+  }
+
+  function renderTags(tags) {
+    if (!tagPillsContainer) return;
+    tagPillsContainer.innerHTML = '';
+    tags.forEach(tag => {
+      if (!tag) return;
+      const span = document.createElement('span');
+      span.className = 'pill tag-pill';
+      span.style.cssText = 'display: inline-flex; align-items: center; background-color: #e2e8f0; padding: 2px 8px; border-radius: 4px; font-size: 12px; margin-right: 4px; margin-bottom: 4px;';
+      
+      const text = document.createElement('span');
+      text.textContent = tag;
+      
+      const delBtn = document.createElement('button');
+      delBtn.innerHTML = '&times;';
+      delBtn.className = 'btn-tag-delete';
+      delBtn.style.cssText = 'margin-left: 8px; border: none; background: none; cursor: pointer; color: red; font-weight: bold; padding: 0; line-height: 1;';
+      delBtn.onclick = async (e) => {
+        e.stopPropagation();
+        if (confirm(`Delete tag "${tag}"?`)) {
+          const fd = new FormData();
+          fd.append('host_id', hostId);
+          fd.append('tag', tag);
+          const res = await fetch('/api/host/tag/delete', { method: 'POST', body: fd });
+          if (res.ok) {
+            updateTagsUI();
+          } else {
+            alert('Failed to delete tag.');
+          }
+        }
+      };
+      
+      span.appendChild(text);
+      span.appendChild(delBtn);
+      tagPillsContainer.appendChild(span);
+    });
+  }
+
+  // Initialize
+  updateTagsUI();
+
+  if (hostTagInput && saveTagBtn) {
+    saveTagBtn.addEventListener('click', async () => {
+      const tag = hostTagInput.value.trim();
+      const btn = saveTagBtn;
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      try {
+        const res = await fetch('/api/host/tag', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            asset_id: hostId,
+            tag: tag
+          })
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+          updateTagsUI();
+          hostTagInput.value = '';
+          btn.textContent = 'Saved';
+          setTimeout(() => { btn.disabled = false; btn.textContent = 'Save Tag'; }, 1500);
+        } else {
+          btn.textContent = 'Error';
+          setTimeout(() => { btn.disabled = false; btn.textContent = 'Save Tag'; }, 2000);
+        }
+      } catch {
+        btn.textContent = 'Error';
+        setTimeout(() => { btn.disabled = false; btn.textContent = 'Save Tag'; }, 2000);
+      }
+    });
+  }
+
+  document.getElementById('add-topology-btn').addEventListener('click', async () => {
+    console.log('Add to topology clicked');
   });
 </script>
 {% endblock %}

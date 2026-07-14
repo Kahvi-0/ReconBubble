@@ -194,10 +194,9 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
                 db_host.os_guess = os_guess
             session.commit()
 
-        # Link host to subdomains based on hostname
+        # Link host to subdomains based on exact hostname match
         if hostname:
             try:
-                # Try to find matching subdomain by hostname
                 sub = session.scalar(
                     select(Subdomain).where(Subdomain.fqdn == hostname.lower())
                 )
@@ -216,32 +215,6 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
                             {"hid": db_host.id, "sid": sub.id},
                         )
                         session.commit()
-
-                # Also try to find subdomain by root domain
-                parts = hostname.lower().split(".")
-                if len(parts) > 1:
-                    root_domain = ".".join(parts[-2:])
-                    subs = session.execute(
-                        sql_text(
-                            "SELECT id, fqdn FROM subdomains WHERE root_domain = :rd"
-                        ),
-                        {"rd": root_domain},
-                    ).fetchall()
-                    for sub_id, sub_fqdn in subs:
-                        exists = session.execute(
-                            sql_text(
-                                "SELECT 1 FROM host_subdomains WHERE host_id = :hid AND subdomain_id = :sid"
-                            ),
-                            {"hid": db_host.id, "sid": sub_id},
-                        ).fetchone()
-                        if not exists:
-                            session.execute(
-                                sql_text(
-                                    "INSERT INTO host_subdomains (host_id, subdomain_id) VALUES (:hid, :sid)"
-                                ),
-                                {"hid": db_host.id, "sid": sub_id},
-                            )
-                    session.commit()
             except Exception as e:
                 print(f"[Nmap] Error linking host {ip} to subdomains: {e}")
 

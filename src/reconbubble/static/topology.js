@@ -1,6 +1,7 @@
 (function () {
   const el = document.getElementById("topologyCy");
   const inspector = document.getElementById("topologyInspector");
+  const inspectorWrap = document.getElementById("topologyInspectorWrap");
   const statusEl = document.getElementById("topologyStatus");
   if (!el || !window.cytoscape) return;
 
@@ -32,7 +33,7 @@
         floating_notes: Array.isArray(n.floating_notes) ? n.floating_notes : [],
         compromised: !!n.compromised,
         linked_asset_id: n.linked_asset_id || "",
-        display: `${icon} ${label}`,
+        display: `${icon}\n\n${label}`,
       },
       position: { x: n.x || 120, y: n.y || 120 },
     });
@@ -40,7 +41,17 @@
   (initial.edges || []).forEach((e, i) => {
     const edgeId = String(e.id || `eseed${i + 1}`);
     if (!e.source || !e.target) return;
-    elements.push({ group: "edges", data: { id: edgeId, source: e.source, target: e.target, label: e.label || "" } });
+    elements.push({
+      group: "edges",
+      data: {
+        id: edgeId,
+        source: e.source,
+        target: e.target,
+        label: e.label || "",
+        arrowDirection: e.arrowDirection || "target",
+        lineStyle: e.lineStyle || "solid",
+      },
+    });
   });
 
   const cy = cytoscape({
@@ -54,16 +65,17 @@
           "background-color": "data(color)",
           "label": "data(display)",
           "text-wrap": "wrap",
-      "text-max-width": 220,
-           "font-size": 14,
-           "text-valign": "center",
-           "text-halign": "center",
-           "color": "#e5eefb",
-           "shape": "round-rectangle",
-"width": 120,
-            "height": 120,
+        "text-max-width": 220,
+         "font-size": 14,
+          "text-valign": "center",
+          "text-halign": "center",
+          "color": "#e5eefb",
+          "shape": "round-rectangle",
+  "width": 120,
+          "height": 120,
           "border-width": 2,
           "border-color": "#0b1220",
+          "background-opacity": 0.35,
           "z-index": 20,
         },
       },
@@ -92,18 +104,25 @@
           "border-color": "#111827",
           "label": "",
           "z-index": 999,
+          "opacity": 0,
+        },
+      },
+      {
+        selector: 'node[type = "handle"]:hover',
+        style: {
+          "opacity": 0.9,
         },
       },
       {
         selector: 'node[type = "badge"]',
         style: {
           "shape": "round-rectangle",
-          "width": 34,
+           "width": 76,
           "height": 16,
           "background-color": "#b91c1c",
           "border-width": 1,
           "border-color": "#7f1d1d",
-          "label": "PWNED",
+           "label": "COMPROMISED",
           "font-size": 7,
           "font-weight": 800,
           "color": "#fee2e2",
@@ -163,8 +182,8 @@
         style: {
           "width": 3,
           "line-color": "#8da2bf",
-          "target-arrow-shape": "triangle",
           "target-arrow-color": "#8da2bf",
+          "source-arrow-color": "#8da2bf",
           "curve-style": "bezier",
           "label": "data(label)",
           "font-size": 11,
@@ -172,6 +191,46 @@
           "text-background-color": "#0f172a",
           "text-background-opacity": 0.85,
           "text-background-padding": 3,
+        },
+      },
+      {
+        selector: 'edge[arrowDirection = "none"]',
+        style: {
+          "target-arrow-shape": "none",
+          "source-arrow-shape": "none",
+        },
+      },
+      {
+        selector: 'edge[arrowDirection = "target"]',
+        style: {
+          "target-arrow-shape": "triangle",
+          "source-arrow-shape": "none",
+        },
+      },
+      {
+        selector: 'edge[arrowDirection = "source"]',
+        style: {
+          "target-arrow-shape": "none",
+          "source-arrow-shape": "triangle",
+        },
+      },
+      {
+        selector: 'edge[arrowDirection = "both"]',
+        style: {
+          "target-arrow-shape": "triangle",
+          "source-arrow-shape": "triangle",
+        },
+      },
+      {
+        selector: 'edge[lineStyle = "dotted"]',
+        style: {
+          "line-style": "dotted",
+        },
+      },
+      {
+        selector: 'edge[lineStyle = "dashed"]',
+        style: {
+          "line-style": "dashed",
         },
       },
       {
@@ -337,7 +396,21 @@
     const indicator = cy.getElementById(noteIndicatorIdFor(nodeId));
     if (!owner || !owner.length || !indicator || !indicator.length) return;
     const p = owner.position();
-    indicator.position({ x: p.x - 46, y: p.y - 28 });
+    const w = owner.width();
+    const h = owner.height();
+    indicator.position({ x: p.x - w / 2 + 10, y: p.y - h / 2 - 10 });
+  }
+
+  function syncBadgePosition(nodeId) {
+    const owner = cy.getElementById(nodeId);
+    const badge = cy.getElementById(badgeIdFor(nodeId));
+    if (!owner || !owner.length || !badge || !badge.length) return;
+    const p = owner.position();
+    const w = owner.width();
+    const h = owner.height();
+    const bw = badge.width();
+    const bh = badge.height();
+    badge.position({ x: p.x + w / 2 - bw / 2 + 2, y: p.y - h / 2 - bh / 2 - 2 });
   }
 
   function ensureNoteIndicator(nodeId) {
@@ -391,14 +464,6 @@
     handle.position({ x: p.x + 44, y: p.y + 28 });
   }
 
-  function syncBadgePosition(nodeId) {
-    const owner = cy.getElementById(nodeId);
-    const badge = cy.getElementById(badgeIdFor(nodeId));
-    if (!owner || !owner.length || !badge || !badge.length) return;
-    const p = owner.position();
-    badge.position({ x: p.x + 38, y: p.y - 24 });
-  }
-
   function ensureHandle(nodeId) {
     if (cy.getElementById(handleIdFor(nodeId)).length) return;
     cy.add({
@@ -419,7 +484,7 @@
     if (cy.getElementById(badgeIdFor(nodeId)).length) return;
     cy.add({
       group: "nodes",
-      data: { id: badgeIdFor(nodeId), type: "badge", owner: nodeId, label: "PWNED" },
+       data: { id: badgeIdFor(nodeId), type: "badge", owner: nodeId, label: "COMPROMISED" },
       position: { x: 0, y: 0 },
       grabbable: false,
       selectable: false,
@@ -511,7 +576,14 @@
     const edges = cy
       .edges()
       .filter((e) => !e.hasClass("draft") && !isVirtualNode(e.source()) && !isVirtualNode(e.target()))
-      .map((e) => ({ id: e.id(), source: e.source().id(), target: e.target().id(), label: e.data("label") || "" }));
+      .map((e) => ({
+        id: e.id(),
+        source: e.source().id(),
+        target: e.target().id(),
+        label: e.data("label") || "",
+        arrowDirection: e.data("arrowDirection") || "target",
+        lineStyle: e.data("lineStyle") || "solid",
+      }));
     setStatus("Saving...");
     try {
       await fetch("/api/topology", {
@@ -558,7 +630,7 @@
         floating_notes: [],
         compromised: false,
         linked_asset_id: "",
-        display: `${icon} ${label} ${nextNodeId - 1}`,
+        display: `${icon}\n\n${label} ${nextNodeId - 1}`,
       },
       position: { x, y },
     });
@@ -602,7 +674,7 @@
           color: "#64748b",
           notes: "",
           compromised: false,
-          display: `${icon} ${label}`,
+        display: `${icon}\n\n${label}`,
         },
         position: { x, y },
         selectable: false,
@@ -810,9 +882,11 @@
   function renderInspector(node) {
     if (!node || !node.isNode()) {
       inspector.innerHTML = '<span class="muted">Click a node to edit label, notes, color, and compromise state.</span>';
+      inspectorWrap.style.display = "none";
       currentAssetHosts = [];
       return;
     }
+    inspectorWrap.style.display = "block";
     const d = node.data();
     const linkedId = d.linked_asset_id || "";
 
@@ -825,6 +899,7 @@
         <input id="topoCompromised" type="checkbox" ${d.compromised ? "checked" : ""} />
         Mark as compromised
       </label>
+      <br/>
       <label style="margin-top:8px;">Link Asset</label>
       <div id="topoAssetSelector"></div>
       <div id="topoAssetInfo"></div>
@@ -841,7 +916,7 @@
 
     function applyDisplay() {
       const icon = ICONS[node.data("type")] || "📍";
-      node.data("display", `${icon} ${node.data("label") || "Node"}`);
+      node.data("display", `${icon}\n${node.data("label") || "Node"}`);
     }
 
     labelEl && labelEl.addEventListener("input", () => {
@@ -874,6 +949,55 @@
         await renderAssetInfo(node, linkedId);
       }
     })();
+  }
+
+  function renderEdgeInspector(edge) {
+    if (!edge || !edge.isEdge()) {
+      inspector.innerHTML = '<span class="muted">Click a node to edit label, notes, color, and compromise state.</span>';
+      inspectorWrap.style.display = "none";
+      return;
+    }
+    inspectorWrap.style.display = "block";
+    const d = edge.data();
+    const currentArrow = d.arrowDirection || "target";
+    const currentLine = d.lineStyle || "solid";
+
+    inspector.innerHTML = `
+      <label>Label</label>
+      <input id="edgeLabel" value="${escapeHtml(d.label || "")}" />
+      <label style="margin-top:10px;">Arrow Direction</label>
+      <select id="edgeArrowDir">
+        <option value="none" ${currentArrow === "none" ? "selected" : ""}>↔ No Arrow</option>
+        <option value="source" ${currentArrow === "source" ? "selected" : ""}>← Source</option>
+        <option value="target" ${currentArrow === "target" ? "selected" : ""}>Target →</option>
+        <option value="both" ${currentArrow === "both" ? "selected" : ""}>↔ Both</option>
+      </select>
+      <label style="margin-top:10px;">Line Style</label>
+      <select id="edgeLineStyle">
+        <option value="solid" ${currentLine === "solid" ? "selected" : ""}>──── Solid</option>
+        <option value="dashed" ${currentLine === "dashed" ? "selected" : ""}>- - - Dashed</option>
+        <option value="dotted" ${currentLine === "dotted" ? "selected" : ""}>· · · Dotted</option>
+      </select>
+      <div class="muted" style="margin-top:12px;">${escapeHtml(edge.source().data("label") || edge.source().id())} → ${escapeHtml(edge.target().data("label") || edge.target().id())}</div>
+      <div class="muted" style="margin-top:4px;">Right-click to delete this link.</div>
+    `;
+
+    const labelEl = document.getElementById("edgeLabel");
+    const arrowEl = document.getElementById("edgeArrowDir");
+    const lineEl = document.getElementById("edgeLineStyle");
+
+    labelEl && labelEl.addEventListener("input", () => {
+      edge.data("label", labelEl.value || "");
+      queueSave();
+    });
+    arrowEl && arrowEl.addEventListener("change", () => {
+      edge.data("arrowDirection", arrowEl.value);
+      queueSave();
+    });
+    lineEl && lineEl.addEventListener("change", () => {
+      edge.data("lineStyle", lineEl.value);
+      queueSave();
+    });
   }
 
   function escapeHtml(s) {
@@ -909,11 +1033,24 @@
   realNodes().forEach((n) => refreshFloatingNotes(n.id()));
   realNodes().filter((n) => n.data("type") !== "domain").forEach(adjustNodeSize);
   cy.on("tap", "node", (evt) => {
-    const node = evt.target;
+    let node = evt.target;
     if (isVirtualNode(node)) {
-      return;
+      const ownerId = node.data("owner");
+      if (ownerId) {
+        const owner = cy.getElementById(ownerId);
+        if (owner && owner.length) node = owner;
+        else return;
+      } else {
+        return;
+      }
     }
     renderInspector(node);
+  });
+
+  cy.on("tap", "edge", (evt) => {
+    const edge = evt.target;
+    if (edge.hasClass("draft")) return;
+    renderEdgeInspector(edge);
   });
 
   cy.on("tap", (evt) => {
@@ -1006,7 +1143,17 @@
         .edges()
         .filter((e) => e.source().id() === ownerId && e.target().id() === target.id());
       if (existing.length === 0) {
-        cy.add({ group: "edges", data: { id: `e${nextEdgeId++}`, source: ownerId, target: target.id() } });
+        cy.add({
+          group: "edges",
+          data: {
+            id: `e${nextEdgeId++}`,
+            source: ownerId,
+            target: target.id(),
+            label: "",
+            arrowDirection: "target",
+            lineStyle: "solid",
+          },
+        });
         queueSave();
       }
       setStatus(`Linked ${ownerId} -> ${target.id()}`);
@@ -1131,8 +1278,58 @@
     clearPalettePreview();
   });
 
+  cy.on("mouseover", "node", (evt) => {
+    const n = evt.target;
+    if (isVirtualNode(n) || isHandle(n) || isBadge(n) || isNoteIndicator(n)) return;
+    const h = cy.getElementById(handleIdFor(n.id()));
+    if (h && h.length) h.style("opacity", 0.9);
+    const ind = cy.getElementById(noteIndicatorIdFor(n.id()));
+    if (ind && ind.length) {
+      ind.style("opacity", 0.9);
+      ind.style("z-index", 10003);
+    }
+  });
+  cy.on("mouseout", "node", (evt) => {
+    const n = evt.target;
+    if (isVirtualNode(n) || isHandle(n) || isBadge(n) || isNoteIndicator(n)) return;
+    const h = cy.getElementById(handleIdFor(n.id()));
+    if (h && h.length) h.style("opacity", 0);
+    const ind = cy.getElementById(noteIndicatorIdFor(n.id()));
+    if (ind && ind.length) {
+      ind.style("opacity", 0.5);
+      ind.style("z-index", 10002);
+    }
+  });
+
   const fitBtn = document.getElementById("fitView");
   fitBtn && fitBtn.addEventListener("click", () => cy.fit(undefined, 40));
 
-  if (cy.nodes().length) cy.fit(undefined, 40);
+  const closeBtn = document.getElementById("topoCloseInspector");
+  closeBtn && closeBtn.addEventListener("click", () => {
+    inspectorWrap.style.display = "none";
+    cy.elements().unselect();
+  });
+
+  if (cy.nodes().length) {
+    cy.fit(undefined, 40);
+    cy.nodes('node[type = "handle"]').forEach((h) => h.style("opacity", 0));
+    cy.nodes('node[type = "note_indicator"]').forEach((ind) => ind.style("opacity", 0.5));
+    realNodes().filter((n) => n.data("compromised")).forEach((n) => n.style("border-color", "#991b1b"));
+  }
+
+  // Smooth red pulse for compromised nodes
+  let pulsePhase = 0;
+  function stepPulse() {
+    pulsePhase += 0.035;
+    const t = (Math.sin(pulsePhase) + 1) / 2;
+    const r = Math.round(153 + t * 102);
+    const g = Math.round(27 + t * 85);
+    const b = Math.round(27 + t * 85);
+    const color = `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
+    realNodes().filter((n) => n.data("compromised")).forEach((n) => {
+      n.style("border-color", color);
+    });
+    requestAnimationFrame(stepPulse);
+  }
+  requestAnimationFrame(stepPulse);
 })();

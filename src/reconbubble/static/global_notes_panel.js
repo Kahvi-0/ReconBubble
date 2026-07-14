@@ -28,22 +28,30 @@
       const res = await fetch("/api/global-notes");
       const data = await res.json();
       text.value = data.note || "";
-      status.textContent = data.updated_at ? "Loaded" : "Ready";
+      status.textContent = "";
+      status.style.opacity = "0";
     } catch (_) {
-      status.textContent = "Unable to load notes";
+      status.textContent = "Error";
+      status.style.opacity = "1";
+      setTimeout(() => { status.style.opacity = "0"; }, 5000);
     }
   }
 
   async function saveNow() {
     try {
-      status.textContent = "Saving...";
+      status.textContent = "Saving";
+      status.style.opacity = "1";
+      setTimeout(() => { if (status.textContent === "Saving") status.style.opacity = "0"; }, 3000);
       const fd = new FormData();
       fd.append("note", text.value || "");
       const res = await fetch("/api/global-notes", { method: "POST", body: fd });
       if (!res.ok) throw new Error("save failed");
       status.textContent = "Saved";
+      setTimeout(() => { status.style.opacity = "0"; }, 1000);
     } catch (_) {
       status.textContent = "Save failed";
+      status.style.opacity = "1";
+      setTimeout(() => { status.style.opacity = "0"; }, 5000);
     }
   }
 

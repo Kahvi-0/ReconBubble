@@ -68,6 +68,7 @@ class Host(Base):
     complete: Mapped[int] = mapped_column(Integer, default=0)
     inprogress: Mapped[int] = mapped_column(Integer, default=0)
     waf: Mapped[int] = mapped_column(Integer, default=0)
+    tag: Mapped[str] = mapped_column(String(64), default="", index=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
     )
@@ -307,3 +308,10 @@ class ProfilingRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
     )
+
+
+class AppSettings(Base):
+    __tablename__ = "app_settings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    value: Mapped[str] = mapped_column(Text, default="")

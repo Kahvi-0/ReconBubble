@@ -1,26 +1,34 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Attack Topology</h1>
-<div class="card" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
-  <button class="btn" draggable="true" data-node-type="computer">Drag Computer</button>
-  <button class="btn" draggable="true" data-node-type="server">Drag Server</button>
-  <button class="btn" draggable="true" data-node-type="router">Drag Router</button>
-  <button class="btn" draggable="true" data-node-type="switch">Drag Switch</button>
-  <button class="btn" draggable="true" data-node-type="firewall">Drag Firewall</button>
-  <button class="btn" draggable="true" data-node-type="user">Drag User</button>
-  <button class="btn" draggable="true" data-node-type="domain">Drag Domain</button>
-  <span style="border-left:1px solid #334155; height:20px;"></span>
-  <button class="btn" id="fitView">Fit</button>
-  <span id="topologyStatus" class="muted">Ready</span>
-</div>
+<style>
+  body { overflow: hidden; }
+  .container { margin: 0; padding: 0; }
+</style>
+<div style="display:flex; flex-direction:column; height:calc(100vh - 56px); padding:0 14px;">
+  <div class="card" style="padding:10px 14px; margin:10px 0 6px; flex-shrink:0; display:flex; gap:10px; align-items:center; overflow-x:auto; overflow-y:hidden; flex-wrap:nowrap;">
+    <div style="display:flex; gap:10px; flex-shrink:0;">
+      <button class="btn" draggable="true" data-node-type="computer">💻 Computer</button>
+      <button class="btn" draggable="true" data-node-type="server">🗄️ Server</button>
+      <button class="btn" draggable="true" data-node-type="router">📡 Router</button>
+      <button class="btn" draggable="true" data-node-type="switch">🔀 Switch</button>
+      <button class="btn" draggable="true" data-node-type="firewall">🧱 Firewall</button>
+      <button class="btn" draggable="true" data-node-type="user">👤 User</button>
+      <button class="btn" draggable="true" data-node-type="domain">🌐 Domain</button>
+    </div>
 
-<div class="split">
-  <div class="card" style="min-height:620px;">
-    <div id="topologyCy" style="height:620px; border:1px solid #223046; border-radius:12px; background: radial-gradient(circle at 20% 20%, #111827 0%, #0b1220 100%);"></div>
   </div>
-  <div class="card" style="min-height:620px;">
-    <h2>Node Inspector</h2>
-    <div id="topologyInspector" class="muted">Click a node to edit label, notes, color, and compromise state.</div>
+
+  <div style="position:relative; flex:1; min-height:0;">
+    <div class="card" style="height:100%; padding:0; overflow:hidden;">
+      <div id="topologyCy" style="width:100%; height:100%; border-radius:12px; background-color:#0f172a; background-image: radial-gradient(circle, #1e293b 1px, transparent 1px); background-size:28px 28px;"></div>
+    </div>
+    <div id="topologyInspectorWrap" style="display:none; position:absolute; top:14px; right:14px; width:340px; max-height:calc(100vh - 180px); overflow-y:auto; background:#10161d; border:1px solid #1e2630; border-radius:14px; padding:14px; box-shadow:0 12px 32px rgba(0,0,0,.55); z-index:100;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <h2 style="margin:0;">Node Inspector</h2>
+        <button id="topoCloseInspector" class="btn" style="padding:2px 8px; font-size:14px;">&times;</button>
+      </div>
+      <div id="topologyInspector" class="muted">Click a node to edit label, notes, color, and compromise state.</div>
+    </div>
   </div>
 </div>
 
@@ -28,5 +36,5 @@
   window.TOPOLOGY_DATA = {{ topology_data | tojson }};
 </script>
 <script src="/static/vendor/cytoscape.min.js"></script>
-<script src="/static/topology.js?v=9"></script>
+<script src="/static/topology.js?v=39"></script>
 {% endblock %}
