@@ -1555,8 +1555,9 @@
     realNodes().filter((n) => n.data("compromised")).forEach((n) => n.style("border-color", "#991b1b"));
   }
 
-  // Smooth red pulse for compromised nodes
+  // Smooth red pulse for compromised nodes (paused when tab is hidden)
   let pulsePhase = 0;
+  let pulseRAF = null;
   function stepPulse() {
     pulsePhase += 0.035;
     const t = (Math.sin(pulsePhase) + 1) / 2;
@@ -1567,7 +1568,15 @@
     realNodes().filter((n) => n.data("compromised")).forEach((n) => {
       n.style("border-color", color);
     });
-    requestAnimationFrame(stepPulse);
+    pulseRAF = requestAnimationFrame(stepPulse);
   }
-  requestAnimationFrame(stepPulse);
+  pulseRAF = requestAnimationFrame(stepPulse);
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      cancelAnimationFrame(pulseRAF);
+      pulseRAF = null;
+    } else if (!pulseRAF) {
+      pulseRAF = requestAnimationFrame(stepPulse);
+    }
+  });
 })();
