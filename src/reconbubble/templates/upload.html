@@ -16,11 +16,12 @@
     <select name="kind">
       <option value="nmap_xml">Nmap XML</option>
       <option value="subdomains">Subdomains list</option>
-      <option value="emails">Emails list</option>
+      <option value="names_emails">Names - Email List</option>
       <option value="doc">OSINT document</option>
-      <option value="users">Usernames list</option>
+      <option value="ad_users">Active Directory Users</option>
       <option value="creds">Credentials (user:pass)</option>
       <option value="urls">Web URLs list</option>
+      <option value="names">Names list</option>
       <option value="bbot">BBOT - Subdomain Enum (JSON)</option>
       <option value="prowl_phase1">Prowler phase 1 (json)</option>
       <option value="zone_transfers">Prowler phase 2 - zone transfers (json)</option>
@@ -35,22 +36,23 @@
     <button class="btn" type="submit">Upload & Parse</button>
   </form>
 
-  <form class="card" action="/upload" method="post">
+  <form id="pasteForm" class="card" action="/upload" method="post">
     <h2>Paste raw data</h2>
     <label>Type</label>
     <select name="kind">
       <option value="nmap_xml">Nmap XML</option>
       <option value="subdomains">Subdomains list</option>
-      <option value="emails">Emails list</option>
-      <option value="users">Usernames list</option>
+      <option value="names_emails">Names - Email List</option>
+      <option value="ad_users">Active Directory Users</option>
       <option value="creds">Credentials (user:pass)</option>
       <option value="urls">Web URLs list</option>
+      <option value="names">Names list</option>
       <option value="bbot">BBOT (json)</option>
     </select>
     <label>Optional filename</label>
     <input name="raw_filename" placeholder="pasted_scan.xml" />
     <label>Raw text</label>
-    <textarea name="raw_text" rows="14" placeholder="Paste Nmap XML or newline-separated items…" required></textarea>
+    <textarea name="raw_text" rows="14" id="rawTextArea" placeholder="Paste Nmap XML output…" required></textarea>
     <button class="btn" type="submit">Save & Parse</button>
     <p class="muted">Docs are file-upload only (to preserve original evidence).</p>
   </form>
@@ -60,5 +62,24 @@ document.getElementById('dirInput').addEventListener('change', function() {
   document.getElementById('fileInput').webkitdirectory = this.checked;
   document.getElementById('fileInput').multiple = true;
 });
+
+const rawPlaceholders = {
+  nmap_xml: "Paste Nmap XML output…",
+  subdomains: "Paste subdomains, one per line (e.g. example.com, www.example.com)…",
+  names_emails: "Paste email addresses, one per line…",
+  ad_users: "Paste AD usernames, one per line…",
+  creds: "Paste credentials as user:pass, one per line…",
+  urls: "Paste URLs, one per line…",
+  names: "Paste names as FirstName MiddleName LastName, one per line…",
+  bbot: "Paste BBOT JSON output…"
+};
+
+const rawSelect = document.querySelector('#pasteForm select[name="kind"]');
+const rawArea = document.getElementById('rawTextArea');
+if (rawSelect && rawArea) {
+  rawSelect.addEventListener('change', function() {
+    rawArea.placeholder = rawPlaceholders[this.value] || "Paste data…";
+  });
+}
 </script>
 {% endblock %}

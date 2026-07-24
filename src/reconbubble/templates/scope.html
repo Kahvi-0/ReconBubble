@@ -175,6 +175,32 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
   </table>
 </div>
 
+<div class="card">
+  <h2>Scope Exclusions</h2>
+  <p class="muted" style="margin-bottom:12px;">FQDNs listed here are always out-of-scope, overriding parent domain rules.</p>
+  <form id="addExclusionForm" style="display:flex; gap:8px; margin-bottom:12px;" onsubmit="event.preventDefault(); addExclusion();">
+    <input id="exclusionInput" name="fqdn" placeholder="Enter FQDN to exclude" style="flex:1;" required />
+    <button class="btn" type="submit">Add Exclusion</button>
+  </form>
+  <table>
+    <thead><tr><th>FQDN</th><th>Added</th><th>Actions</th></tr></thead>
+    <tbody>
+      {% for ex in exclusions %}
+      <tr>
+        <td><code>{{ ex.fqdn }}</code></td>
+        <td class="muted">{{ ex.created_at }}</td>
+        <td>
+          <button class="btn btn-sm remove-excl" data-fqdn="{{ ex.fqdn }}">Remove</button>
+        </td>
+      </tr>
+      {% endfor %}
+      {% if not exclusions %}
+      <tr><td colspan="3" class="muted">No exclusions configured.</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+
 <script>
   const kindSel = document.getElementById("scopeKind");
   const domainWrap = document.getElementById("domainWrap");
@@ -233,5 +259,33 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
     form.submit();
   });
   refreshCheckedCount();
+
+  async function addExclusion() {
+    const input = document.getElementById('exclusionInput');
+    const fqdn = input.value.trim().toLowerCase().replace(/\.$/, '');
+    if (!fqdn) return;
+    try {
+      const fd = new FormData();
+      fd.append('fqdn', fqdn);
+      await fetch('/api/subdomain/scope-override', { method: 'POST', body: fd });
+      location.reload();
+    } catch(e) {
+      alert('Failed to add exclusion: ' + e);
+    }
+  }
+
+  document.querySelectorAll('.remove-excl').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const fqdn = btn.getAttribute('data-fqdn');
+      try {
+        const fd = new FormData();
+        fd.append('fqdn', fqdn);
+        await fetch('/api/subdomain/scope-override', { method: 'POST', body: fd });
+        location.reload();
+      } catch(e) {
+        alert('Failed to remove exclusion: ' + e);
+      }
+    });
+  });
 </script>
 {% endblock %}

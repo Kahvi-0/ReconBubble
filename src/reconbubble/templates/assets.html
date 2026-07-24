@@ -70,7 +70,7 @@
   <details class="asset-subnet-group" open>
     <summary><strong>{{ subnet }}</strong> <span class="muted">({{ rows|length }} assets)</span></summary>
     <table>
-      <thead><tr><th>Complete</th><th>In Progress</th><th>WAF</th><th>IP</th><th>Hostname</th><th># Services</th><th>Domains</th><th>Tag</th></tr></thead>
+      <thead><tr><th>Complete</th><th>In Progress</th><th>WAF</th><th>IP</th><th>Hostname</th><th># Services</th><th>Domains</th><th>Compromised</th><th>Tag</th></tr></thead>
       <tbody>
         {% for r in rows %}
           <tr
@@ -93,25 +93,15 @@
             <td>
               <details>
                 {% set in_scope_domains = r.domains | selectattr('in_scope') | list %}
-                <summary class="muted">show ({{ in_scope_domains | length }}{% if show_out == 0 and r.domains | length > in_scope_domains | length %} / {{ r.domains | length }}{% endif %})</summary>
+                <summary class="muted asset-domain-summary" data-in-scope="{{ in_scope_domains | length }}" data-total="{{ r.domains | length }}">show ({{ in_scope_domains | length }}{% if r.domains | length > in_scope_domains | length %} / {{ r.domains | length }}{% endif %})</summary>
                 {% if r.domains %}
                   <ul class="miniList">
                     {% for d in r.domains %}
-                      {% if show_out == 0 %}
-                        {% if d.in_scope %}
-                        <li>
-                        <span class="scope-dot in" title="Domain scope: IN">●</span>
-                        <code>{{ d.fqdn }}</code>
-                        {% if d.sensitive %}<span class="sensitive-banner">Sensitive</span>{% endif %}
-                      </li>
-                        {% endif %}
-                      {% else %}
-                        <li>
-                        <span class="scope-dot {% if d.in_scope %}in{% else %}out{% endif %}" title="Domain scope: {% if d.in_scope %}IN{% else %}OUT{% endif %}">●</span>
-                        <code>{{ d.fqdn }}</code>
-                        {% if d.sensitive %}<span class="sensitive-banner">Sensitive</span>{% endif %}
-                      </li>
-                      {% endif %}
+                    <li class="asset-domain-item" data-in-scope="{{ 1 if d.in_scope else 0 }}">
+                    <span class="scope-dot {% if d.in_scope %}in{% else %}out{% endif %}" title="Domain scope: {% if d.in_scope %}IN{% else %}OUT{% endif %}">●</span>
+                    <code>{{ d.fqdn }}</code>
+                    {% if d.sensitive %}<span class="sensitive-banner">Sensitive</span>{% endif %}
+                  </li>
                     {% endfor %}
                   </ul>
                 {% else %}
@@ -119,6 +109,7 @@
                 {% endif %}
               </details>
             </td>
+            <td>{% if r.id|string in compromised_asset_ids %}<span class="topo-badge compromised">Compromised</span>{% endif %}</td>
             <td>{{ r.tag or '' }}</td>
           </tr>
         {% endfor %}
@@ -132,6 +123,71 @@
 <div class="card"><p class="muted">No assets match current filters.</p></div>
 {% endif %}
 
+<div id="assetDetail" class="asset-detail-panel">
+  <div class="asset-detail-header">
+    <span class="asset-detail-name">Asset</span>
+    <button class="cred-action-btn" id="closeDetailBtn" title="Close">&times;</button>
+  </div>
+  <div class="asset-detail-body" id="assetDetailBody">
+    <!-- Edit asset card -->
+    <div class="card">
+      <h2>Edit asset</h2>
+      <form id="hostUpdateForm">
+        <input type="hidden" name="host_id" id="detailHostId" />
+        <label>IP</label>
+        <input name="ip" id="detailIp" required />
+        <label>Hostname</label>
+        <input name="hostname" id="detailHostname" />
+        <label>Tag</label>
+        <input name="tag" id="detailTag" placeholder="e.g., pivot, critical, external"/>
+        <label>OS Guess</label>
+        <input name="os_guess" id="detailOsGuess" />
+        <label>Associate domains/subdomains (one per line)</label>
+        <textarea name="domains_raw" id="detailDomains" rows="6" placeholder="app.example.com"></textarea>
+        <button class="btn" type="submit">Save</button>
+        <div id="hostUpdateMsg" class="muted" style="margin-top:8px;"></div>
+      </form>
+    </div>
+
+    <!-- Notes card -->
+    <div class="card">
+      <h2>Notes</h2>
+      <form id="noteAddForm">
+        <input type="hidden" name="object_type" value="host"/>
+        <input type="hidden" name="object_id" id="noteObjectId" />
+        <label>Severity</label>
+        <select name="severity">
+          <option value="info">info</option>
+          <option value="low">low</option>
+          <option value="med">med</option>
+          <option value="high">high</option>
+        </select>
+        <label style="margin-top:8px;">Tags</label>
+        <input name="tags" placeholder="vpn, external, priority"/>
+        <label style="margin-top:8px;">Note</label>
+        <textarea name="body" rows="5" required></textarea>
+        <button class="btn" type="submit" style="margin-top:10px;">Save note</button>
+        <div id="noteAddMsg" class="muted" style="margin-top:8px;"></div>
+      </form>
+      <div id="assetNotesList" style="margin-top:14px;"></div>
+    </div>
+
+    <!-- Services card -->
+    <div class="card">
+      <h2>Services</h2>
+      <button class="btn" id="createServiceBtn" type="button" style="margin-bottom:10px;">Add service</button>
+      <div id="assetServicesList"></div>
+    </div>
+
+    <!-- Attack Topology -->
+    <div class="card" id="assetTopoCard" style="display:none;">
+      <h2>Attack Topology</h2>
+      <button class="btn" id="assetTopoBtn" type="button" style="width:100%;">Add to Attack Topology</button>
+      <div id="assetTopoMsg" class="muted" style="margin-top:8px;"></div>
+    </div>
+  </div>
+</div>
+
 <style>
 tr.row-complete td { background: rgba(0, 255, 0, 0.1); }
 tr.row-complete:hover td { background: rgba(0, 255, 0, 0.06); }
@@ -140,6 +196,8 @@ tr.row-inprogress:hover td { background: rgba(255, 153, 0, 0.1); }
 .scope-dot { font-size: 14px; margin-right: 2px; }
 .scope-dot.in { color: #00ff00; }
 .scope-dot.out { color: #ff3333; }
+.topo-badge { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.3px; vertical-align: middle; }
+.topo-badge.compromised { background: #7f1d1d; color: #fecaca; border: 1px solid #991b1b; margin: 0; }
 .asset-subnet-group > summary { cursor: pointer; margin-bottom: 10px; }
 html { scrollbar-gutter: stable; }
 .filter-list {
@@ -264,6 +322,19 @@ html { scrollbar-gutter: stable; }
             visibleInGroup += 1;
             shown += 1;
           }
+
+          row.querySelectorAll(".asset-domain-item").forEach(li => {
+            const dInScope = li.getAttribute("data-in-scope") === "1";
+            li.style.display = (showOutOn || dInScope) ? "" : "none";
+          });
+          const summary = row.querySelector(".asset-domain-summary");
+          if (summary) {
+            const inScopeCount = summary.getAttribute("data-in-scope");
+            const totalCount = summary.getAttribute("data-total");
+            summary.textContent = showOutOn
+              ? `show (${totalCount})`
+              : `show (${inScopeCount}${totalCount > inScopeCount ? ' / ' + totalCount : ''})`;
+          }
         });
 
         const card = group.closest(".card");
@@ -277,15 +348,240 @@ html { scrollbar-gutter: stable; }
       if (shownEl) shownEl.textContent = String(shown);
     };
 
+    const assetDetail = document.getElementById("assetDetail");
+    const assetDetailBody = document.getElementById("assetDetailBody");
+    const closeDetailBtn = document.getElementById("closeDetailBtn");
+    const hostUpdateForm = document.getElementById("hostUpdateForm");
+    const detailHostId = document.getElementById("detailHostId");
+    const detailIp = document.getElementById("detailIp");
+    const detailHostname = document.getElementById("detailHostname");
+    const detailTag = document.getElementById("detailTag");
+    const detailOsGuess = document.getElementById("detailOsGuess");
+    const detailDomains = document.getElementById("detailDomains");
+    const hostUpdateMsg = document.getElementById("hostUpdateMsg");
+    const noteAddForm = document.getElementById("noteAddForm");
+    const noteObjectId = document.getElementById("noteObjectId");
+    const noteAddMsg = document.getElementById("noteAddMsg");
+    const assetNotesList = document.getElementById("assetNotesList");
+    const assetServicesList = document.getElementById("assetServicesList");
+    const createServiceBtn = document.getElementById("createServiceBtn");
+    const assetTopoCard = document.getElementById("assetTopoCard");
+    const assetTopoBtn = document.getElementById("assetTopoBtn");
+    const assetTopoMsg = document.getElementById("assetTopoMsg");
+
+    const esc = (s) => {
+      const d = document.createElement("div");
+      d.textContent = s || "";
+      return d.innerHTML;
+    };
+
+    function showAssetDetail() {
+      assetDetail.classList.add("active");
+    }
+
+    function hideAssetDetail() {
+      assetDetail.classList.remove("active");
+    }
+
+    closeDetailBtn && closeDetailBtn.addEventListener("click", hideAssetDetail);
+
+    function populateAssetForm(data) {
+      const h = data.host;
+      detailHostId.value = h.id || "";
+      detailIp.value = h.ip || "";
+      detailHostname.value = h.hostname || "";
+      detailTag.value = h.tag || "";
+      detailOsGuess.value = h.os_guess || "";
+      detailDomains.value = (data.domains || []).join("\n");
+      noteObjectId.value = h.id || "";
+      document.querySelector(".asset-detail-name").textContent = h.ip || "Asset";
+
+      assetNotesList.innerHTML = (data.notes || []).length ? (data.notes.map(n => `
+        <div class="card" style="margin:10px 0;">
+          <div class="muted">${esc(n.created_at)} · <b>${esc(n.severity)}</b> · ${esc(n.tags||"")}</div>
+          <pre class="note">${esc(n.body||"")}</pre>
+          <button class="btn btn-small" data-note-del="${n.id}" type="button" style="margin-top:8px;">Delete</button>
+        </div>
+      `).join("")) : `<p class="muted">No notes yet.</p>`;
+
+      assetServicesList.innerHTML = (data.services || []).length ? `
+        <table>
+          <thead><tr><th>Port</th><th>Proto</th><th>State</th><th>Service</th></tr></thead>
+          <tbody>
+            ${(data.services || []).map(s => `
+              <tr>
+                <td><a href="#" data-open-service="${s.id}">${s.port}</a></td>
+                <td>${esc(s.proto)}</td>
+                <td>${esc(s.state)}</td>
+                <td>${esc(s.service_name || "")}</td>
+              </tr>`).join("")}
+          </tbody>
+        </table>` : `<div class="muted">No services stored.</div>`;
+
+      hostUpdateMsg.textContent = "";
+      noteAddMsg.textContent = "";
+    }
+
+    function clearAssetForm() {
+      detailHostId.value = "";
+      detailIp.value = "";
+      detailHostname.value = "";
+      detailTag.value = "";
+      detailOsGuess.value = "";
+      detailDomains.value = "";
+      noteObjectId.value = "";
+      document.querySelector(".asset-detail-name").textContent = "New Asset";
+      hostUpdateMsg.textContent = "";
+      noteAddMsg.textContent = "";
+      assetNotesList.innerHTML = `<p class="muted">No notes yet.</p>`;
+      assetServicesList.innerHTML = `<div class="muted">No services stored.</div>`;
+      assetTopoCard.style.display = "none";
+    }
+
+    hostUpdateForm && hostUpdateForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(hostUpdateForm);
+      hostUpdateMsg.textContent = "Saving...";
+      const r = await fetch("/api/host/update", { method: "POST", body: fd });
+      const j = await r.json().catch(() => ({ ok: false, error: "Error" }));
+      if (j.ok) {
+        hostUpdateMsg.textContent = "Saved. Refreshing…";
+        setTimeout(() => location.reload(), 450);
+      } else {
+        hostUpdateMsg.textContent = j.error || "Update failed.";
+        hostUpdateMsg.style.color = "#f87171";
+      }
+    });
+
+    noteAddForm && noteAddForm.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(noteAddForm);
+      noteAddMsg.textContent = "Saving...";
+      const r = await fetch("/api/note/add", { method: "POST", body: fd });
+      const j = await r.json().catch(() => ({ ok: false, error: "Error" }));
+      if (j.ok) {
+        noteAddMsg.textContent = "Note saved. Refreshing…";
+        setTimeout(() => location.reload(), 450);
+      } else {
+        noteAddMsg.textContent = j.error || "Failed";
+        noteAddMsg.style.color = "#f87171";
+      }
+    });
+
+    function bindNoteDeleteHandlers() {
+      assetNotesList.querySelectorAll("[data-note-del]").forEach(btn => {
+        btn.addEventListener("click", async () => {
+          const noteId = parseInt(btn.getAttribute("data-note-del"), 10);
+          const fd = new FormData();
+          fd.append("note_id", noteId);
+          await fetch("/api/note/delete", { method: "POST", body: fd });
+          btn.closest(".card").remove();
+        });
+      });
+    }
+
+    createServiceBtn && createServiceBtn.addEventListener("click", () => {
+      const hostId = parseInt(detailHostId.value, 10);
+      if (hostId && hostId > 0) {
+        window.ReconSidebar && window.ReconSidebar.openServiceCreatePopup(hostId);
+      }
+    });
+
+    async function setupTopologyBtn(hostData) {
+      assetTopoMsg.textContent = "";
+      assetTopoCard.style.display = "block";
+      const h = hostData.host;
+      const alreadyInTopology = async () => {
+        try {
+          const r = await fetch("/api/topology");
+          if (!r.ok) return false;
+          const j = await r.json();
+          if (!j.ok) return false;
+          const nodes = (j.map && j.map.nodes) || [];
+          return nodes.some((n) => n.linked_asset_id == h.id);
+        } catch {
+          return false;
+        }
+      };
+      const setDisabled = (disabled) => {
+        assetTopoBtn.disabled = disabled;
+        assetTopoBtn.classList.toggle("btn--disabled", disabled);
+      };
+      const isDuplicate = await alreadyInTopology();
+      if (isDuplicate) {
+        assetTopoBtn.textContent = "Already in Attack Topology";
+        setDisabled(true);
+        assetTopoBtn.onclick = null;
+      } else {
+        setDisabled(false);
+        assetTopoBtn.textContent = "Add to Attack Topology";
+        assetTopoBtn.onclick = async () => {
+          try {
+            assetTopoBtn.disabled = true;
+            assetTopoBtn.textContent = "Adding...";
+            const r = await fetch("/api/topology/add-node", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                asset_id: h.id,
+                hostname: h.hostname || "",
+                ip: h.ip || "",
+              }),
+            });
+            if (r.ok) {
+              assetTopoBtn.textContent = "Already in Attack Topology";
+              setDisabled(true);
+            } else {
+              const err = await r.json().catch(() => ({}));
+              assetTopoMsg.textContent = err.detail || "Failed to add node";
+              assetTopoMsg.style.color = "#f87171";
+              assetTopoBtn.textContent = "Add to Attack Topology";
+              setDisabled(false);
+            }
+          } catch (e) {
+            assetTopoMsg.textContent = "Error: " + e.message;
+            assetTopoMsg.style.color = "#f87171";
+            assetTopoBtn.textContent = "Add to Attack Topology";
+            setDisabled(false);
+          }
+        };
+      }
+    }
+
+    function bindServiceLinks() {
+      assetServicesList.querySelectorAll("[data-open-service]").forEach(a => {
+        a.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          window.ReconSidebar && window.ReconSidebar.openService(parseInt(a.getAttribute("data-open-service"), 10));
+        });
+      });
+    }
+
     document.querySelectorAll("[data-open-host]").forEach(a => {
-      a.addEventListener("click", (ev) => {
+      a.addEventListener("click", async (ev) => {
         ev.preventDefault();
-        window.ReconSidebar && window.ReconSidebar.openHost(parseInt(a.getAttribute("data-open-host"), 10));
+        const hostId = parseInt(a.getAttribute("data-open-host"), 10);
+        try {
+          const r = await fetch(`/api/host/${hostId}`);
+          const j = await r.json();
+          if (j.ok) {
+            populateAssetForm(j);
+            bindNoteDeleteHandlers();
+            bindServiceLinks();
+            setupTopologyBtn(j);
+            showAssetDetail();
+          }
+        } catch (e) {
+          console.error("Failed to load host:", e);
+        }
       });
     });
 
     const btn = document.getElementById("createAssetBtn");
-    btn && btn.addEventListener("click", () => window.ReconSidebar && window.ReconSidebar.openHostCreate());
+    btn && btn.addEventListener("click", () => {
+      clearAssetForm();
+      showAssetDetail();
+    });
 
     const showOut = document.getElementById("showOut");
     showOut && showOut.addEventListener("change", () => {

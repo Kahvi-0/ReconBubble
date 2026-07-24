@@ -1,0 +1,314 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Names</h1>
+
+<div class="card" style="margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; gap:12px;">
+  <button class="btn" id="createNameBtn" type="button">Add name</button>
+</div>
+
+<div class="card">
+  <h2>Names</h2>
+  {% if names %}
+  <table>
+    <thead><tr><th>First</th><th>Middle</th><th>Last</th><th>Email</th><th>Phone</th><th>AD Username</th><th>Tags</th><th style="width:60px;"></th></tr></thead>
+    <tbody>
+      {% for n in names %}
+       <tr class="name-row" data-id="{{ n.id }}" data-first="{{ n.first_name }}" data-middle="{{ n.middle_name }}" data-last="{{ n.last_name }}" data-email="{{ n.email }}" data-phone="{{ n.phone }}" data-ad-username="{{ n.ad_username }}" data-tags="{{ n.tags }}" data-topology-node-id="{{ n.topology_node_id }}" data-compromised="{{ 1 if n.id|string in compromised_name_ids else 0 }}">
+        <td>{{ n.first_name }}</td>
+        <td>{{ n.middle_name }}</td>
+        <td>{{ n.last_name }}</td>
+        <td>{% if n.email %}{{ n.email }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if n.phone %}{{ n.phone }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if n.ad_username %}{{ n.ad_username }}{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if n.id|string in compromised_name_ids %}<span class="topo-badge compromised">Compromised</span>{% endif %}{% if n.ad_username and n.ad_username.strip() %}<span class="topo-badge ad-user">AD User</span>{% endif %}{% if n.tags %}{{ n.tags }}{% endif %}</td>
+        <td>
+          <div class="cred-actions">
+            <button class="cred-action-btn topo-btn" data-name-id="{{ n.id }}" data-topo-node-id="{{ n.topology_node_id }}" data-name-label="{{ n.first_name }} {{ n.last_name }}" data-name-email="{{ n.email }}" data-name-phone="{{ n.phone }}" title="Add to Topology">+</button>
+            <button class="cred-action-btn" data-edit="{{ n.id }}" title="Edit">&#9998;</button>
+            <button class="cred-action-btn del" data-del="{{ n.id }}" title="Delete">&#10005;</button>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">No names yet. Add manually.</p>
+  {% endif %}
+</div>
+
+<style>
+.topo-badge.ad-user { background: #1e3a5f; color: #93c5fd; border: 1px solid #2563eb; }
+</style>
+
+<div id="nameDetail" class="name-detail-panel">
+  <div class="name-detail-header">
+    <span class="name-detail-name"></span>
+    <button class="cred-action-btn" id="closeDetailBtn" title="Close">&times;</button>
+  </div>
+  <div class="name-detail-body">
+    <form id="nameDetailForm">
+      <input type="hidden" name="name_id" id="detailNameId" />
+      <div class="name-detail-row">
+        <div class="name-detail-field">
+          <label>First Name *</label>
+          <input name="first_name" id="detailFirstName" required />
+        </div>
+        <div class="name-detail-field">
+          <label>Middle Name</label>
+          <input name="middle_name" id="detailMiddleName" />
+        </div>
+        <div class="name-detail-field">
+          <label>Last Name *</label>
+          <input name="last_name" id="detailLastName" required />
+        </div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field">
+          <label>Email</label>
+          <input name="email" id="detailEmail" type="email" />
+        </div>
+        <div class="name-detail-field">
+          <label>Phone</label>
+          <input name="phone" id="detailPhone" type="tel" />
+        </div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field">
+          <label>AD Username</label>
+          <input name="ad_username" id="detailAdUsername" />
+        </div>
+        <div class="name-detail-field">
+          <label>Tags</label>
+          <input name="tags" id="detailTags" />
+        </div>
+      </div>
+      <div class="name-detail-actions">
+        <button class="btn" type="submit">Save</button>
+        <div id="formMsg" class="muted"></div>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const overlay = document.getElementById("sidebarOverlay");
+  const sidebar = document.getElementById("sidebar");
+  const title = document.getElementById("sidebarTitle");
+  const body = document.getElementById("sidebarBody");
+  const nameDetail = document.getElementById("nameDetail");
+  const closeDetailBtn = document.getElementById("closeDetailBtn");
+
+  function showSidebar() {
+    overlay.classList.remove("hidden");
+    sidebar.classList.remove("hidden");
+    sidebar.setAttribute("aria-hidden", "false");
+    const topoBtn = document.getElementById("sidebarTopologyBtn");
+    if (topoBtn) {
+      topoBtn.style.display = "none";
+      topoBtn.classList.add("hidden");
+    }
+  }
+
+  function hideSidebar() {
+    overlay.classList.add("hidden");
+    sidebar.classList.add("hidden");
+    sidebar.setAttribute("aria-hidden", "true");
+  }
+
+  function buildNameForm(data) {
+    const f = data ? data.first_name : "";
+    const m = data ? data.middle_name : "";
+    const l = data ? data.last_name : "";
+    const e = data ? (data.email || "") : "";
+    const p = data ? (data.phone || "") : "";
+    const a = data ? (data.ad_username || "") : "";
+    return `
+      <div class="card">
+        <form id="nameForm">
+          <input type="hidden" name="name_id" value="${data ? data.id : ""}" />
+          <label>First Name *</label>
+          <input name="first_name" value="${f}" required />
+          <label style="margin-top:8px;">Middle Name</label>
+          <input name="middle_name" type="text" value="${m}" />
+          <label style="margin-top:8px;">Last Name *</label>
+          <input name="last_name" type="text" value="${l}" required />
+          <label style="margin-top:8px;">Email</label>
+          <input name="email" type="email" value="${e}" />
+          <label style="margin-top:8px;">Phone</label>
+          <input name="phone" type="tel" value="${p}" />
+          <label style="margin-top:8px;">AD Username</label>
+          <input name="ad_username" type="text" value="${a}" />
+          <button class="btn" type="submit" style="margin-top:12px;">${data ? "Update" : "Add"}</button>
+          <div id="formMsg" class="muted" style="margin-top:8px;"></div>
+        </form>
+      </div>
+    `;
+  }
+
+  function attachNameSubmit(isEdit) {
+    const form = document.getElementById("nameForm");
+    form.addEventListener("submit", async (ev) => {
+      ev.preventDefault();
+      const fd = new FormData(form);
+      const endpoint = isEdit ? "/api/names/update" : "/api/names/create";
+      document.getElementById("formMsg").textContent = "Saving...";
+      const r = await fetch(endpoint, { method: "POST", body: fd });
+      const j = await r.json().catch(() => ({ ok: false, error: "Error" }));
+      if (j.ok) {
+        document.getElementById("formMsg").textContent = isEdit ? "Updated!" : "Saved!";
+        setTimeout(() => location.reload(), 400);
+      } else {
+        document.getElementById("formMsg").textContent = j.error || "Error";
+      }
+    });
+  }
+
+  function esc(s) {
+    const d = document.createElement('div');
+    d.textContent = s || '';
+    return d.innerHTML;
+  }
+
+  function showDetail(data) {
+    document.getElementById('detailNameId').value = data.id;
+    document.getElementById('detailFirstName').value = data.first_name;
+    document.getElementById('detailMiddleName').value = data.middle_name || '';
+    document.getElementById('detailLastName').value = data.last_name;
+    document.getElementById('detailEmail').value = data.email || '';
+    document.getElementById('detailPhone').value = data.phone || '';
+    document.getElementById('detailAdUsername').value = data.ad_username || '';
+    document.getElementById('detailTags').value = data.tags || '';
+    document.querySelector('.name-detail-name').textContent = `${data.first_name} ${data.last_name}`;
+    nameDetail.classList.add('active');
+  }
+
+  function hideDetail() {
+    nameDetail.classList.remove('active');
+  }
+
+  document.getElementById('createNameBtn').addEventListener('click', () => {
+    title.textContent = "Add Name";
+    body.innerHTML = buildNameForm(null);
+    showSidebar();
+    attachNameSubmit(false);
+  });
+
+  document.querySelectorAll('[data-edit]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const row = btn.closest('tr');
+      const data = {
+        id: btn.getAttribute('data-edit'),
+        first_name: row.getAttribute('data-first'),
+        middle_name: row.getAttribute('data-middle'),
+        last_name: row.getAttribute('data-last'),
+        email: row.getAttribute('data-email'),
+        phone: row.getAttribute('data-phone'),
+        ad_username: row.getAttribute('data-ad-username'),
+        tags: row.getAttribute('data-tags'),
+      };
+      title.textContent = "Edit Name";
+      body.innerHTML = buildNameForm(data);
+      showSidebar();
+      attachNameSubmit(true);
+    });
+  });
+
+  document.querySelectorAll('[data-del]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const nameId = btn.getAttribute('data-del');
+      if (!confirm("Delete this name?")) return;
+      const fd = new FormData();
+      fd.append("name_id", nameId);
+      await fetch("/api/names/delete", { method: "POST", body: fd });
+      location.reload();
+    });
+  });
+
+document.querySelectorAll('.topo-btn').forEach(btn => {
+  const topoNodeId = btn.getAttribute('data-topo-node-id');
+
+  if (topoNodeId) {
+    btn.textContent = "✓";
+    btn.title = "Already in topology";
+    btn.disabled = true;
+    btn.classList.add('topo-in');
+    return;
+  }
+
+  btn.title = "Add to topology";
+  btn.classList.add('topo-topo');
+
+  btn.addEventListener('click', async () => {
+    const label = btn.getAttribute('data-name-label');
+    const email = btn.getAttribute('data-name-email') || '';
+    const phone = btn.getAttribute('data-name-phone') || '';
+    const nameId = btn.getAttribute('data-name-id');
+    btn.disabled = true;
+    btn.textContent = "...";
+    try {
+      const r = await fetch("/api/topology/add-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label, email, phone, name_id: nameId })
+      });
+      const j = await r.json();
+      if (j.ok) {
+        btn.textContent = "✓";
+        btn.title = "Already in topology";
+        btn.classList.remove('topo-topo');
+        btn.classList.add('topo-in');
+        btn.setAttribute('data-topo-node-id', j.node.id);
+      } else {
+        alert(j.error || "Failed to add user to topology");
+        btn.textContent = "+";
+        btn.disabled = false;
+      }
+    } catch (e) {
+      alert("Error: " + e.message);
+      btn.textContent = "+";
+      btn.disabled = false;
+    }
+  });
+});
+
+  document.querySelectorAll('.name-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.cred-actions')) return;
+      const data = {
+        id: row.getAttribute('data-id'),
+        first_name: row.getAttribute('data-first'),
+        middle_name: row.getAttribute('data-middle'),
+        last_name: row.getAttribute('data-last'),
+        email: row.getAttribute('data-email'),
+        phone: row.getAttribute('data-phone'),
+        ad_username: row.getAttribute('data-ad-username'),
+        tags: row.getAttribute('data-tags'),
+      };
+      showDetail(data);
+    });
+  });
+
+  closeDetailBtn.addEventListener('click', hideDetail);
+
+  document.getElementById('nameDetailForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const form = ev.target;
+    const fd = new FormData(form);
+    document.getElementById('formMsg').textContent = "Saving...";
+    const r = await fetch("/api/names/update", { method: "POST", body: fd });
+    const j = await r.json().catch(() => ({ ok: false, error: "Error" }));
+    if (j.ok) {
+      document.getElementById('formMsg').textContent = "Saved!";
+      setTimeout(() => {
+        hideDetail();
+        location.reload();
+      }, 400);
+    } else {
+      document.getElementById('formMsg').textContent = j.error || "Error";
+    }
+  });
+</script>
+{% endblock %}

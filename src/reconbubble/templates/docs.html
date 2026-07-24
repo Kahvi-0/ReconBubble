@@ -20,4 +20,101 @@
     {% endfor %}
   </tbody>
 </table>
+
+<div class="card" style="margin-top:20px;">
+  <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+    <h2 style="margin:0;">Extracted Names</h2>
+    <select id="nameFieldFilter" style="padding:4px 8px;">
+      <option value="">All fields</option>
+      {% for f in name_fields %}
+      <option value="{{ f }}">{{ f }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn" id="refreshNamesBtn" style="margin-left:auto;">Refresh</button>
+  </div>
+  <p class="muted" style="margin-top:8px;">Names are automatically extracted from document metadata on upload. Scans common fields (Author, Creator, Manager, etc.)</p>
+  <table id="namesTable" style="margin-top:10px;">
+    <thead><tr><th>Name</th><th>Metadata Field</th><th>Source Document</th></tr></thead>
+    <tbody id="namesBody"></tbody>
+  </table>
+</div>
+
+<div class="card" style="margin-top:20px;">
+  <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+    <h2 style="margin:0;">Extracted Software</h2>
+    <select id="softwareFieldFilter" style="padding:4px 8px;">
+      <option value="">All fields</option>
+      {% for f in software_fields %}
+      <option value="{{ f }}">{{ f }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn" id="refreshSoftwareBtn" style="margin-left:auto;">Refresh</button>
+  </div>
+  <p class="muted" style="margin-top:8px;">Software and tools extracted from document metadata (Producer, Application, etc.)</p>
+  <table id="softwareTable" style="margin-top:10px;">
+    <thead><tr><th>Software</th><th>Metadata Field</th><th>Source Document</th></tr></thead>
+    <tbody id="softwareBody"></tbody>
+  </table>
+</div>
+
+<script>
+const namesBody = document.getElementById('namesBody');
+const fieldFilter = document.getElementById('nameFieldFilter');
+
+function loadNames(field) {
+  const url = new URL('/api/doc/names', location.origin);
+  if (field) url.searchParams.set('field', field);
+  fetch(url)
+    .then(r => r.json())
+    .then(data => {
+      namesBody.innerHTML = '';
+      if (!data.length) {
+        namesBody.innerHTML = '<tr><td colspan="3" class="muted">No names found in document metadata.</td></tr>';
+        return;
+      }
+      data.forEach(r => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${esc(r.name)}</td><td>${esc(r.meta_field)}</td><td>${esc(r.source_file)}</td>`;
+        namesBody.appendChild(tr);
+      });
+    });
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
+}
+
+fieldFilter.addEventListener('change', () => loadNames(fieldFilter.value));
+document.getElementById('refreshNamesBtn').addEventListener('click', () => loadNames(fieldFilter.value));
+
+const softwareBody = document.getElementById('softwareBody');
+const softwareFilter = document.getElementById('softwareFieldFilter');
+
+function loadSoftware(field) {
+  const url = new URL('/api/doc/software', location.origin);
+  if (field) url.searchParams.set('field', field);
+  fetch(url)
+    .then(r => r.json())
+    .then(data => {
+      softwareBody.innerHTML = '';
+      if (!data.length) {
+        softwareBody.innerHTML = '<tr><td colspan="3" class="muted">No software found in document metadata.</td></tr>';
+        return;
+      }
+      data.forEach(r => {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${esc(r.software)}</td><td>${esc(r.meta_field)}</td><td>${esc(r.source_file)}</td>`;
+        softwareBody.appendChild(tr);
+      });
+    });
+}
+
+softwareFilter.addEventListener('change', () => loadSoftware(softwareFilter.value));
+document.getElementById('refreshSoftwareBtn').addEventListener('click', () => loadSoftware(softwareFilter.value));
+
+loadNames();
+loadSoftware();
+</script>
 {% endblock %}

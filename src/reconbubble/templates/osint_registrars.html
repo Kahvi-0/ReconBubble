@@ -1,0 +1,227 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Registrars</h1>
+
+<button class="btn" id="createRegistrarBtn" style="margin-bottom:12px;">+ New Root Domain</button>
+
+<div class="card" style="padding:0;">
+  <table class="striped" style="width:100%;">
+    <thead>
+      <tr>
+        <th style="width:22%;">Root Domain</th>
+        <th style="width:12%;">ASN</th>
+        <th style="width:16%;">Registrar</th>
+        <th style="width:14%;">Netblocks</th>
+        <th>Subdomains &amp; IPs</th>
+        <th style="width:60px;"></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for root, subs in grouped.items() %}
+      <tr>
+        <td style="vertical-align:top;">
+          <span class="badge">{{ root }}</span>
+        </td>
+        <td style="vertical-align:top;">
+          {% if root_info[root].asn %}
+            <span class="badge" style="background:#1e3a5f; color:#bfdbfe;">{{ root_info[root].asn }}</span>
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td style="vertical-align:top;">
+          {% if root_info[root].registrar %}
+            <span class="badge" style="background:#312e81; color:#e0e7ff;">{{ root_info[root].registrar }}</span>
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td style="vertical-align:top;">
+          {% if root_info[root].netblocks %}
+            <div style="display:flex; flex-direction:column; gap:3px;">
+              {% for nb in root_info[root].netblocks.split(",") %}
+                <span class="ip-chip">{{ nb.strip() }}</span>
+              {% endfor %}
+            </div>
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td style="vertical-align:top;">
+          {% if manual_sub_ips.get(root) %}
+          <div style="display:flex; flex-direction:column; gap:4px; font-family:monospace;">
+            {% for line in manual_sub_ips[root].split('\n') %}
+              {% set parts = line.strip().split() %}
+              {% if parts %}
+              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+                <span style="color:#93c5fd;">{{ parts[0] }}</span>
+                {% if parts|length > 1 %}
+                  {% for ip in parts[1:] %}
+                    <span class="ip-chip">{{ ip }}</span>
+                  {% endfor %}
+                {% else %}
+                  <span class="muted">no IPs</span>
+                {% endif %}
+              </div>
+              {% endif %}
+            {% endfor %}
+          </div>
+          {% elif subs %}
+          <div style="display:flex; flex-direction:column; gap:4px;">
+            {% for sub in subs %}
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <span style="font-family:monospace; color:#93c5fd;">{{ sub.fqdn }}</span>
+              {% if sub.prowl_ips %}
+                <span style="display:flex; flex-direction:column; gap:2px;">
+                  {% for ip in sub.prowl_ips.split(",") %}
+                    <span class="ip-chip">{{ ip.strip() }}</span>
+                  {% endfor %}
+                </span>
+              {% else %}
+                <span class="muted">no IPs</span>
+              {% endif %}
+            </div>
+            {% endfor %}
+          </div>
+          {% else %}
+          <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td style="vertical-align:top;">
+          <div style="display:flex; gap:6px; flex-direction:column;">
+            <div style="display:flex; gap:6px;">
+              <button class="btn btn-small" data-open-registrar="{{ root }}">Edit</button>
+              <button class="btn btn-small" data-delete-registrar="{{ root }}" style="background:#7f1d1d; color:#fecaca;">Delete</button>
+            </div>
+            <button class="btn btn-small" data-topology-domain="{{ root }}" style="background:#065f46; color:#a7f3d0; margin-top:4px;">+ Topology</button>
+            <button class="btn btn-small" data-copy-registrar="{{ root }}" style="background:#374151; color:#d1d5db; margin-top:4px;">Copy</button>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+      {% if not grouped %}
+      <tr>
+        <td colspan="6" style="text-align:center; padding:40px;">
+          <span class="muted">No registrar data found. Upload a Prowler Phase 1 JSON file to populate this view.</span>
+        </td>
+      </tr>
+      {% endif %}
+    </tbody>
+  </table>
+</div>
+
+<script>
+document.querySelectorAll("[data-open-registrar]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const root = btn.getAttribute("data-open-registrar");
+    window.ReconSidebar && window.ReconSidebar.openRegistrarEdit(root);
+  });
+});
+document.querySelectorAll("[data-delete-registrar]").forEach(btn => {
+  btn.addEventListener("click", async () => {
+    const root = btn.getAttribute("data-delete-registrar");
+    if (!confirm(`Delete all manual registrar data for "${root}"?`)) return;
+    const resp = await fetch(`/api/registrar?domain=${encodeURIComponent(root)}`);
+    const data = await resp.json();
+    if (data.item && data.item.id) {
+      const fd = new FormData();
+      fd.append("registrar_id", data.item.id);
+      await fetch("/api/registrar/delete", { method: "POST", body: fd });
+    }
+    location.reload();
+  });
+});
+(async () => {
+  const topologyNodes = await (async () => {
+    try {
+      const r = await fetch("/api/topology");
+      if (!r.ok) return [];
+      const j = await r.json();
+      if (!j.ok) return [];
+      return (j.map && j.map.nodes) || [];
+    } catch { return []; }
+  })();
+
+  document.querySelectorAll("[data-topology-domain]").forEach(btn => {
+    const root = btn.getAttribute("data-topology-domain");
+    const alreadyInTopology = topologyNodes.some(n => n.label === root && n.type === "domain");
+
+    const setDisabled = (disabled) => {
+      btn.disabled = disabled;
+      btn.classList.toggle("btn--disabled", disabled);
+    };
+
+    if (alreadyInTopology) {
+      btn.textContent = "In Topology ✓";
+      setDisabled(true);
+      return;
+    }
+
+    setDisabled(false);
+    btn.addEventListener("click", async () => {
+      btn.disabled = true;
+      btn.textContent = "Adding...";
+      try {
+        const resp = await fetch(`/api/registrar?domain=${encodeURIComponent(root)}`);
+        const data = await resp.json();
+        const item = data.item || {};
+        const r = await fetch("/api/topology/add-domain", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            domain: root,
+            asn: item.asn || "",
+            registrar: item.registrar || "",
+            netblocks: item.netblocks || "",
+            subdomain_ips: data.subdomain_ips || "",
+          }),
+        });
+        const j = await r.json();
+        if (j.ok) {
+          btn.textContent = "In Topology ✓";
+          setDisabled(true);
+        } else {
+          alert(j.error || "Failed to add domain to topology");
+          btn.textContent = "+ Topology";
+          setDisabled(false);
+        }
+      } catch (e) {
+        alert("Error: " + e.message);
+        btn.textContent = "+ Topology";
+        setDisabled(false);
+      }
+    });
+  });
+
+  document.querySelectorAll("[data-copy-registrar]").forEach(btn => {
+    const root = btn.getAttribute("data-copy-registrar");
+    btn.addEventListener("click", async () => {
+      try {
+        const r = await fetch(`/api/registrar/copy?domain=${encodeURIComponent(root)}`);
+        const j = await r.json();
+        if (j.text) {
+          if (j.html) {
+            const htmlBlob = new Blob([j.html], { type: "text/html" });
+            const textBlob = new Blob([j.text], { type: "text/plain" });
+            const item = new ClipboardItem({
+              "text/html": htmlBlob,
+              "text/plain": textBlob
+            });
+            await navigator.clipboard.write([item]);
+          } else {
+            await navigator.clipboard.writeText(j.text);
+          }
+          btn.textContent = "Copied ✓";
+          setTimeout(() => { btn.textContent = "Copy"; }, 2000);
+        }
+      } catch (e) {
+        alert("Copy failed: " + e.message);
+      }
+    });
+  });
+})();
+document.getElementById("createRegistrarBtn") && document.getElementById("createRegistrarBtn").addEventListener("click", () => {
+  window.ReconSidebar && window.ReconSidebar.openRegistrarCreate();
+});
+</script>
+{% endblock %}

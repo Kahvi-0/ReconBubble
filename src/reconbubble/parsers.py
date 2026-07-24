@@ -17,6 +17,9 @@ from .models import (
     Credential,
     SocialMedia,
     WebUrl,
+    NameItem,
+    DocExtractedName,
+    DocExtractedSoftware,
 )
 from .workspace import sha256_file
 
@@ -150,6 +153,247 @@ def import_emails(session: Session, artifact: Artifact, path: Path) -> int:
             continue
         session.add(Email(email=s, domain=dom))
         count += 1
+    session.commit()
+    return count
+
+
+def import_names(session: Session, artifact: Artifact, path: Path) -> int:
+    count = 0
+    seen = set()
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        parts = s.split()
+        if len(parts) < 2:
+            continue
+        if len(parts) == 2:
+            first_name, middle_name, last_name = parts[0], "", parts[1]
+        elif len(parts) == 3:
+            first_name, middle_name, last_name = parts
+        else:
+            first_name = parts[0]
+            middle_name = " ".join(parts[1:-1])
+            last_name = parts[-1]
+        first_name = first_name.strip().title()
+        middle_name = middle_name.strip().title() if middle_name else ""
+        last_name = last_name.strip().title()
+        key = (first_name.lower(), middle_name.lower(), last_name.lower())
+        if key in seen:
+            continue
+        existing = session.scalar(
+            select(NameItem).where(
+                NameItem.first_name.ilike(first_name),
+                NameItem.middle_name.ilike(middle_name or "%"),
+                NameItem.last_name.ilike(last_name),
+            )
+        )
+        if existing:
+            continue
+        seen.add(key)
+        session.add(NameItem(first_name=first_name, middle_name=middle_name, last_name=last_name))
+        count += 1
+    session.commit()
+    return count
+
+
+DOC_NAME_FIELDS = {
+    "author",
+    "creator",
+    "lastmodifiedby",
+    "lastsaveby",
+    "manager",
+    "owner",
+    "editor",
+    "preparer",
+    "contributor",
+    "artist",
+    "photographer",
+    "publisher",
+    "documentauthor",
+    "lastprintdate",
+    "dc_creator",
+    "xmp_creator",
+    "exif_artist",
+    "iptc_byline",
+    "iptc_byline_title",
+    "xmp_creator",
+    "pdf_author",
+    "doc_author",
+}
+
+
+def _looks_like_name(value: str) -> bool:
+    v = (value or "").strip()
+    if not v or len(v) < 3:
+        return False
+    if "@" in v:
+        return False
+    parts = v.split()
+    if len(parts) < 2:
+        return False
+    for p in parts:
+        if len(p) < 2:
+            return False
+    lower = v.lower()
+    not_name = {
+        "unknown", "anonymous", "none", "system", "administrator",
+        "root", "user", "temp", "default", "microsoft", "company",
+        "organization", "untitled", "document", "word document",
+    }
+    if lower in not_name:
+        return False
+    return True
+
+
+def _meta_get(meta: dict, field: str) -> str | None:
+    """Case-insensitive lookup in metadata dict."""
+    fl = field.lower()
+    for k, v in meta.items():
+        if k.lower() == fl:
+            return v if isinstance(v, str) else str(v)
+    return None
+
+
+DOC_SOFTWARE_FIELDS = {
+    "producer",
+    "creator_tool",
+    "application",
+    "software",
+    "program",
+    "generator",
+    "xmp_tool",
+    "pdfa_part",
+    "appversion",
+    "exif_software",
+    "iptc_software",
+    "xmp_software",
+    "source",
+    "engineer",
+    "createdby",
+}
+
+
+def extract_doc_software(session: Session, meta_fields: set[str] | None = None) -> int:
+    if meta_fields is None:
+        meta_fields = DOC_SOFTWARE_FIELDS
+    target_fields = meta_fields & DOC_SOFTWARE_FIELDS
+    if not target_fields:
+        return 0
+    documents = session.execute(select(Document)).scalars().all()
+    count = 0
+    seen = set()
+    for doc in documents:
+        meta = {}
+        if doc.meta_json:
+            try:
+                meta = json.loads(doc.meta_json)
+            except Exception:
+                pass
+        if not meta:
+            continue
+        source = doc.title or ""
+        for field in target_fields:
+            val = _meta_get(meta, field)
+            if not val:
+                continue
+            val = val.strip()
+            if len(val) < 2 or len(val) > 200:
+                continue
+            norm = val.strip()
+            key = (norm.lower(), field.lower(), doc.id)
+            if key in seen:
+                continue
+            existing = session.scalar(
+                select(DocExtractedSoftware).where(
+                    DocExtractedSoftware.software == norm,
+                    DocExtractedSoftware.meta_field == field,
+                    DocExtractedSoftware.document_id == doc.id,
+                )
+            )
+            if existing:
+                continue
+            seen.add(key)
+            session.add(DocExtractedSoftware(
+                software=norm,
+                meta_field=field,
+                document_id=doc.id,
+                source_file=source,
+            ))
+            count += 1
+    session.commit()
+    return count
+
+
+def extract_doc_names(session: Session, meta_fields: set[str] | None = None) -> int:
+    if meta_fields is None:
+        meta_fields = DOC_NAME_FIELDS
+    target_fields = meta_fields & DOC_NAME_FIELDS
+    if not target_fields:
+        return 0
+    documents = session.execute(select(Document)).scalars().all()
+    count = 0
+    seen = set()
+    name_seen = set()
+    for doc in documents:
+        meta = {}
+        if doc.meta_json:
+            try:
+                meta = json.loads(doc.meta_json)
+            except Exception:
+                pass
+        if not meta:
+            continue
+        source = doc.title or ""
+        for field in target_fields:
+            val = _meta_get(meta, field)
+            if not val or not _looks_like_name(val):
+                continue
+            norm = val.strip().title()
+            key = (norm.lower(), field.lower(), doc.id)
+            if key in seen:
+                continue
+            existing = session.scalar(
+                select(DocExtractedName).where(
+                    DocExtractedName.name == norm,
+                    DocExtractedName.meta_field == field,
+                    DocExtractedName.document_id == doc.id,
+                )
+            )
+            if existing:
+                continue
+            seen.add(key)
+            session.add(DocExtractedName(
+                name=norm,
+                meta_field=field,
+                document_id=doc.id,
+                source_file=source,
+            ))
+            count += 1
+            parts = norm.split()
+            if len(parts) == 2:
+                first_name, middle_name, last_name = parts[0], "", parts[1]
+            elif len(parts) == 3:
+                first_name, middle_name, last_name = parts
+            elif len(parts) > 3:
+                first_name = parts[0]
+                middle_name = " ".join(parts[1:-1])
+                last_name = parts[-1]
+            else:
+                continue
+            name_key = (first_name.lower(), middle_name.lower(), last_name.lower())
+            if name_key in name_seen:
+                continue
+            existing_name = session.scalar(
+                select(NameItem).where(
+                    NameItem.first_name.ilike(first_name),
+                    NameItem.middle_name.ilike(middle_name or "%"),
+                    NameItem.last_name.ilike(last_name),
+                )
+            )
+            if not existing_name:
+                name_seen.add(name_key)
+                session.add(NameItem(first_name=first_name, middle_name=middle_name, last_name=last_name))
     session.commit()
     return count
 
@@ -392,7 +636,7 @@ def exiftool_json(path: Path, timeout: int = 10) -> dict:
         return {"_error": "failed to parse exiftool output"}
 
 
-def import_valid_users(session: Session, artifact: Artifact, path: Path) -> int:
+def import_ad_users(session: Session, artifact: Artifact, path: Path) -> int:
     count = 0
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         s = line.strip()
@@ -401,9 +645,28 @@ def import_valid_users(session: Session, artifact: Artifact, path: Path) -> int:
         s = s.split()[0].strip()
         if not s:
             continue
-        if session.scalar(select(ValidUser).where(ValidUser.username == s)):
+        existing = session.scalar(select(NameItem).where(NameItem.ad_username == s))
+        if existing:
             continue
-        session.add(ValidUser(username=s, source=artifact.filename))
+        session.add(NameItem(first_name="", middle_name="", last_name="", ad_username=s))
+        count += 1
+    session.commit()
+    return count
+
+
+def import_names_emails(session: Session, artifact: Artifact, path: Path) -> int:
+    count = 0
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        s = s.split()[0].strip()
+        if not s or "@" not in s:
+            continue
+        existing = session.scalar(select(NameItem).where(NameItem.email == s))
+        if existing:
+            continue
+        session.add(NameItem(first_name="", middle_name="", last_name="", email=s))
         count += 1
     session.commit()
     return count

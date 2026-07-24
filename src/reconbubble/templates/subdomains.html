@@ -22,8 +22,8 @@
     <summary>
       <span class="scope-dot {% if subs[0].in_scope %}in{% else %}out{% endif %}" title="Domain scope: {% if subs[0].in_scope %}IN{% else %}OUT{% endif %}">●</span>
       <a href="#" class="domain-link" data-domain="{{ domain }}" data-rdap='{{ rdap | tojson }}'>{{ domain }}</a>
-      <span class="muted">({{ subs|length }} subdomains)</span>
       {% if subs|selectattr('sensitive')|list|length > 0 %}<span class="sensitive-banner">Sensitive</span>{% endif %}
+      <span class="muted">({{ subs|length }} subdomains)</span>
     </summary>
     <table style="margin-top:8px;">
       <thead><tr><th style="width:30px;"></th><th>Subdomain</th><th>Prowler IPs</th><th>Resolved IPs</th><th>URLs</th></tr></thead>
@@ -34,11 +34,10 @@
         <tr>
           <td>
             <span class="scope-dot {% if s.in_scope %}in{% else %}out{% endif %}">●</span>
-            {% if s.sensitive %}<span class="sensitive-banner">Sensitive</span>{% endif %}
           </td>
-          <td><a href="#" class="sub-link" data-fqdn="{{ s.fqdn }}" data-prowl='{{ s.prowl | tojson }}'>{{ s.fqdn }}</a></td>
-          <td>{% if s.prowl and s.prowl.ips %}<code>{{ s.prowl.ips }}</code>{% else %}<span class="muted">-</span>{% endif %}</td>
-          <td>{% if s.ips %}{% for ip in s.ips %}<code>{{ ip }}</code> {% endfor %}{% else %}<span class="muted">-</span>{% endif %}</td>
+          <td><a href="#" class="sub-link" data-fqdn="{{ s.fqdn }}" data-prowl='{{ s.prowl | tojson }}'>{{ s.fqdn }}</a>{% if s.sensitive %}<span class="sensitive-banner">Sensitive</span>{% endif %}</td>
+          <td>{% if s.prowl and s.prowl.ips %}{% for ip in s.prowl.ips.split(', ') %}<code class="ip-chip">{{ ip }}</code>{% if ip in s.sensitive_ips %}<span class="sensitive-banner">Sensitive</span>{% endif %}{% endfor %}{% else %}<span class="muted">-</span>{% endif %}</td>
+          <td>{% if s.ips %}{% for ip in s.ips %}<code class="ip-chip">{{ ip }}</code>{% if ip in s.sensitive_ips %}<span class="sensitive-banner">Sensitive</span>{% endif %}{% endfor %}{% else %}<span class="muted">-</span>{% endif %}</td>
           {% if has_urls %}
           <td style="white-space:nowrap;">
             <button class="btn btn-sm url-toggle" onclick="toggleDetails('{{ url_id }}')">URLs ({{ s.urls|length }})</button>
@@ -49,7 +48,7 @@
         </tr>
         {% if has_urls %}
         <tr class="url-row">
-          <td colspan="5">
+          <td colspan="4">
             <details class="url-details" id="{{ url_id }}">
               <summary><strong>🌐 URLs ({{ s.urls|length }})</strong></summary>
               <ul class="url-list">
@@ -104,6 +103,7 @@
 .status-pill.ok { background: rgba(0,255,0,0.2); color: #00ff00; }
 .status-pill.err { background: rgba(255,0,0,0.2); color: #ff3333; }
 .url-toggle { cursor: pointer; }
+.ip-chip { display: block; margin: 2px 0; font-size: 12px; }
 </style>
 
 <script>
@@ -121,6 +121,8 @@
       u.searchParams.set("show_out", showOut.checked ? "1" : "0");
       window.location.href = u.toString();
     });
+
+
 
     document.querySelectorAll(".domain-link").forEach(link => {
       link.addEventListener("click", (ev) => {

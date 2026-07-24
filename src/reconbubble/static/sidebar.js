@@ -793,6 +793,120 @@ async function openCloud(id) {
   });
 }
 
-window.ReconSidebar = { openHost, openService, openSubdomain, openHostCreate, openCloud, openCloudCreate, hide };
+async function openRegistrarEdit(rootDomain) {
+  const resp = await fetch(`/api/registrar?domain=${encodeURIComponent(rootDomain)}`);
+  if (!resp.ok) return;
+  const data = await resp.json();
+  const item = data.item || {};
+  const hasExisting = !!item.id;
+  const subdomainText = data.subdomain_ips || '';
+
+  const backBtn = document.getElementById("sidebarBack");
+  if (backBtn) backBtn.style.display = "none";
+  title.textContent = `Registrar: ${esc(rootDomain)}`;
+
+  body.innerHTML = `
+    <div class="card">
+      <h2>Edit registrar info</h2>
+      <form id="registrarEditForm">
+        <input type="hidden" name="has_existing" value="${hasExisting ? '1' : '0'}" />
+        ${hasExisting ? `<input type="hidden" name="registrar_id" value="${item.id}" />` : ""}
+        <label>Root Domain</label>
+        <input name="domain" value="${esc(item.domain || rootDomain)}" required />
+        <label>ASN</label>
+        <input name="asn" value="${esc(item.asn || '')}" placeholder="e.g., AS15169" />
+        <label>Registrar</label>
+        <input name="registrar" value="${esc(item.registrar || '')}" />
+        <label>Netblocks (comma-separated)</label>
+        <textarea name="netblocks" rows="2" placeholder="192.0.2.0/24,198.51.100.0/24">${esc(item.netblocks || '')}</textarea>
+        <label>Subdomains &amp; IPs (one per line: subdomain ip1 ip2 ...)</label>
+        <textarea name="subdomain_ips" rows="8" placeholder="www.example.com 93.184.216.34&#10;mail.example.com 93.184.216.35">${esc(subdomainText)}</textarea>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          <button class="btn" type="submit">Save</button>
+          ${hasExisting ? `<button class="btn" type="button" id="registrarDeleteBtn">Delete</button>` : ""}
+        </div>
+        <div id="registrarEditMsg" class="muted" style="margin-top:8px;"></div>
+      </form>
+    </div>
+  `;
+  show();
+
+  const form = document.getElementById("registrarEditForm");
+  const msg = document.getElementById("registrarEditMsg");
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    msg.textContent = "Saving...";
+    const fd = new FormData(form);
+    const existing = fd.get("has_existing") === "1";
+    const endpoint = existing ? "/api/registrar/update" : "/api/registrar/create";
+    const r = await fetch(endpoint, { method: "POST", body: fd });
+    const j = await r.json().catch(() => ({ ok: false }));
+    if (j.ok) {
+      msg.textContent = "Saved.";
+      setTimeout(() => location.reload(), 300);
+    } else {
+      msg.textContent = j.error || "Save failed.";
+    }
+  });
+
+  const deleteBtn = document.getElementById("registrarDeleteBtn");
+  if (deleteBtn) {
+    deleteBtn.addEventListener("click", async () => {
+      if (!confirm("Delete this registrar entry?")) return;
+      const fd = new FormData(form);
+      const r = await fetch("/api/registrar/delete", { method: "POST", body: fd });
+      if (r.ok) location.reload();
+    });
+  }
+}
+
+async function openRegistrarCreate() {
+  const backBtn = document.getElementById("sidebarBack");
+  if (backBtn) backBtn.style.display = "none";
+  title.textContent = "New Registrar Entry";
+  body.innerHTML = `
+    <div class="card">
+      <h2>Add registrar info</h2>
+      <form id="registrarCreateForm">
+        <label>Root Domain</label>
+        <input name="domain" placeholder="example.com" required />
+        <label>ASN</label>
+        <input name="asn" placeholder="e.g., AS15169" />
+        <label>Registrar</label>
+        <input name="registrar" />
+        <label>Netblocks (comma-separated)</label>
+        <textarea name="netblocks" rows="2" placeholder="192.0.2.0/24,198.51.100.0/24"></textarea>
+        <label>Subdomains &amp; IPs (one per line: subdomain ip1 ip2 ...)</label>
+        <textarea name="subdomain_ips" rows="8" placeholder="www.example.com 93.184.216.34&#10;mail.example.com 93.184.216.35"></textarea>
+        <div style="display:flex; gap:8px; margin-top:10px;">
+          <button class="btn" type="submit">Create</button>
+          <button class="btn" type="button" id="registrarCancelBtn">Cancel</button>
+        </div>
+        <div id="registrarCreateMsg" class="muted" style="margin-top:8px;"></div>
+      </form>
+    </div>
+  `;
+  show();
+
+  const form = document.getElementById("registrarCreateForm");
+  const msg = document.getElementById("registrarCreateMsg");
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    msg.textContent = "Creating...";
+    const fd = new FormData(form);
+    const r = await fetch("/api/registrar/create", { method: "POST", body: fd });
+    const j = await r.json().catch(() => ({ ok: false }));
+    if (j.ok) {
+      msg.textContent = "Created.";
+      setTimeout(() => location.reload(), 300);
+    } else {
+      msg.textContent = j.error || "Create failed.";
+    }
+  });
+
+  document.getElementById("registrarCancelBtn").addEventListener("click", hide);
+}
+
+window.ReconSidebar = { openHost, openService, openSubdomain, openHostCreate, openCloud, openCloudCreate, openRegistrarEdit, openRegistrarCreate, hide };
 
 })();

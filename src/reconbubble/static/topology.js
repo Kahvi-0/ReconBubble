@@ -13,6 +13,8 @@
     firewall: "🧱",
     user: "👤",
     domain: "🌐",
+    company: "🏢",
+    asn: "🌍",
   };
 
   const initial = window.TOPOLOGY_DATA || { nodes: [], edges: [] };
@@ -33,6 +35,15 @@
         floating_notes: Array.isArray(n.floating_notes) ? n.floating_notes : [],
         compromised: !!n.compromised,
         linked_asset_id: n.linked_asset_id || "",
+        linked_name_id: n.linked_name_id || "",
+        asn: n.asn || "",
+        registrar: n.registrar || "",
+        netblocks: n.netblocks || "",
+        subdomain_ips: n.subdomain_ips || "",
+        first_name: n.first_name || "",
+        last_name: n.last_name || "",
+        email: n.email || "",
+        phone: n.phone || "",
         display: `${icon}\n\n${label}`,
       },
       position: { x: n.x || 120, y: n.y || 120 },
@@ -570,6 +581,15 @@
       floating_notes: Array.isArray(n.data("floating_notes")) ? n.data("floating_notes") : [],
       compromised: !!n.data("compromised"),
       linked_asset_id: n.data("linked_asset_id") || "",
+      linked_name_id: n.data("linked_name_id") || "",
+      asn: n.data("asn") || "",
+      registrar: n.data("registrar") || "",
+      netblocks: n.data("netblocks") || "",
+      subdomain_ips: n.data("subdomain_ips") || "",
+      first_name: n.data("first_name") || "",
+      last_name: n.data("last_name") || "",
+      email: n.data("email") || "",
+      phone: n.data("phone") || "",
       x: n.position("x"),
       y: n.position("y"),
     }));
@@ -630,6 +650,7 @@
         floating_notes: [],
         compromised: false,
         linked_asset_id: "",
+        linked_name_id: "",
         display: `${icon}\n\n${label} ${nextNodeId - 1}`,
       },
       position: { x, y },
@@ -693,6 +714,7 @@
 
   let allHostsCache = [];
   let currentAssetHosts = [];
+  let allNamesCache = [];
 
   async function loadHosts() {
     if (allHostsCache.length) return allHostsCache;
@@ -702,6 +724,16 @@
       allHostsCache = j.hosts || [];
     } catch (_) {}
     return allHostsCache;
+  }
+
+  async function loadNames() {
+    if (allNamesCache.length) return allNamesCache;
+    try {
+      const r = await fetch("/api/names/list");
+      const j = await r.json();
+      allNamesCache = j.names || [];
+    } catch (_) {}
+    return allNamesCache;
   }
 
   function buildAssetCombobox(targetNode, selectedId) {
@@ -807,6 +839,138 @@
     await renderAssetInfo(targetNode, newId);
   }
 
+  function buildNamesCombobox(targetNode, selectedId) {
+    const wrapId = "topoNameWrap";
+    const inputId = "topoNameInput";
+    const listId = "topoNameList";
+
+    const currentName = allNamesCache.find((n) => String(n.id) === String(selectedId));
+    const displayVal = currentName
+      ? `${currentName.first_name} ${currentName.middle_name} ${currentName.last_name}`.trim()
+      : "";
+
+    const wrap = document.createElement("div");
+    wrap.id = wrapId;
+    wrap.style.position = "relative";
+
+    const input = document.createElement("input");
+    input.id = inputId;
+    input.type = "text";
+    input.placeholder = "Type name to filter...";
+    input.value = displayVal;
+    input.autocomplete = "off";
+
+    const list = document.createElement("div");
+    list.id = listId;
+    list.style.position = "absolute";
+    list.style.top = "100%";
+    list.style.left = "0";
+    list.style.right = "0";
+    list.style.maxHeight = "180px";
+    list.style.overflowY = "auto";
+    list.style.background = "#0f172a";
+    list.style.border = "1px solid #334155";
+    list.style.borderRadius = "6px";
+    list.style.zIndex = "100";
+    list.style.display = "none";
+    list.style.marginTop = "2px";
+
+    wrap.appendChild(input);
+    wrap.appendChild(list);
+
+    function renderList(filter) {
+      list.innerHTML = "";
+      const q = (filter || "").toLowerCase().trim();
+      const filtered = allNamesCache.filter((n) => {
+        if (!q) return true;
+        const search = `${n.first_name} ${n.middle_name} ${n.last_name} ${n.email} ${n.ad_username}`.toLowerCase();
+        return search.includes(q);
+      });
+      if (filtered.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "muted";
+        empty.style.padding = "6px 8px";
+        empty.style.fontSize = "12px";
+        empty.textContent = q ? "No matching names" : "No names";
+        list.appendChild(empty);
+      }
+      filtered.forEach((n) => {
+        const opt = document.createElement("div");
+        opt.style.padding = "6px 8px";
+        opt.style.cursor = "pointer";
+        opt.style.fontSize = "12px";
+        opt.style.borderBottom = "1px solid #1e293b";
+        opt.style.color = String(n.id) === String(selectedId) ? "#60a5fa" : "#cbd5e1";
+        const fullName = `${n.first_name} ${n.middle_name} ${n.last_name}`.trim();
+        const sub = [n.email, n.ad_username].filter(Boolean).join(" · ");
+        opt.innerHTML = `<div>${escapeHtml(fullName)}</div>${sub ? `<div class="muted" style="font-size:10px;">${escapeHtml(sub)}</div>` : ""}`;
+        opt.addEventListener("click", () => {
+          input.value = fullName;
+          list.style.display = "none";
+          onNameSelect(targetNode, n.id);
+        });
+        opt.addEventListener("mouseenter", () => { opt.style.background = "#1e293b"; });
+        opt.addEventListener("mouseleave", () => { opt.style.background = ""; });
+        list.appendChild(opt);
+      });
+    }
+
+    function showList() {
+      list.style.display = "block";
+      renderList(input.value);
+    }
+
+    function hideList() {
+      list.style.display = "none";
+    }
+
+    input.addEventListener("focus", showList);
+    input.addEventListener("input", () => {
+      showList();
+    });
+    input.addEventListener("blur", () => {
+      setTimeout(hideList, 150);
+    });
+
+    renderList(input.value);
+
+    return { wrap, input, list, showList, hideList, renderList };
+  }
+
+  async function onNameSelect(targetNode, nameId) {
+    const newId = String(nameId || "");
+    targetNode.data("linked_name_id", newId);
+    queueSave();
+    await renderNameInfo(targetNode, newId);
+  }
+
+  async function renderNameInfo(node, nameId) {
+    const infoDiv = document.getElementById("topoNameInfo");
+    if (!infoDiv) return;
+
+    if (!nameId) {
+      infoDiv.innerHTML = '<div class="muted" style="margin-top:4px;">No name linked</div>';
+      return;
+    }
+
+    const name = allNamesCache.find((n) => String(n.id) === String(nameId));
+    if (!name) {
+      infoDiv.innerHTML = '<div class="muted" style="margin-top:4px;">Name not found</div>';
+      return;
+    }
+
+    const fullName = `${name.first_name} ${name.middle_name} ${name.last_name}`.trim();
+    let html = `
+      <div style="margin-top:4px; padding:8px; background:#0f172a; border-radius:8px; border:1px solid #2a3545;">
+        <div style="font-weight:600; margin-bottom:4px;">${escapeHtml(fullName)}</div>
+    `;
+    if (name.email) html += `<div style="font-size:11px; margin-top:2px;">📧 ${escapeHtml(name.email)}</div>`;
+    if (name.phone) html += `<div style="font-size:11px; margin-top:2px;">📞 ${escapeHtml(name.phone)}</div>`;
+    if (name.ad_username) html += `<div style="font-size:11px; margin-top:2px;">🔑 ${escapeHtml(name.ad_username)}</div>`;
+    html += `</div>`;
+    infoDiv.innerHTML = html;
+  }
+
   async function renderAssetInfo(node, assetId) {
     const infoDiv = document.getElementById("topoAssetInfo");
     if (!infoDiv) return;
@@ -888,7 +1052,31 @@
     }
     inspectorWrap.style.display = "block";
     const d = node.data();
-    const linkedId = d.linked_asset_id || "";
+    const linkedAssetId = d.linked_asset_id || "";
+    const linkedNameId = d.linked_name_id || "";
+
+    const isDomain = d.type === "domain";
+    const isUser = d.type === "user";
+    const registrarSection = isDomain ? `
+      <div style="margin-top:12px; padding-top:10px; border-top:1px solid #1e2630;">
+        <label>ASN</label>
+        <input id="topoAsn" value="${escapeHtml(d.asn || "")}" placeholder="e.g., AS15169" />
+        <label style="margin-top:8px;">Registrar</label>
+        <input id="topoRegistrar" value="${escapeHtml(d.registrar || "")}" placeholder="e.g., GoDaddy" />
+        <label style="margin-top:8px;">Netblocks</label>
+        <input id="topoNetblocks" value="${escapeHtml(d.netblocks || "")}" placeholder="192.0.2.0/24,198.51.100.0/24" />
+        <label style="margin-top:8px;">Subdomains &amp; IPs</label>
+        <textarea id="topoSubdomainIps" rows="5" style="resize:vertical;" placeholder="www.example.com 93.184.216.34">${escapeHtml(d.subdomain_ips || "")}</textarea>
+      </div>
+    ` : "";
+    const userSection = isUser ? `
+      <div style="margin-top:12px; padding-top:10px; border-top:1px solid #1e2630;">
+        <label>Email</label>
+        <input id="topoEmail" value="${escapeHtml(d.email || "")}" placeholder="user@example.com" />
+        <label style="margin-top:8px;">Phone</label>
+        <input id="topoPhone" value="${escapeHtml(d.phone || "")}" placeholder="+1 (555) 123-4567" />
+      </div>
+    ` : "";
 
     inspector.innerHTML = `
       <label>Label</label>
@@ -900,9 +1088,15 @@
         Mark as compromised
       </label>
       <br/>
-      <label style="margin-top:8px;">Link Asset</label>
-      <div id="topoAssetSelector"></div>
-      <div id="topoAssetInfo"></div>
+      ${isUser
+        ? `<label style="margin-top:8px;">Link Name</label>
+           <div id="topoNameSelector"></div>
+           <div id="topoNameInfo"></div>`
+        : `<label style="margin-top:8px;">Link Asset</label>
+           <div id="topoAssetSelector"></div>
+           <div id="topoAssetInfo"></div>`}
+      ${registrarSection}
+      ${userSection}
       <label style="margin-top:8px;">Notes</label>
       <textarea id="topoNotes" rows="6" style="resize:vertical;">${escapeHtml(d.notes || "")}</textarea>
       <div class="muted" style="margin-top:8px;">Tip: Drag the small orange bubble on a node to another node to create a link.</div>
@@ -940,13 +1134,57 @@
       queueSave();
     });
 
+    const asnEl = document.getElementById("topoAsn");
+    const registrarEl = document.getElementById("topoRegistrar");
+    const netblocksEl = document.getElementById("topoNetblocks");
+    const subdomainIpsEl = document.getElementById("topoSubdomainIps");
+
+    asnEl && asnEl.addEventListener("input", () => {
+      node.data("asn", asnEl.value || "");
+      queueSave();
+    });
+    registrarEl && registrarEl.addEventListener("input", () => {
+      node.data("registrar", registrarEl.value || "");
+      queueSave();
+    });
+    netblocksEl && netblocksEl.addEventListener("input", () => {
+      node.data("netblocks", netblocksEl.value || "");
+      queueSave();
+    });
+    subdomainIpsEl && subdomainIpsEl.addEventListener("input", () => {
+      node.data("subdomain_ips", subdomainIpsEl.value || "");
+      queueSave();
+    });
+
+    const emailEl = document.getElementById("topoEmail");
+    const phoneEl = document.getElementById("topoPhone");
+    emailEl && emailEl.addEventListener("input", () => {
+      node.data("email", emailEl.value || "");
+      queueSave();
+    });
+    phoneEl && phoneEl.addEventListener("input", () => {
+      node.data("phone", phoneEl.value || "");
+      queueSave();
+    });
+
     (async () => {
-      const hosts = await loadHosts();
-      currentAssetHosts = hosts;
-      if (selectorDiv) {
-        const combo = buildAssetCombobox(node, linkedId);
-        selectorDiv.appendChild(combo.wrap);
-        await renderAssetInfo(node, linkedId);
+      if (isUser) {
+        const names = await loadNames();
+        allNamesCache = names;
+        const nameSelectorDiv = document.getElementById("topoNameSelector");
+        if (nameSelectorDiv) {
+          const combo = buildNamesCombobox(node, linkedNameId);
+          nameSelectorDiv.appendChild(combo.wrap);
+          await renderNameInfo(node, linkedNameId);
+        }
+      } else {
+        const hosts = await loadHosts();
+        currentAssetHosts = hosts;
+        if (selectorDiv) {
+          const combo = buildAssetCombobox(node, linkedAssetId);
+          selectorDiv.appendChild(combo.wrap);
+          await renderAssetInfo(node, linkedAssetId);
+        }
       }
     })();
   }

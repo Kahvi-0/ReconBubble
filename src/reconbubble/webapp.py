@@ -24,9 +24,11 @@ from .models import (
     Document,
     Note,
     ScopeItem,
+    ScopeExclusion,
     CloudItem,
     ValidUser,
     Credential,
+    NameItem,
     SocialMedia,
     WebUrl,
     DomainInfo,
@@ -34,6 +36,7 @@ from .models import (
     PasswordSprayAttempt,
     AdCredential,
     ProfilingRow,
+    RegistrarInfo,
     AppSettings,
 )
 from .parsers import (
@@ -42,10 +45,14 @@ from .parsers import (
     import_subdomains,
     import_emails,
     import_document,
+    extract_doc_names,
+    extract_doc_software,
     upsert_host,
-    import_valid_users,
+    import_ad_users,
+    import_names_emails,
     import_credentials,
     import_web_urls,
+    import_names,
     import_prowl_phase1,
     import_zone_transfers,
     import_smtp,
@@ -86,6 +93,10 @@ def create_app(
             )
         return count == 0
 
+    def load_scope_exclusions(s: Session) -> set[str]:
+        rows = s.execute(select(ScopeExclusion)).scalars().all()
+        return {r.fqdn.strip().lower().strip(".") for r in rows if r.fqdn.strip()}
+
     # Starlette/FastAPI changed TemplateResponse call style across versions.
     # Support both:
     #   templates.TemplateResponse("name.html", {"request": request, ...})
@@ -116,9 +127,10 @@ def create_app(
 
     # ---- Scope helpers ----
     def scope_sets(s: Session, sensitive_only: bool = False):
-        stmt = select(ScopeItem).where(ScopeItem.in_scope == 1)
         if sensitive_only:
-            stmt = stmt.where(ScopeItem.sensitive == 1)
+            stmt = select(ScopeItem).where(ScopeItem.sensitive == 1)
+        else:
+            stmt = select(ScopeItem).where(ScopeItem.in_scope == 1)
         items = s.execute(stmt).scalars().all()
         ips, subnets, domains, email_domains, domain_all_subs, domain_subs_if_ip = (
             set(),
@@ -144,14 +156,33 @@ def create_app(
                 if getattr(it, "apply_all_subdomains", 0) == 1:
                     domain_all_subs.add(v)
                 if getattr(it, "apply_subdomains_with_in_scope_ip", 0) == 1:
-                    domain_subs_if_ip.add(v)
+                    if not sensitive_only:
+                        domain_subs_if_ip.add(v)
+                    else:
+                        domain_all_subs.add(v)
             elif it.kind == "email_domain":
                 email_domains.add(v)
-        return ips, subnets, domains, email_domains, domain_all_subs, domain_subs_if_ip
+        excluded = load_scope_exclusions(s)
+        # Domains explicitly toggled Out on the scope page also count as exclusions
+        # so they override parent apply_all_subdomains / IP-resolve rules
+        out_items = s.execute(
+            select(ScopeItem)
+            .where(
+                ScopeItem.in_scope == 0,
+                ScopeItem.kind.in_(["domain", "ip", "subnet"]),
+            )
+        ).scalars().all()
+        for it in out_items:
+            v = (it.value or "").strip().lower().strip(".")
+            if v:
+                excluded.add(v)
+        return ips, subnets, domains, email_domains, domain_all_subs, domain_subs_if_ip, excluded
 
-    def ip_in_scope(ip: str, ips: set[str], subnets: list) -> bool:
+    def ip_in_scope(ip: str, ips: set[str], subnets: list, excluded: set[str] | None = None) -> bool:
         ip = (ip or "").strip()
         if not ip:
+            return False
+        if ip in (excluded or set()):
             return False
         if ip in ips:
             return True
@@ -169,15 +200,18 @@ def create_app(
         resolved_ips: list[str] | None = None,
         ips: set[str] | None = None,
         subnets: list | None = None,
+        excluded: set[str] | None = None,
     ) -> bool:
         f = (fqdn or "").strip().lower().strip(".")
         if not f:
+            return False
+        if f in (excluded or set()):
             return False
         needs_ip_match = bool(domain_subs_if_ip and f in domain_subs_if_ip)
         if needs_ip_match:
             ipset = ips or set()
             nets = subnets or []
-            result = any(ip_in_scope(ip, ipset, nets) for ip in (resolved_ips or []))
+            result = any(ip_in_scope(ip, ipset, nets, excluded) for ip in (resolved_ips or []))
             return result
         if f in domains:
             return True
@@ -188,7 +222,7 @@ def create_app(
             if matched:
                 ipset = ips or set()
                 nets = subnets or []
-                return any(ip_in_scope(ip, ipset, nets) for ip in (resolved_ips or []))
+                return any(ip_in_scope(ip, ipset, nets, excluded) for ip in (resolved_ips or []))
         return False
 
     def host_in_scope(
@@ -198,10 +232,11 @@ def create_app(
         subnets: list,
         domains: set[str],
         domain_all_subs: set[str],
+        excluded: set[str] | None = None,
     ) -> bool:
-        if ip_in_scope(ip, ips, subnets):
+        if ip_in_scope(ip, ips, subnets, excluded):
             return True
-        if hostname and domain_in_scope(hostname, domains, domain_all_subs):
+        if hostname and domain_in_scope(hostname, domains, domain_all_subs, None, [], ips, subnets, excluded):
             return True
         return False
 
@@ -213,6 +248,7 @@ def create_app(
         if dom in email_domains:
             return True
         return any(dom.endswith("." + d) for d in email_domains)
+
 
     # ---- Host <-> Subdomain linking ----
     def list_host_domains(s: Session, host_id: int) -> list[str]:
@@ -296,7 +332,7 @@ def create_app(
     def home(request: Request):
         with db() as s:
             # Get scope sets
-            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
 
             # Get all hosts
             hosts = s.execute(select(Host)).scalars().all()
@@ -340,7 +376,7 @@ def create_app(
     def stats_page(request: Request):
         with db() as s:
             # Get scope sets
-            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
 
             # Get all hosts
             hosts = s.execute(select(Host)).scalars().all()
@@ -418,6 +454,13 @@ def create_app(
                 .scalars()
                 .all()
             )
+            exclusions = (
+                s.execute(
+                    select(ScopeExclusion).order_by(ScopeExclusion.created_at.desc())
+                )
+                .scalars()
+                .all()
+            )
 
         return templates.TemplateResponse(
             "scope.html",
@@ -427,6 +470,7 @@ def create_app(
                 "ip_items": ip_items,
                 "email_items": email_items,
                 "scope_error": scope_error,
+                "exclusions": exclusions,
             },
         )
 
@@ -566,16 +610,32 @@ def create_app(
     ):
         """Handle uploads (file or raw paste) and import into DB."""
         stored: str | None = None
+        redirect_map = {
+            "nmap_xml": "/assets",
+            "subdomains": "/subdomains",
+            "names_emails": "/names",
+            "doc": "/docs",
+            "ad_users": "/names",
+            "creds": "/app-credentials",
+            "urls": "/assets",
+            "names": "/names",
+            "bbot": "/subdomains",
+            "prowl_phase1": "/subdomains",
+            "zone_transfers": "/subdomains",
+            "smtp": "/emails",
+            "bbot_cloud": "/cloud",
+        }
         try:
             if raw_text and raw_text.strip():
                 default = {
                     "nmap_xml": "pasted_scan.xml",
                     "subdomains": "pasted_subdomains.txt",
-                    "emails": "pasted_emails.txt",
+                    "names_emails": "pasted_names_emails.txt",
                     "doc": "pasted_document.bin",
-                    "users": "pasted_users.txt",
+                    "ad_users": "pasted_ad_users.txt",
                     "creds": "pasted_creds.txt",
                     "urls": "pasted_urls.txt",
+                    "names": "pasted_names.txt",
                 }.get(kind, "pasted.txt")
                 fname = (
                     raw_filename.strip()
@@ -597,17 +657,23 @@ def create_app(
                                 except Exception:
                                     continue
                                 link_host_domain(s, h.id, fqdn)
-                    elif kind == "emails":
-                        import_emails(s, art, Path(stored))
+                    elif kind == "names_emails":
+                        import_names_emails(s, art, Path(stored))
                     elif kind == "doc":
                         import_document(s, art, Path(stored))
-                    elif kind == "users":
-                        import_valid_users(s, art, Path(stored))
+                        extract_doc_names(s)
+                        extract_doc_software(s)
+                    elif kind == "ad_users":
+                        import_ad_users(s, art, Path(stored))
                     elif kind == "creds":
                         import_credentials(s, art, Path(stored))
                     elif kind == "urls":
                         import_web_urls(s, art, Path(stored))
-                return RedirectResponse(url="/", status_code=303)
+                    elif kind == "names":
+                        import_names(s, art, Path(stored))
+                return RedirectResponse(
+                    url=redirect_map.get(kind, "/"), status_code=303
+                )
             elif file:
                 files = file if isinstance(file, list) else [file]
                 stored_files = []
@@ -645,16 +711,20 @@ def create_app(
                                     except Exception:
                                         continue
                                     link_host_domain(s, h.id, fqdn)
-                        elif kind == "emails":
-                            import_emails(s, art, Path(stored_path))
+                        elif kind == "names_emails":
+                            import_names_emails(s, art, Path(stored_path))
                         elif kind == "doc":
                             import_document(s, art, Path(stored_path))
-                        elif kind == "users":
-                            import_valid_users(s, art, Path(stored_path))
+                            extract_doc_names(s)
+                            extract_doc_software(s)
+                        elif kind == "ad_users":
+                            import_ad_users(s, art, Path(stored_path))
                         elif kind == "creds":
                             import_credentials(s, art, Path(stored_path))
                         elif kind == "urls":
                             import_web_urls(s, art, Path(stored_path))
+                        elif kind == "names":
+                            import_names(s, art, Path(stored_path))
                         elif kind == "prowl_phase1":
                             import_prowl_phase1(s, art, Path(stored_path))
                         elif kind == "zone_transfers":
@@ -667,7 +737,9 @@ def create_app(
                         elif kind == "bbot_cloud":
                             result = import_bbot_cloud(s, art, Path(stored_path))
                             print(f"[bbot_cloud] Import complete: {result}")
-                return RedirectResponse(url="/", status_code=303)
+                return RedirectResponse(
+                    url=redirect_map.get(kind, "/"), status_code=303
+                )
             else:
                 return templates.TemplateResponse(
                     "upload.html",
@@ -708,8 +780,8 @@ def create_app(
             return (net.version, int(net.network_address), net.prefixlen)
 
         with db() as s:
-            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
-            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip = (
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
+            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip, s_excluded = (
                 scope_sets(s, sensitive_only=True)
             )
             scope_is_empty = not bool(ips or subnets or domains)
@@ -732,8 +804,8 @@ def create_app(
             domains_by_host = {r.id: list_host_domains(s, r.id) for r in rows}
         data = []
         for r in rows:
-            ip_in = ip_in_scope(r.ip, ips, subnets)
-            ip_sensitive = ip_in_scope(r.ip, s_ips, s_subnets)
+            ip_in = ip_in_scope(r.ip, ips, subnets, excluded)
+            ip_sensitive = ip_in_scope(r.ip, s_ips, s_subnets, s_excluded)
             host_domains = domains_by_host.get(r.id, [])
             # Check scope for each individual domain
             domain_list = []
@@ -741,7 +813,7 @@ def create_app(
             any_domain_sensitive = False
             for d in host_domains:
                 d_in = domain_in_scope(
-                    d, domains, domain_all_subs, domain_subs_if_ip, [r.ip], ips, subnets
+                    d, domains, domain_all_subs, domain_subs_if_ip, [r.ip], ips, subnets, excluded
                 )
                 d_sensitive = domain_in_scope(
                     d,
@@ -751,6 +823,7 @@ def create_app(
                     [r.ip],
                     s_ips,
                     s_subnets,
+                    s_excluded,
                 )
                 if d_in:
                     any_domain_in = True
@@ -778,6 +851,9 @@ def create_app(
                     "domains": domain_list,
                 }
             )
+
+        compromised_ids = _topology_compromised_ids()
+        compromised_asset_ids = compromised_ids.get("asset_ids", set()) if compromised_ids else set()
 
         in_scope_data = [d for d in data if d.get("in_scope")]
         filtered_data = data if show_out == 1 else in_scope_data
@@ -883,6 +959,7 @@ def create_app(
                 "subnet_stats": subnet_stats_list,
                 "in_scope_total": len(in_scope_data),
                 "scope_is_empty": scope_is_empty,
+                "compromised_asset_ids": compromised_asset_ids,
             },
         )
 
@@ -1081,6 +1158,8 @@ def create_app(
     def api_hosts_list():
         with db() as s:
             hosts = s.execute(select(Host).order_by(Host.ip.asc())).scalars().all()
+        compromised_ids = _topology_compromised_ids()
+        compromised_asset_ids = compromised_ids.get("asset_ids", set()) if compromised_ids else set()
         return {
             "ok": True,
             "hosts": [
@@ -1089,6 +1168,7 @@ def create_app(
                     "ip": h.ip,
                     "hostname": h.hostname,
                     "os_guess": h.os_guess,
+                    "compromised": str(h.id) in compromised_asset_ids,
                 }
                 for h in hosts
             ],
@@ -1184,6 +1264,18 @@ def create_app(
                 return {"ok": False, "error": "Failed to save host (check for duplicate IP)."}
 
             try:
+                existing_domains = list_host_domains(s, host.id)
+                # Remove domains no longer in the list
+                for d in existing_domains:
+                    if d not in domains:
+                        s.execute(
+                            text(
+                                "DELETE FROM host_subdomains WHERE host_id = :hid AND subdomain_id = (SELECT id FROM subdomains WHERE fqdn = :fq)"
+                            ),
+                            {"hid": host.id, "fq": d},
+                        )
+                s.commit()
+                # Add new domains
                 for d in domains:
                     if DOMAIN_RE.match(d):
                         link_host_domain(s, host.id, d)
@@ -1450,15 +1542,15 @@ def create_app(
     def api_subdomain(fqdn: str = Query(...)):
         fq = fqdn.strip().lower().rstrip(".")
         with db() as s:
-            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
-            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip = (
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
+            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip, s_excluded = (
                 scope_sets(s, sensitive_only=True)
             )
             ips_found = list_subdomain_ips(s, fq)
             in_dom = domain_in_scope(
-                fq, domains, domain_all_subs, domain_subs_if_ip, ips_found, ips, subnets
+                fq, domains, domain_all_subs, domain_subs_if_ip, ips_found, ips, subnets, excluded
             )
-            in_ip = any(ip_in_scope(ip, ips, subnets) for ip in ips_found)
+            in_ip = any(ip_in_scope(ip, ips, subnets, excluded) for ip in ips_found)
             sensitive_dom = domain_in_scope(
                 fq,
                 s_domains,
@@ -1467,8 +1559,9 @@ def create_app(
                 ips_found,
                 s_ips,
                 s_subnets,
+                s_excluded,
             )
-            sensitive_ip = any(ip_in_scope(ip, s_ips, s_subnets) for ip in ips_found)
+            sensitive_ip = any(ip_in_scope(ip, s_ips, s_subnets, s_excluded) for ip in ips_found)
             hosts = list_subdomain_hosts(s, fq)
         return {
             "ok": True,
@@ -3185,87 +3278,286 @@ def create_app(
             "topology.html", {"request": request, "topology_data": data}
         )
 
-    @app.get("/osint/checklist", response_class=HTMLResponse)
-    def osint_checklist_page(request: Request):
-        return templates.TemplateResponse("osint_checklist.html", {"request": request})
-
-    @app.get("/osint/topology", response_class=HTMLResponse)
-    def osint_topology_page(request: Request):
+    @app.get("/osint/registrars", response_class=HTMLResponse)
+    def osint_registrars_page(request: Request):
         with db() as s:
-            row = (
-                s.execute(
-                    select(Note)
-                    .where(Note.object_type == "osint_map", Note.object_id == 0)
-                    .order_by(Note.updated_at.desc(), Note.id.desc())
-                )
-                .scalars()
-                .first()
-            )
-        data = {"nodes": [], "edges": []}
-        if row and (row.body or "").strip():
-            try:
-                raw = json.loads(row.body)
-                if isinstance(raw.get("nodes"), list):
-                    data["nodes"] = raw.get("nodes")
-                if isinstance(raw.get("edges"), list):
-                    data["edges"] = raw.get("edges")
-            except Exception:
-                pass
+            subs = s.execute(
+                select(Subdomain)
+                .order_by(Subdomain.root_domain, Subdomain.fqdn)
+            ).scalars().all()
+
+            # Get registrar overrides
+            reg_overrides = s.execute(
+                select(RegistrarInfo).order_by(RegistrarInfo.domain)
+            ).scalars().all()
+
+        # Group subdomains by root domain (only those with prowl data)
+        grouped: dict[str, list[Subdomain]] = {}
+        for sub in subs:
+            if sub.prowl_ips or sub.prowl_registrar or sub.prowl_netblocks:
+                grouped.setdefault(sub.root_domain, []).append(sub)
+
+        # Also include domains from RegistrarInfo that aren't in grouped
+        for ri in reg_overrides:
+            if ri.domain not in grouped:
+                grouped[ri.domain] = []
+
+        # Build registrar/netblock/asn info per root domain + manual subdomain_ips
+        root_info: dict[str, dict[str, str]] = {}
+        manual_sub_ips: dict[str, str] = {}
+        for root, sub_list in grouped.items():
+            # Start with prowl data
+            registrar = next((s.prowl_registrar for s in sub_list if s.prowl_registrar), "")
+            netblocks = next((s.prowl_netblocks for s in sub_list if s.prowl_netblocks), "")
+            asn = ""
+
+            # Override with manual RegistrarInfo if exists
+            for ri in reg_overrides:
+                if ri.domain == root:
+                    registrar = ri.registrar or registrar
+                    netblocks = ri.netblocks or netblocks
+                    asn = ri.asn or asn
+                    if ri.subdomain_ips:
+                        manual_sub_ips[root] = ri.subdomain_ips
+                    break
+
+            root_info[root] = {
+                "registrar": registrar,
+                "netblocks": netblocks,
+                "asn": asn,
+            }
+
         return templates.TemplateResponse(
-            "osint_map.html", {"request": request, "osint_data": data}
+            "osint_registrars.html",
+            {
+                "request": request,
+                "grouped": dict(sorted(grouped.items())),
+                "root_info": root_info,
+                "manual_sub_ips": manual_sub_ips,
+            },
         )
 
-    @app.get("/api/osint/checklist")
-    def api_osint_checklist_get():
+    @app.get("/api/registrar")
+    def api_registrar_list(domain: str | None = Query(None)):
         with db() as s:
-            row = (
-                s.execute(
-                    select(Note)
-                    .where(Note.object_type == "osint_checklist", Note.object_id == 0)
-                    .order_by(Note.updated_at.desc(), Note.id.desc())
-                )
-                .scalars()
-                .first()
-            )
-        data = {}
-        if row and (row.body or "").strip():
-            try:
-                raw = json.loads(row.body)
-                data = raw
-            except Exception:
-                pass
-        return data
-
-    @app.post("/api/osint/checklist")
-    async def api_osint_checklist_save(request: Request):
-        body = await request.json()
-        with db() as s:
-            row = (
-                s.execute(
-                    select(Note)
-                    .where(Note.object_type == "osint_checklist", Note.object_id == 0)
-                    .order_by(Note.updated_at.desc(), Note.id.desc())
-                )
-                .scalars()
-                .first()
-            )
-            if row:
-                raw = {}
-                try:
-                    if row.body:
-                        raw = json.loads(row.body)
-                except Exception:
-                    pass
-                raw.update(body)
-                row.body = json.dumps(raw)
-                row.updated_at = datetime.utcnow()
-                s.commit()
+            if domain:
+                # Return merged data for specific domain
+                ri = s.execute(select(RegistrarInfo).where(RegistrarInfo.domain == domain.lower().strip())).scalars().first()
+                subs = s.execute(select(Subdomain).where(Subdomain.root_domain == domain.lower().strip()).order_by(Subdomain.fqdn)).scalars().all()
+                prowl_reg = next((sb.prowl_registrar for sb in subs if sb.prowl_registrar), "")
+                prowl_nb = next((sb.prowl_netblocks for sb in subs if sb.prowl_netblocks), "")
+                subdomain_list = [{"fqdn": sb.fqdn, "ips": sb.prowl_ips} for sb in subs if sb.prowl_ips or sb.fqdn]
+                manual_sub_ips = ""
+                if ri:
+                    manual_sub_ips = ri.subdomain_ips or ""
+                else:
+                    # Build subdomain list from Prowler data for initial textarea
+                    for sb in subs:
+                        ips = sb.prowl_ips if sb.prowl_ips else ""
+                        manual_sub_ips += f"{sb.fqdn} {ips}\n" if ips else f"{sb.fqdn}\n"
+                if ri:
+                    return {
+                        "ok": True,
+                        "item": {
+                            "id": ri.id,
+                            "domain": ri.domain,
+                            "asn": ri.asn,
+                            "registrar": ri.registrar,
+                            "netblocks": ri.netblocks,
+                        },
+                        "subdomains": subdomain_list,
+                        "subdomain_ips": manual_sub_ips.rstrip('\n'),
+                    }
+                else:
+                    return {
+                        "ok": True,
+                        "item": {
+                            "id": None,
+                            "domain": domain.lower().strip(),
+                            "asn": "",
+                            "registrar": prowl_reg,
+                            "netblocks": prowl_nb,
+                        },
+                        "subdomains": subdomain_list,
+                        "subdomain_ips": manual_sub_ips.rstrip('\n'),
+                    }
             else:
-                 s.add(
-                     Note(object_type="osint_checklist", object_id=0, body=json.dumps(body), created_at=datetime.utcnow())
-                 )
-                 s.commit()
-        return {"success": True}
+                items = s.execute(select(RegistrarInfo)).scalars().all()
+                return {
+                    "ok": True,
+                    "items": [
+                        {
+                            "id": i.id,
+                            "domain": i.domain,
+                            "asn": i.asn,
+                            "registrar": i.registrar,
+                            "netblocks": i.netblocks,
+                            "subdomain_ips": i.subdomain_ips,
+                        }
+                        for i in items
+                    ],
+                }
+
+    @app.get("/api/registrar/copy")
+    def api_registrar_copy(domain: str = Query(...)):
+        domain = domain.lower().strip()
+        with db() as s:
+            ri = s.execute(select(RegistrarInfo).where(RegistrarInfo.domain == domain)).scalars().first()
+            subs = s.execute(select(Subdomain).where(Subdomain.root_domain == domain).order_by(Subdomain.fqdn)).scalars().all()
+            prowl_reg = next((sb.prowl_registrar for sb in subs if sb.prowl_registrar), "")
+            prowl_nb = next((sb.prowl_netblocks for sb in subs if sb.prowl_netblocks), "")
+            prowl_asn = ""
+
+            registrar = (ri.registrar if ri else "") or prowl_reg
+            netblocks = (ri.netblocks if ri else "") or prowl_nb
+            asn = (ri.asn if ri else "") or prowl_asn
+            manual_sub_ips = ri.subdomain_ips if ri else ""
+
+        html = f"<ul><li>{domain}<ul>"
+        html += f"<li>Registrar: {registrar}</li>"
+        if asn:
+            html += f"<li>ASN: {asn}</li>"
+        if netblocks:
+            for nb in netblocks.split(","):
+                nb = nb.strip()
+                if nb:
+                    html += f"<li>Network: {nb}</li>"
+        sub_lines = []
+        if manual_sub_ips:
+            for line in manual_sub_ips.strip().split("\n"):
+                parts = line.strip().split()
+                if parts:
+                    fqdn = parts[0]
+                    ips = parts[1:]
+                    sub_lines.append(f"<li>{fqdn} : {', '.join(ips)}</li>")
+        else:
+            for sb in subs:
+                if sb.prowl_ips:
+                    ips = [ip.strip() for ip in sb.prowl_ips.split(",") if ip.strip()]
+                    sub_lines.append(f"<li>{sb.fqdn} : {', '.join(ips)}</li>")
+        if sub_lines:
+            html += f"<li>Subdomains<ul>{''.join(sub_lines)}</ul></li>"
+        html += "</ul></li></ul>"
+
+        # Plain text fallback
+        lines = [f"• {domain}"]
+        lines.append(f"  • Registrar: {registrar}")
+        if asn:
+            lines.append(f"  • ASN: {asn}")
+        if netblocks:
+            for nb in netblocks.split(","):
+                nb = nb.strip()
+                if nb:
+                    lines.append(f"  • Network: {nb}")
+        plain_subs = []
+        if manual_sub_ips:
+            for line in manual_sub_ips.strip().split("\n"):
+                parts = line.strip().split()
+                if parts:
+                    fqdn = parts[0]
+                    ips = parts[1:]
+                    plain_subs.append(f"    • {fqdn} : {', '.join(ips)}")
+        else:
+            for sb in subs:
+                if sb.prowl_ips:
+                    ips = [ip.strip() for ip in sb.prowl_ips.split(",") if ip.strip()]
+                    plain_subs.append(f"    • {sb.fqdn} : {', '.join(ips)}")
+        if plain_subs:
+            lines.append(f"  • Subdomains")
+            lines.extend(plain_subs)
+        text = "\n".join(lines) + "\n"
+
+        return {"text": text, "html": html}
+
+    @app.post("/api/registrar/create")
+    def api_registrar_create(
+        domain: str = Form(""),
+        asn: str = Form(""),
+        registrar: str = Form(""),
+        registrar_email: str = Form(""),
+        registrar_org: str = Form(""),
+        netblocks: str = Form(""),
+        subdomain_ips: str = Form(""),
+        creation_date: str = Form(""),
+        expiration_date: str = Form(""),
+        notes: str = Form(""),
+        has_existing: str = Form("0"),
+    ):
+        domain = domain.lower().strip()
+        with db() as s:
+            if has_existing == "0":
+                existing = s.execute(select(RegistrarInfo).where(RegistrarInfo.domain == domain)).scalars().first()
+                if existing:
+                    return {"ok": False, "error": "Domain already exists."}
+                ri = RegistrarInfo(
+                    domain=domain,
+                    asn=asn,
+                    registrar=registrar,
+                    registrar_email=registrar_email,
+                    registrar_org=registrar_org,
+                    netblocks=netblocks,
+                    subdomain_ips=subdomain_ips,
+                    creation_date=creation_date,
+                    expiration_date=expiration_date,
+                    notes=notes,
+                )
+                s.add(ri)
+            else:
+                ri = s.execute(select(RegistrarInfo).where(RegistrarInfo.domain == domain)).scalars().first()
+                if ri:
+                    ri.asn = asn
+                    ri.registrar = registrar
+                    ri.registrar_email = registrar_email
+                    ri.registrar_org = registrar_org
+                    ri.netblocks = netblocks
+                    ri.subdomain_ips = subdomain_ips
+                    ri.creation_date = creation_date
+                    ri.expiration_date = expiration_date
+                    ri.notes = notes
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/registrar/update")
+    def api_registrar_update(
+        registrar_id: int = Form(...),
+        domain: str = Form(""),
+        asn: str = Form(""),
+        registrar: str = Form(""),
+        registrar_email: str = Form(""),
+        registrar_org: str = Form(""),
+        netblocks: str = Form(""),
+        subdomain_ips: str = Form(""),
+        creation_date: str = Form(""),
+        expiration_date: str = Form(""),
+        notes: str = Form(""),
+    ):
+        with db() as s:
+            ri = s.get(RegistrarInfo, registrar_id)
+            if not ri:
+                return {"ok": False, "error": "Not found."}
+            if domain:
+                ri.domain = domain.lower().strip()
+            ri.asn = asn
+            ri.registrar = registrar
+            ri.registrar_email = registrar_email
+            ri.registrar_org = registrar_org
+            ri.netblocks = netblocks
+            ri.subdomain_ips = subdomain_ips
+            ri.creation_date = creation_date
+            ri.expiration_date = expiration_date
+            ri.notes = notes
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/registrar/delete")
+    def api_registrar_delete(registrar_id: int = Form(...)):
+        with db() as s:
+            ri = s.get(RegistrarInfo, registrar_id)
+            if not ri:
+                return {"ok": False, "error": "Not found."}
+            s.delete(ri)
+            s.commit()
+        return {"ok": True}
 
     @app.get("/api/topology")
     def api_topology_get():
@@ -3291,30 +3583,6 @@ def create_app(
                 pass
         return {"ok": True, "map": data}
 
-    @app.get("/api/osint/topology")
-    def api_osint_topology_get():
-        with db() as s:
-            row = (
-                s.execute(
-                    select(Note)
-                    .where(Note.object_type == "osint_map", Note.object_id == 0)
-                    .order_by(Note.updated_at.desc(), Note.id.desc())
-                )
-                .scalars()
-                .first()
-            )
-        data = {"nodes": [], "edges": []}
-        if row and (row.body or "").strip():
-            try:
-                raw = json.loads(row.body)
-                if isinstance(raw.get("nodes"), list):
-                    data["nodes"] = raw.get("nodes")
-                if isinstance(raw.get("edges"), list):
-                    data["edges"] = raw.get("edges")
-            except Exception:
-               pass
-            return {"ok": True, "map": data}
-
     @app.post("/api/topology")
     async def api_topology_save(request: Request):
         body = await request.json()
@@ -3332,6 +3600,28 @@ def create_app(
                 .scalars()
                 .first()
             )
+
+            # Detect deleted user nodes and clear topology_node_id from NameItem
+            if row and (row.body or "").strip():
+                try:
+                    old_data = json.loads(row.body)
+                    old_user_ids = {
+                        n["id"]
+                        for n in (old_data.get("nodes") or [])
+                        if n.get("type") == "user"
+                    }
+                    new_user_ids = {n["id"] for n in nodes if n.get("type") == "user"}
+                    deleted_user_ids = old_user_ids - new_user_ids
+                    if deleted_user_ids:
+                        for ni in s.execute(
+                            select(NameItem).where(NameItem.topology_node_id.in_(deleted_user_ids))
+                        ).scalars().all():
+                            ni.topology_node_id = ""
+                except Exception:
+                    pass
+
+            _update_compromised_cache(s, nodes)
+
             if row:
                 row.body = payload
                 row.updated_at = datetime.utcnow()
@@ -3348,38 +3638,64 @@ def create_app(
             s.commit()
         return {"ok": True}
 
-    @app.post("/api/osint/topology")
-    async def api_osint_topology_save(request: Request):
-        body = await request.json()
-        nodes = body.get("nodes") if isinstance(body.get("nodes"), list) else []
-        edges = body.get("edges") if isinstance(body.get("edges"), list) else []
-        payload = json.dumps({"nodes": nodes, "edges": edges})
-
+    def _topology_compromised_ids():
+        """Read cached compromised IDs from topology."""
+        result = {"asset_ids": set(), "name_ids": set()}
         with db() as s:
             row = (
                 s.execute(
                     select(Note)
-                    .where(Note.object_type == "osint_map", Note.object_id == 0)
-                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                    .where(Note.object_type == "topology_compromised", Note.object_id == 0)
+                    .order_by(Note.id.desc())
                 )
                 .scalars()
                 .first()
             )
-            if row:
-                row.body = payload
-                row.updated_at = datetime.utcnow()
-            else:
-                s.add(
-                    Note(
-                        object_type="osint_map",
-                        object_id=0,
-                        severity="info",
-                        tags="osint",
-                        body=payload,
-                    )
+            if row and row.body:
+                try:
+                    data = json.loads(row.body)
+                    result["asset_ids"] = {str(a) for a in data.get("asset_ids", [])}
+                    result["name_ids"] = {str(n) for n in data.get("name_ids", [])}
+                except Exception:
+                    pass
+        return result
+
+    def _update_compromised_cache(s, nodes):
+        """Rebuild the compromised ID cache from node list."""
+        c_asset = set()
+        c_name = set()
+        for n in (nodes or []):
+            if n.get("compromised"):
+                ntype = (n.get("type") or "").lower()
+                aid = n.get("linked_asset_id")
+                if aid and ntype in ("computer", "domain"):
+                    c_asset.add(str(aid))
+                nid = n.get("linked_name_id")
+                if nid:
+                    c_name.add(str(nid))
+        comp_payload = json.dumps({"asset_ids": list(c_asset), "name_ids": list(c_name)})
+        comp_row = (
+            s.execute(
+                select(Note)
+                .where(Note.object_type == "topology_compromised", Note.object_id == 0)
+                .order_by(Note.id.desc())
+            )
+            .scalars()
+            .first()
+        )
+        if comp_row:
+            comp_row.body = comp_payload
+            comp_row.updated_at = datetime.utcnow()
+        else:
+            s.add(
+                Note(
+                    object_type="topology_compromised",
+                    object_id=0,
+                    severity="info",
+                    tags="topology",
+                    body=comp_payload,
                 )
-            s.commit()
-        return {"ok": True}
+            )
 
     @app.post("/api/topology/add-node")
     async def api_topology_add_node(request: Request):
@@ -3432,6 +3748,7 @@ def create_app(
             }
             data["nodes"].append(new_node)
 
+            _update_compromised_cache(s, data["nodes"])
             payload = json.dumps(data)
             if row:
                 row.body = payload
@@ -3446,6 +3763,191 @@ def create_app(
                         body=payload,
                     )
                 )
+            s.commit()
+
+        return {"ok": True, "node": new_node}
+
+    @app.post("/api/topology/add-domain")
+    async def api_topology_add_domain(request: Request):
+        body = await request.json()
+        domain = body.get("domain", "").strip()
+        asn = body.get("asn", "").strip()
+        registrar = body.get("registrar", "").strip()
+        netblocks = body.get("netblocks", "").strip()
+        subdomain_ips = body.get("subdomain_ips", "").strip()
+        if not domain:
+            return {"ok": False, "error": "Domain is required"}
+
+        with db() as s:
+            row = (
+                s.execute(
+                    select(Note)
+                    .where(Note.object_type == "topology_map", Note.object_id == 0)
+                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+            data = {"nodes": [], "edges": []}
+            if row and (row.body or "").strip():
+                try:
+                    raw = json.loads(row.body)
+                    if isinstance(raw.get("nodes"), list):
+                        data["nodes"] = raw.get("nodes")
+                    if isinstance(raw.get("edges"), list):
+                        data["edges"] = raw.get("edges")
+                except Exception:
+                    pass
+
+            existing = [n for n in data["nodes"] if n.get("label") == domain and n.get("type") == "domain"]
+            if existing:
+                return {"ok": False, "error": f"Domain node \"{domain}\" already exists in topology"}
+
+            import time
+            node_id = f"n_domain_{domain.replace('.', '_')}_{int(time.time())}"
+
+            new_node = {
+                "id": node_id,
+                "label": domain,
+                "type": "domain",
+                "color": "#16a34a",
+                "notes": "",
+                "asn": asn,
+                "registrar": registrar,
+                "netblocks": netblocks,
+                "subdomain_ips": subdomain_ips,
+                "compromised": False,
+                "linked_asset_id": "",
+                "x": 200 + hash(domain) % 600,
+                "y": 200 + hash(domain) % 400,
+            }
+            data["nodes"].append(new_node)
+
+            _update_compromised_cache(s, data["nodes"])
+            payload = json.dumps(data)
+            if row:
+                row.body = payload
+                row.updated_at = datetime.utcnow()
+            else:
+                s.add(
+                    Note(
+                        object_type="topology_map",
+                        object_id=0,
+                        severity="info",
+                        tags="topology",
+                        body=payload,
+                    )
+                )
+            s.commit()
+
+        return {"ok": True, "node": new_node}
+
+    @app.post("/api/topology/add-user")
+    async def api_topology_add_user(request: Request):
+        body = await request.json()
+        label = body.get("label", "").strip()
+        email = body.get("email", "").strip()
+        phone = body.get("phone", "").strip()
+        name_id = body.get("name_id")
+        if not label:
+            return {"ok": False, "error": "Label is required"}
+
+        with db() as s:
+            row = (
+                s.execute(
+                    select(Note)
+                    .where(Note.object_type == "topology_map", Note.object_id == 0)
+                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+            data = {"nodes": [], "edges": []}
+            if row and (row.body or "").strip():
+                try:
+                    raw = json.loads(row.body)
+                    if isinstance(raw.get("nodes"), list):
+                        data["nodes"] = raw.get("nodes")
+                    if isinstance(raw.get("edges"), list):
+                        data["edges"] = raw.get("edges")
+                except Exception:
+                    pass
+
+            existing = [n for n in data["nodes"] if n.get("label") == label and n.get("type") == "user"]
+            if existing:
+                return {"ok": False, "error": f"User node \"{label}\" already exists in topology"}
+
+            import time
+            node_id = f"n_user_{label.replace(' ', '_')}_{int(time.time())}"
+
+            # Resolve name_id: use provided id, or auto-match by first/last name
+            resolved_name_id = name_id
+            if not resolved_name_id:
+                parts = label.strip().split()
+                if len(parts) >= 2:
+                    fn, ln = parts[0], parts[-1]
+                    candidate = s.execute(
+                        select(NameItem)
+                        .where(
+                            NameItem.first_name.ilike(fn),
+                            NameItem.last_name.ilike(ln),
+                            NameItem.topology_node_id == "",
+                        )
+                        .limit(1)
+                    ).scalars().first()
+                    if candidate:
+                        resolved_name_id = str(candidate.id)
+                elif len(parts) == 1:
+                    candidate = s.execute(
+                        select(NameItem)
+                        .where(
+                            NameItem.first_name.ilike(parts[0]),
+                            NameItem.topology_node_id == "",
+                        )
+                        .limit(1)
+                    ).scalars().first()
+                    if candidate:
+                        resolved_name_id = str(candidate.id)
+
+            new_node = {
+                "id": node_id,
+                "label": label,
+                "type": "user",
+                "color": "#f59e0b",
+                "notes": "",
+                "first_name": label.split()[0] if label.split() else "",
+                "last_name": label.split()[-1] if label.split() else "",
+                "email": email,
+                "phone": phone,
+                "compromised": False,
+                "linked_asset_id": "",
+                "linked_name_id": resolved_name_id or "",
+                "x": 200 + hash(label) % 600,
+                "y": 200 + hash(label) % 400,
+            }
+            data["nodes"].append(new_node)
+
+            _update_compromised_cache(s, data["nodes"])
+            payload = json.dumps(data)
+            if row:
+                row.body = payload
+                row.updated_at = datetime.utcnow()
+            else:
+                s.add(
+                    Note(
+                        object_type="topology_map",
+                        object_id=0,
+                        severity="info",
+                        tags="topology",
+                        body=payload,
+                    )
+                )
+
+            if resolved_name_id:
+                ni = s.scalar(select(NameItem).where(NameItem.id == resolved_name_id))
+                if ni:
+                    ni.topology_node_id = node_id
+
             s.commit()
 
         return {"ok": True, "node": new_node}
@@ -3571,8 +4073,8 @@ def create_app(
     def subdomains(request: Request):
         show_out = int(request.query_params.get("show_out", "0"))
         with db() as s:
-            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
-            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip = (
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
+            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip, s_excluded = (
                 scope_sets(s, sensitive_only=True)
             )
             rows = (
@@ -3614,6 +4116,9 @@ def create_app(
             root_domains = {}
             for x in rows:
                 ips_found = list_subdomain_ips(s, x.fqdn)
+                prowl_ips_list = (x.prowl_ips or "").split(",")
+                prowl_ips_cleaned = [ip.strip() for ip in prowl_ips_list if ip.strip()]
+                all_ips = list(set(ips_found) | set(prowl_ips_cleaned))
                 in_dom = domain_in_scope(
                     x.fqdn,
                     domains,
@@ -3622,8 +4127,9 @@ def create_app(
                     ips_found,
                     ips,
                     subnets,
+                    excluded,
                 )
-                in_ip = any(ip_in_scope(ip, ips, subnets) for ip in ips_found)
+                in_ip = any(ip_in_scope(ip, ips, subnets, excluded) for ip in all_ips)
                 in_scope = bool(in_dom or in_ip)
                 sensitive_dom = domain_in_scope(
                     x.fqdn,
@@ -3633,11 +4139,12 @@ def create_app(
                     ips_found,
                     s_ips,
                     s_subnets,
+                    s_excluded,
                 )
-                sensitive_ip = any(
-                    ip_in_scope(ip, s_ips, s_subnets) for ip in ips_found
-                )
-                sensitive = bool(sensitive_dom or sensitive_ip)
+                sensitive_ip_set = {
+                    ip for ip in all_ips if ip_in_scope(ip, s_ips, s_subnets, s_excluded)
+                }
+                sensitive = bool(sensitive_dom or bool(sensitive_ip_set))
                 # Get RDAP info for root domain
                 rdap = rdap_info.get(x.root_domain, {}) if x.root_domain else {}
                 # Get Prowler info for this subdomain
@@ -3655,8 +4162,10 @@ def create_app(
                         "ips": ips_found,
                         "in_scope": in_scope,
                         "sensitive": sensitive,
+                        "sensitive_ips": sensitive_ip_set,
                         "rdap": rdap,
                         "prowl": prowl,
+                        "scope_override": None,
                     }
                 )
                 if x.root_domain and x.root_domain not in root_domains:
@@ -3716,14 +4225,14 @@ def create_app(
 
         return templates.TemplateResponse(
             "subdomains.html",
-            {"request": request, "grouped": grouped_filtered, "show_out": show_out},
+            {"request": request, "grouped": grouped_filtered, "show_out": show_out, "excluded": excluded},
         )
 
     @app.get("/emails", response_class=HTMLResponse)
     def emails(request: Request):
         with db() as s:
-            _, _, _, email_domains, _, _ = scope_sets(s)
-            _, _, _, s_email_domains, _, _ = scope_sets(s, sensitive_only=True)
+            _, _, _, email_domains, _, _, _ = scope_sets(s)
+            _, _, _, s_email_domains, _, _, _ = scope_sets(s, sensitive_only=True)
             rows = (
                 s.execute(select(Email).order_by(Email.domain.asc(), Email.email.asc()))
                 .scalars()
@@ -3745,7 +4254,7 @@ def create_app(
     @app.get("/emails/export")
     def export_emails():
         with db() as s:
-            _, _, _, email_domains, _, _ = scope_sets(s)
+            _, _, _, email_domains, _, _, _ = scope_sets(s)
             emails = (
                 s.execute(select(Email).order_by(Email.email.asc())).scalars().all()
             )
@@ -3761,6 +4270,7 @@ def create_app(
 
     @app.get("/docs", response_class=HTMLResponse)
     def docs(request: Request):
+        from .parsers import DOC_NAME_FIELDS, DOC_SOFTWARE_FIELDS
         with db() as s:
             rows = (
                 s.execute(select(Document).order_by(Document.created_at.desc()))
@@ -3768,8 +4278,63 @@ def create_app(
                 .all()
             )
         return templates.TemplateResponse(
-            "docs.html", {"request": request, "rows": rows}
+            "docs.html", {"request": request, "rows": rows, "name_fields": sorted(DOC_NAME_FIELDS), "software_fields": sorted(DOC_SOFTWARE_FIELDS)}
         )
+
+    @app.get("/api/doc/names")
+    def api_doc_names(field: str = ""):
+        from .models import DocExtractedName
+        from .parsers import DOC_NAME_FIELDS
+        with db() as s:
+            q = select(DocExtractedName)
+            if field and field.lower() in {f.lower() for f in DOC_NAME_FIELDS}:
+                q = q.where(DocExtractedName.meta_field == field)
+            q = q.order_by(DocExtractedName.name.asc())
+            rows = s.execute(q).scalars().all()
+        return [
+            {
+                "id": r.id,
+                "name": r.name,
+                "meta_field": r.meta_field,
+                "document_id": r.document_id,
+                "source_file": r.source_file,
+            }
+            for r in rows
+        ]
+
+    @app.post("/api/doc/extract-software")
+    def api_doc_extract_software(fields: str = ""):
+        from .models import DocExtractedSoftware
+        from .parsers import DOC_SOFTWARE_FIELDS, extract_doc_software
+        with db() as s:
+            s.query(DocExtractedSoftware).delete()
+            s.commit()
+            field_set = {f.strip() for f in fields.split(",") if f.strip()}
+            if not field_set:
+                field_set = DOC_SOFTWARE_FIELDS
+            count = extract_doc_software(s, field_set)
+        return {"ok": True, "count": count}
+
+    @app.get("/api/doc/software")
+    def api_doc_software(field: str = ""):
+        from .models import DocExtractedSoftware
+        from .parsers import DOC_SOFTWARE_FIELDS
+        with db() as s:
+            q = select(DocExtractedSoftware)
+            if field and field.lower() in {f.lower() for f in DOC_SOFTWARE_FIELDS}:
+                q = q.where(DocExtractedSoftware.meta_field == field)
+            q = q.order_by(DocExtractedSoftware.software.asc())
+            rows = s.execute(q).scalars().all()
+        return [
+            {
+                "id": r.id,
+                "software": r.software,
+                "meta_field": r.meta_field,
+                "document_id": r.document_id,
+                "source_file": r.source_file,
+            }
+            for r in rows
+        ]
 
     @app.get("/api/doc/{doc_id}")
     def api_doc(doc_id: int):
@@ -3889,6 +4454,14 @@ def create_app(
                 pass
 
         return RedirectResponse(url="/docs", status_code=303)
+
+    @app.post("/api/doc/extract-names")
+    def api_doc_extract_names(fields: str = Form("")):
+        from .parsers import DOC_NAME_FIELDS, extract_doc_names
+        target = set(f.strip() for f in fields.split(",") if f.strip()) if fields else None
+        with db() as s:
+            count = extract_doc_names(s, target)
+        return {"ok": True, "count": count}
 
     # Graph API
 
@@ -4196,7 +4769,7 @@ def create_app(
             else:
                 row = s.scalar(select(AppSettings).where(AppSettings.key == "services_hide_completed"))
                 hide_completed = int(row.value) if row else 0
-            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
 
             services = (
                 s.execute(select(Service).where(Service.state == "open"))
@@ -4304,8 +4877,8 @@ def create_app(
     def api_graph(only_in_scope: bool = Query(False)):
         nodes, edges = [], []
         with db() as s:
-            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
-            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip = (
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
+            s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip, s_excluded = (
                 scope_sets(s, sensitive_only=True)
             )
             subs = s.execute(select(Subdomain)).scalars().all()
@@ -4327,7 +4900,7 @@ def create_app(
             fq = sub.fqdn
             sub_ips = list_subdomain_ips(s, fq)
             sub_in = domain_in_scope(
-                fq, domains, domain_all_subs, domain_subs_if_ip, sub_ips, ips, subnets
+                fq, domains, domain_all_subs, domain_subs_if_ip, sub_ips, ips, subnets, excluded
             )
             dom_in = (
                 domain_in_scope(
@@ -4338,6 +4911,7 @@ def create_app(
                     sub_ips,
                     ips,
                     subnets,
+                    excluded,
                 )
                 if rd
                 else False
@@ -4350,6 +4924,7 @@ def create_app(
                 sub_ips,
                 s_ips,
                 s_subnets,
+                s_excluded,
             )
             dom_sensitive = (
                 domain_in_scope(
@@ -4360,6 +4935,7 @@ def create_app(
                     sub_ips,
                     s_ips,
                     s_subnets,
+                    s_excluded,
                 )
                 if rd
                 else False
@@ -4394,8 +4970,8 @@ def create_app(
         for h in hosts:
             hid = nid("host", h.ip)
             host_ids[h.id] = hid
-            hin = ip_in_scope(h.ip, ips, subnets)
-            hs = ip_in_scope(h.ip, s_ips, s_subnets)
+            hin = ip_in_scope(h.ip, ips, subnets, excluded)
+            hs = ip_in_scope(h.ip, s_ips, s_subnets, s_excluded)
             host_scope[h.id] = hin
             label = h.ip + (("\n" + h.hostname) if h.hostname else "")
             add_node(
@@ -4414,7 +4990,7 @@ def create_app(
             hs = False
             host_obj = next((h for h in hosts if h.id == svc.host_id), None)
             if host_obj:
-                hs = ip_in_scope(host_obj.ip, s_ips, s_subnets)
+                hs = ip_in_scope(host_obj.ip, s_ips, s_subnets, s_excluded)
             sid = nid("svc", f"{svc.host_id}:{svc.port}/{svc.proto}")
             add_node(
                 {
@@ -4447,6 +5023,7 @@ def create_app(
                         fqdn_ips,
                         ips,
                         subnets,
+                        excluded,
                     )
                     sub_sensitive = domain_in_scope(
                         fqdn,
@@ -4456,6 +5033,7 @@ def create_app(
                         fqdn_ips,
                         s_ips,
                         s_subnets,
+                        s_excluded,
                     )
                     add_node(
                         {
@@ -4481,7 +5059,7 @@ def create_app(
     @app.get("/subdomains/export")
     def subdomains_export():
         with db() as s:
-            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip = scope_sets(s)
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
             rows = s.execute(select(Subdomain)).scalars().all()
             out = []
             for x in rows:
@@ -4494,8 +5072,9 @@ def create_app(
                     ips_found,
                     ips,
                     subnets,
+                    excluded,
                 )
-                in_ip = any(ip_in_scope(ip, ips, subnets) for ip in ips_found)
+                in_ip = any(ip_in_scope(ip, ips, subnets, excluded) for ip in ips_found)
                 if in_dom or in_ip:
                     out.append(x.fqdn)
         txt = "\n".join(sorted(set(out)))
@@ -4525,6 +5104,20 @@ def create_app(
             if not sub:
                 return JSONResponse({"ok": False}, status_code=404)
             sub.done = 1 if int(done) == 1 else 0
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/subdomain/scope-override")
+    def api_subdomain_scope_override(fqdn: str = Form(...)):
+        fq = fqdn.strip().lower().rstrip(".")
+        if not fq:
+            return JSONResponse({"ok": False, "error": "Invalid FQDN"}, status_code=400)
+        with db() as s:
+            existing = s.scalar(select(ScopeExclusion).where(ScopeExclusion.fqdn == fq))
+            if existing:
+                s.delete(existing)
+            else:
+                s.add(ScopeExclusion(fqdn=fq))
             s.commit()
         return {"ok": True}
 
@@ -4885,6 +5478,124 @@ def create_app(
             if not cred:
                 return JSONResponse({"ok": False, "error": "Credential not found"}, status_code=404)
             s.delete(cred)
+            s.commit()
+        return {"ok": True}
+
+    @app.get("/names", response_class=HTMLResponse)
+    def names_page(request: Request):
+        with db() as s:
+            names = (
+                s.execute(
+                    select(NameItem).order_by(NameItem.last_name.asc(), NameItem.first_name.asc())
+                )
+                .scalars()
+                .all()
+            )
+        compromised_ids = _topology_compromised_ids()
+        compromised_name_ids = compromised_ids.get("name_ids", set()) if compromised_ids else set()
+        return templates.TemplateResponse(
+            "names.html", {"request": request, "names": names, "compromised_name_ids": compromised_name_ids}
+        )
+
+    @app.get("/api/names/list")
+    def api_names_list():
+        with db() as s:
+            names = list(
+                s.execute(
+                    select(NameItem).order_by(NameItem.last_name.asc(), NameItem.first_name.asc())
+                )
+                .scalars()
+                .all()
+            )
+        compromised_ids = _topology_compromised_ids()
+        compromised_name_ids = compromised_ids.get("name_ids", set()) if compromised_ids else set()
+        return {
+            "names": [
+                {
+                    "id": n.id,
+                    "first_name": n.first_name,
+                    "middle_name": n.middle_name,
+                    "last_name": n.last_name,
+                    "email": n.email,
+                    "phone": n.phone,
+                    "ad_username": n.ad_username,
+                    "tags": n.tags,
+                    "topology_node_id": n.topology_node_id,
+                    "compromised": str(n.id) in compromised_name_ids,
+                }
+                for n in names
+            ]
+        }
+
+    @app.post("/api/names/create")
+    def api_name_create(
+        first_name: str = Form(...),
+        middle_name: str = Form(""),
+        last_name: str = Form(...),
+        email: str = Form(""),
+        phone: str = Form(""),
+        ad_username: str = Form(""),
+        tags: str = Form(""),
+    ):
+        first_name = first_name.strip()
+        last_name = last_name.strip()
+        if not first_name or not last_name:
+            return JSONResponse(
+                {"ok": False, "error": "First and last name are required"}, status_code=400
+            )
+        with db() as s:
+            s.add(
+                NameItem(
+                    first_name=first_name,
+                    middle_name=middle_name.strip(),
+                    last_name=last_name,
+                    email=email.strip(),
+                    phone=phone.strip(),
+                    ad_username=ad_username.strip(),
+                    tags=tags.strip(),
+                )
+            )
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/names/update")
+    def api_name_update(
+        name_id: int = Form(...),
+        first_name: str = Form(...),
+        middle_name: str = Form(""),
+        last_name: str = Form(...),
+        email: str = Form(""),
+        phone: str = Form(""),
+        ad_username: str = Form(""),
+        tags: str = Form(""),
+    ):
+        first_name = first_name.strip()
+        last_name = last_name.strip()
+        if not first_name or not last_name:
+            return JSONResponse(
+                {"ok": False, "error": "First and last name are required"}, status_code=400
+            )
+        with db() as s:
+            name = s.scalar(select(NameItem).where(NameItem.id == name_id))
+            if not name:
+                return JSONResponse({"ok": False, "error": "Name not found"}, status_code=404)
+            name.first_name = first_name
+            name.middle_name = middle_name.strip()
+            name.last_name = last_name
+            name.email = email.strip()
+            name.phone = phone.strip()
+            name.ad_username = ad_username.strip()
+            name.tags = tags.strip()
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/names/delete")
+    def api_name_delete(name_id: int = Form(...)):
+        with db() as s:
+            name = s.scalar(select(NameItem).where(NameItem.id == name_id))
+            if not name:
+                return JSONResponse({"ok": False, "error": "Name not found"}, status_code=404)
+            s.delete(name)
             s.commit()
         return {"ok": True}
 

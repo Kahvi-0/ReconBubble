@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>ReconBubble</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg"/>
-  <link rel="stylesheet" href="/static/app.css"/>
+  <link rel="stylesheet" href="/static/app.css?v=5"/>
 </head>
 <body>
   <header class="topbar">
@@ -62,14 +62,13 @@
         <div class="nav-dropdown" id="osintDropdown">
            <a href="#" class="nav-dropbtn">OSINT ▾</a>
            <div class="nav-dropdown-content">
-             <a href="/osint/checklist" {{ 'class=current' if request.url.path == '/osint/checklist' }}>Checklist</a>
-             <a href="/social" {{ 'class=current' if request.url.path == '/social' }}>Social Media</a>
-             <a href="/emails" {{ 'class=current' if request.url.path == '/emails' }}>Emails</a>
-             <a href="/docs" {{ 'class=current' if request.url.path == '/docs' }}>Documents & Exif</a>
+              <a href="/social" {{ 'class=current' if request.url.path == '/social' }}>Social Media</a>
+              <a href="/docs" {{ 'class=current' if request.url.path == '/docs' }}>Documents & Exif</a>
              <a href="/dns" {{ 'class=current' if request.url.path == '/dns' }}>DNS</a>
-             <a href="/smtp" {{ 'class=current' if request.url.path == '/smtp' }}>SMTP</a>
-           </div>
-         </div>
+              <a href="/smtp" {{ 'class=current' if request.url.path == '/smtp' }}>SMTP</a>
+              <a href="/osint/registrars" {{ 'class=current' if request.url.path == '/osint/registrars' }}>Registrars</a>
+            </div>
+          </div>
           <div class="nav-dropdown" id="perimeterDropdown">
              <a href="#" class="nav-dropbtn">Perimeter ▾</a>
              <div class="nav-dropdown-content">
@@ -87,10 +86,11 @@
           </div>
         </div>
         <a href="/topology" {{ 'class=current' if request.url.path == '/topology' }}>Attack Topology</a>
-        <a href="/osint/topology" {{ 'class=current' if request.url.path == '/osint/topology' }}>OSINT Map</a>
           <div class="nav-dropdown" id="credentialsDropdown">
           <a href="#" class="nav-dropbtn">Credentials ▾</a>
           <div class="nav-dropdown-content">
+            <a href="/names" {{ 'class=current' if request.url.path == '/names' }}>Names</a>
+            <a href="/emails" {{ 'class=current' if request.url.path == '/emails' }}>Emails</a>
             <a href="/password-spray" {{ 'class=current' if request.url.path == '/password-spray' }}>Password Spray</a>
             <a href="/user-discovery" {{ 'class=current' if request.url.path == '/user-discovery' or request.url.path == '/users' }}>User Discovery</a>
             <a href="/app-credentials" {{ 'class=current' if request.url.path == '/app-credentials' }}>App Credentials</a>
@@ -128,7 +128,7 @@
   </aside>
 
   {% block scripts %}{% endblock %}
-  <script src="/static/sidebar.js?v=5"></script>
+  <script src="/static/sidebar.js?v=9"></script>
   <script src="/static/global_notes_panel.js?v=3"></script>
   <script>
     const allDropdowns = [

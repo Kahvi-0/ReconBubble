@@ -14,6 +14,8 @@
       <button class="btn" draggable="true" data-node-type="firewall">🧱 Firewall</button>
       <button class="btn" draggable="true" data-node-type="user">👤 User</button>
       <button class="btn" draggable="true" data-node-type="domain">🌐 Domain</button>
+      <button class="btn" draggable="true" data-node-type="company">🏢 Company</button>
+      <button class="btn" draggable="true" data-node-type="asn">🌍 ASN</button>
     </div>
 
   </div>
@@ -36,5 +38,5 @@
   window.TOPOLOGY_DATA = {{ topology_data | tojson }};
 </script>
 <script src="/static/vendor/cytoscape.min.js"></script>
-<script src="/static/topology.js?v=39"></script>
+<script src="/static/topology.js?v=43"></script>
 {% endblock %}

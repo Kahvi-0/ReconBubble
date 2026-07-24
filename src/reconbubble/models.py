@@ -35,6 +35,15 @@ class ScopeItem(Base):
     )
 
 
+class ScopeExclusion(Base):
+    __tablename__ = "scope_exclusions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fqdn: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
 class Subdomain(Base):
     __tablename__ = "subdomains"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -184,6 +193,46 @@ class Credential(Base):
     )
 
 
+class NameItem(Base):
+    __tablename__ = "name_items"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    first_name: Mapped[str] = mapped_column(String(255), index=True)
+    middle_name: Mapped[str] = mapped_column(String(255), default="")
+    last_name: Mapped[str] = mapped_column(String(255), index=True)
+    email: Mapped[str] = mapped_column(String(255), default="")
+    phone: Mapped[str] = mapped_column(String(64), default="")
+    ad_username: Mapped[str] = mapped_column(String(255), default="")
+    tags: Mapped[str] = mapped_column(String(512), default="")
+    topology_node_id: Mapped[str] = mapped_column(String(255), default="", index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
+class DocExtractedName(Base):
+    __tablename__ = "doc_extracted_names"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), index=True)
+    meta_field: Mapped[str] = mapped_column(String(128), index=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"), index=True)
+    source_file: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
+class DocExtractedSoftware(Base):
+    __tablename__ = "doc_extracted_software"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    software: Mapped[str] = mapped_column(String(255), index=True)
+    meta_field: Mapped[str] = mapped_column(String(128), index=True)
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id"), index=True)
+    source_file: Mapped[str] = mapped_column(String(512), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
 class SocialMedia(Base):
     __tablename__ = "social_media"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -305,6 +354,24 @@ class ProfilingRow(Base):
     description: Mapped[str] = mapped_column(Text, default="")
     comments: Mapped[str] = mapped_column(Text, default="")
     order_index: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
+class RegistrarInfo(Base):
+    __tablename__ = "registrar_info"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    asn: Mapped[str] = mapped_column(String(64), default="")
+    registrar: Mapped[str] = mapped_column(String(255), default="")
+    registrar_email: Mapped[str] = mapped_column(String(255), default="")
+    registrar_org: Mapped[str] = mapped_column(String(255), default="")
+    netblocks: Mapped[str] = mapped_column(Text, default="")
+    subdomain_ips: Mapped[str] = mapped_column(Text, default="")
+    creation_date: Mapped[str] = mapped_column(String(64), default="")
+    expiration_date: Mapped[str] = mapped_column(String(64), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
     )
