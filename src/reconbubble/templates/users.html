@@ -1048,9 +1048,13 @@
     domainCorrPanel.classList.remove("active");
   });
 
+  domainCorrPanel.addEventListener("click", (e) => {
+    e.stopPropagation();
+  });
+
   document.addEventListener("click", (e) => {
     if (domainCorrPanel.classList.contains("active")) {
-      if (!domainCorrPanel.contains(e.target) && e.target !== openDomainCorrBtn && !openDomainCorrBtn.contains(e.target)) {
+      if (e.target !== openDomainCorrBtn && !openDomainCorrBtn.contains(e.target)) {
         domainCorrPanel.classList.remove("active");
       }
     }
