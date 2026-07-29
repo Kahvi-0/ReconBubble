@@ -1289,3 +1289,242 @@ def import_bbot_cloud(session: Session, artifact: Artifact, path: Path) -> dict:
         "cloud_items": cloud_count,
         "notes": note_count,
     }
+
+
+_KERBEROAST_RE = re.compile(r"^\$krb5tgs\$(\d+)\$[*]?(\w+)\$(\w+)")
+_NTLMV1_RE = re.compile(r"^([^:]+)::([^:]+):([^:]+):([^:]+):([^:]+)$")
+_NTLMV2_RE = re.compile(r"^([^:]+)::([^:]+):(.+)$")
+_DCC2_RE = re.compile(r"^\$DCC2\$(\d+)#([^#]+)#(.+)$")
+_KRB5ASREP_RE = re.compile(r"^\$krb5asrep\$(\d+)\$([^@]+)@([^:]+):(.+)$")
+_NTLM_RE = re.compile(r"^(?:([^\\]+)\\)?([^:]+):([0-9a-fA-F]{32})$")
+
+
+def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dict:
+    """Try all hash parsers on each line. Returns {total, added, skipped, unmatched}."""
+    counts = {
+        "kerberoast": 0,
+        "ntlm": 0,
+        "ntlmv1": 0,
+        "ntlmv2": 0,
+        "dcc2": 0,
+        "krb5asrep": 0,
+        "skipped": 0,
+    }
+    unmatched: list[str] = []
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+
+        matched = False
+
+        # Try Kerberoast
+        m_krb = _KERBEROAST_RE.match(s)
+        if m_krb:
+            matched = True
+            hash_type = m_krb.group(1)
+            raw_user = m_krb.group(2).lstrip("*")
+            realm_domain = m_krb.group(3)
+            if raw_user:
+                user_item = session.scalar(
+                    select(NameItem).where(NameItem.ad_username.ilike(raw_user))
+                )
+                if not user_item:
+                    email_match = session.scalar(
+                        select(NameItem).where(
+                            NameItem.email != "",
+                            NameItem.email.ilike(f"{raw_user}@%"),
+                        )
+                    )
+                    if email_match:
+                        if not email_match.ad_username or not email_match.ad_username.strip():
+                            email_match.ad_username = raw_user
+                        if not email_match.domain or not email_match.domain.strip():
+                            email_match.domain = realm_domain
+                        user_item = email_match
+                if not user_item:
+                    user_item = NameItem(first_name="", middle_name="", last_name="", ad_username=raw_user, domain=realm_domain)
+                    session.add(user_item)
+                    session.flush()
+                existing = user_item.kerberos_tgs or ""
+                if f"$krb5tgs${hash_type}$" not in existing:
+                    user_item.kerberos_tgs = existing.rstrip("\n") + "\n" + s if existing else s
+                    counts["kerberoast"] += 1
+                else:
+                    counts["skipped"] += 1
+
+        # Try KRB5 AS-REP
+        if not matched:
+            m_asrep = _KRB5ASREP_RE.match(s)
+            if m_asrep:
+                matched = True
+                raw_user = m_asrep.group(2).strip()
+                domain = m_asrep.group(3).strip()
+                if raw_user:
+                    user_item = session.scalar(
+                        select(NameItem).where(NameItem.ad_username.ilike(raw_user))
+                    )
+                    if not user_item:
+                        email_match = session.scalar(
+                            select(NameItem).where(
+                                NameItem.email != "",
+                                NameItem.email.ilike(f"{raw_user}@%"),
+                            )
+                        )
+                        if email_match:
+                            if not email_match.ad_username or not email_match.ad_username.strip():
+                                email_match.ad_username = raw_user
+                            if not email_match.domain or not email_match.domain.strip():
+                                email_match.domain = domain
+                            user_item = email_match
+                    if not user_item:
+                        user_item = NameItem(first_name="", middle_name="", last_name="", ad_username=raw_user, domain=domain)
+                        session.add(user_item)
+                        session.flush()
+                    existing = user_item.kerberos_asrep or ""
+                    if s not in existing:
+                        user_item.kerberos_asrep = existing.rstrip("\n") + "\n" + s if existing else s
+                        counts["krb5asrep"] += 1
+                    else:
+                        counts["skipped"] += 1
+
+        # Try NTLMv1: last group is short (session key, typically 16-32 hex chars)
+        if not matched:
+            m_ntlmv1 = _NTLMV1_RE.match(s)
+            if m_ntlmv1 and len(s.split(":")[-1]) < 50:
+                matched = True
+                raw_user = m_ntlmv1.group(1).strip()
+                domain = m_ntlmv1.group(2).strip()
+                if raw_user:
+                    user_item = session.scalar(
+                        select(NameItem).where(NameItem.ad_username.ilike(raw_user))
+                    )
+                    if not user_item:
+                        email_match = session.scalar(
+                            select(NameItem).where(
+                                NameItem.email != "",
+                                NameItem.email.ilike(f"{raw_user}@%"),
+                            )
+                        )
+                        if email_match:
+                            if not email_match.ad_username or not email_match.ad_username.strip():
+                                email_match.ad_username = raw_user
+                            if not email_match.domain or not email_match.domain.strip():
+                                email_match.domain = domain
+                            user_item = email_match
+                    if not user_item:
+                        user_item = NameItem(first_name="", middle_name="", last_name="", ad_username=raw_user, domain=domain)
+                        session.add(user_item)
+                        session.flush()
+                    user_item.ntlm_v1 = s
+                    counts["ntlmv1"] += 1
+
+        # Try NTLMv2
+        if not matched:
+            m_ntlm = _NTLMV2_RE.match(s)
+            if m_ntlm:
+                parts = s.split(":")
+                if len(parts) >= 5 and len(parts[-1]) > 100:
+                    matched = True
+                    raw_user = m_ntlm.group(1).strip()
+                    domain = m_ntlm.group(2).strip()
+                    if raw_user:
+                        user_item = session.scalar(
+                            select(NameItem).where(NameItem.ad_username.ilike(raw_user))
+                        )
+                        if not user_item:
+                            email_match = session.scalar(
+                                select(NameItem).where(
+                                    NameItem.email != "",
+                                    NameItem.email.ilike(f"{raw_user}@%"),
+                                )
+                            )
+                            if email_match:
+                                if not email_match.ad_username or not email_match.ad_username.strip():
+                                    email_match.ad_username = raw_user
+                                if not email_match.domain or not email_match.domain.strip():
+                                    email_match.domain = domain
+                                user_item = email_match
+                        if not user_item:
+                            user_item = NameItem(first_name="", middle_name="", last_name="", ad_username=raw_user, domain=domain)
+                            session.add(user_item)
+                            session.flush()
+                        user_item.ntlm_v2 = s
+                        counts["ntlmv2"] += 1
+
+        # Try DCC2
+        if not matched:
+            m_dcc2 = _DCC2_RE.match(s)
+            if m_dcc2:
+                matched = True
+                raw_user = m_dcc2.group(2).strip()
+                if raw_user:
+                    user_item = session.scalar(
+                        select(NameItem).where(NameItem.ad_username.ilike(raw_user))
+                    )
+                    if not user_item:
+                        email_match = session.scalar(
+                            select(NameItem).where(
+                                NameItem.email != "",
+                                NameItem.email.ilike(f"{raw_user}@%"),
+                            )
+                        )
+                        if email_match:
+                            if not email_match.ad_username or not email_match.ad_username.strip():
+                                email_match.ad_username = raw_user
+                            if not email_match.domain or not email_match.domain.strip():
+                                email_match.domain = email_match.email.split("@", 1)[1] if "@" in email_match.email else ""
+                            user_item = email_match
+                    if not user_item:
+                        user_item = NameItem(first_name="", middle_name="", last_name="", ad_username=raw_user)
+                        session.add(user_item)
+                        session.flush()
+                    user_item.dcc2 = s
+                    counts["dcc2"] += 1
+
+        # Try plain NTLM hash: username:32hex or domain\username:32hex
+        if not matched:
+            m_ntlm = _NTLM_RE.match(s)
+            if m_ntlm:
+                matched = True
+                domain = m_ntlm.group(1).strip() if m_ntlm.group(1) else ""
+                raw_user = m_ntlm.group(2).strip()
+                if raw_user:
+                    user_item = session.scalar(
+                        select(NameItem).where(NameItem.ad_username.ilike(raw_user))
+                    )
+                    if not user_item:
+                        email_match = session.scalar(
+                            select(NameItem).where(
+                                NameItem.email != "",
+                                NameItem.email.ilike(f"{raw_user}@%"),
+                            )
+                        )
+                        if email_match:
+                            if not email_match.ad_username or not email_match.ad_username.strip():
+                                email_match.ad_username = raw_user
+                            if not email_match.domain or not email_match.domain.strip():
+                                email_match.domain = domain
+                            user_item = email_match
+                    if not user_item:
+                        user_item = NameItem(first_name="", middle_name="", last_name="", ad_username=raw_user, domain=domain)
+                        session.add(user_item)
+                        session.flush()
+                    ntlm_hash_value = m_ntlm.group(3)
+                    existing = user_item.ntlm_hash or ""
+                    if ntlm_hash_value not in existing:
+                        user_item.ntlm_hash = existing.rstrip("\n") + "\n" + ntlm_hash_value if existing else ntlm_hash_value
+                        counts["ntlm"] += 1
+                    else:
+                        counts["skipped"] += 1
+
+        if not matched:
+            unmatched.append(s)
+
+    session.commit()
+    return {
+        "counts": counts,
+        "unmatched": unmatched,
+        "total": sum(counts.values()) - counts["skipped"] + counts["skipped"],
+    }
+

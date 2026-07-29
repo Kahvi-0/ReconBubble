@@ -22,6 +22,14 @@ def _has_column(conn, table: str, col: str) -> bool:
     return any(r[1] == col for r in rows)
 
 
+def _column_type(conn, table: str, col: str) -> str | None:
+    rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
+    for r in rows:
+        if r[1] == col:
+            return r[2]
+    return None
+
+
 def migrate_sqlite(engine) -> None:
     """Tiny, safe migrations for the MVP."""
     with engine.begin() as conn:
@@ -504,4 +512,156 @@ def migrate_sqlite(engine) -> None:
         )
         """)
         )
+
+        # domain_correlations table - track domain aliases
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS domain_correlations (
+          id INTEGER PRIMARY KEY,
+          primary_domain VARCHAR(255) NOT NULL UNIQUE,
+          aliases TEXT DEFAULT ''
+        )
+        """)
+        )
+
+        # name_items: add domain column if missing
+        try:
+            if conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='name_items'"
+                )
+            ).fetchone():
+                if not _has_column(conn, "name_items", "domain"):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE name_items ADD COLUMN domain VARCHAR(255) DEFAULT ''"
+                        )
+                    )
+                if not _has_column(conn, "name_items", "password"):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE name_items ADD COLUMN password VARCHAR(255) DEFAULT ''"
+                        )
+                    )
+                if not _has_column(conn, "name_items", "ntlm_hash"):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE name_items ADD COLUMN ntlm_hash VARCHAR(255) DEFAULT ''"
+                        )
+                    )
+                if not _has_column(conn, "name_items", "ntlm_v1"):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE name_items ADD COLUMN ntlm_v1 VARCHAR(255) DEFAULT ''"
+                        )
+                    )
+                if not _has_column(conn, "name_items", "ntlm_v2"):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE name_items ADD COLUMN ntlm_v2 VARCHAR(255) DEFAULT ''"
+                        )
+                    )
+                if not _has_column(conn, "name_items", "dcc2"):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE name_items ADD COLUMN dcc2 TEXT DEFAULT ''"
+                        )
+                    )
+                if not _has_column(conn, "name_items", "kerberos_asrep"):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE name_items ADD COLUMN kerberos_asrep VARCHAR(255) DEFAULT ''"
+                        )
+                    )
+            if not _has_column(conn, "name_items", "kerberos_tgs"):
+                conn.execute(
+                    text(
+                        "ALTER TABLE name_items ADD COLUMN kerberos_tgs VARCHAR(255) DEFAULT ''"
+                    )
+                )
+            if not _has_column(conn, "name_items", "kerberos_key_aes128"):
+                conn.execute(
+                    text(
+                        "ALTER TABLE name_items ADD COLUMN kerberos_key_aes128 VARCHAR(255) DEFAULT ''"
+                    )
+                )
+            if not _has_column(conn, "name_items", "kerberos_key_aes256"):
+                conn.execute(
+                    text(
+                        "ALTER TABLE name_items ADD COLUMN kerberos_key_aes256 VARCHAR(255) DEFAULT ''"
+                    )
+                )
+
+            # Ensure kerberos_tgs, kerberos_asrep, ntlm_v2 are TEXT (hashes exceed 255)
+            for _col_name in ("kerberos_tgs", "kerberos_asrep", "ntlm_v2"):
+                if _has_column(conn, "name_items", _col_name):
+                    ct = _column_type(conn, "name_items", _col_name)
+                    if ct and "TEXT" not in ct.upper():
+                        try:
+                            conn.execute(text(f"ALTER TABLE name_items RENAME TO name_items_old"))
+                            conn.execute(text("""
+                                CREATE TABLE name_items (
+                                    id INTEGER PRIMARY KEY,
+                                    first_name VARCHAR(255),
+                                    middle_name VARCHAR(255),
+                                    last_name VARCHAR(255),
+                                    email VARCHAR(255),
+                                    phone VARCHAR(64),
+                                    ad_username VARCHAR(255),
+                                    domain VARCHAR(255),
+                                    password VARCHAR(255),
+                                    ntlm_hash VARCHAR(255),
+                                    ntlm_v1 VARCHAR(255),
+                                    ntlm_v2 TEXT DEFAULT '',
+                                    dcc2 TEXT DEFAULT '',
+                                    kerberos_asrep TEXT DEFAULT '',
+                                    kerberos_tgs TEXT DEFAULT '',
+                                    kerberos_key_aes128 VARCHAR(255) DEFAULT '',
+                                    kerberos_key_aes256 VARCHAR(255) DEFAULT '',
+                                    tags VARCHAR(512),
+                                    topology_node_id VARCHAR(255),
+                                    created_at DATETIME
+                                )
+                            """))
+                            conn.execute(text("""
+                                INSERT INTO name_items (id, first_name, middle_name, last_name, email, phone,
+                                    ad_username, domain, password, ntlm_hash, ntlm_v1, ntlm_v2, dcc2,
+                                    kerberos_asrep, kerberos_tgs, kerberos_key_aes128, kerberos_key_aes256, tags, topology_node_id, created_at)
+                                SELECT id, first_name, middle_name, last_name, email, phone,
+                                    ad_username, domain, password, ntlm_hash, ntlm_v1, ntlm_v2, COALESCE(dcc2, ''),
+                                    kerberos_asrep, kerberos_tgs, COALESCE(kerberos_key_aes128, ''), COALESCE(kerberos_key_aes256, ''), tags, topology_node_id, created_at
+                                FROM name_items_old
+                            """))
+                            conn.execute(text("DROP TABLE name_items_old"))
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        # name_items: add cracked/plaintext tracking columns if missing
+        try:
+            if conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='name_items'"
+                )
+            ).fetchone():
+                for _col in (
+                    "password_plaintext",
+                    "ntlm_hash_cracked",
+                    "ntlm_v1_cracked",
+                    "ntlm_v2_cracked",
+                    "dcc2_cracked",
+                    "kerberos_asrep_cracked",
+                    "kerberos_tgs_cracked",
+                    "kerberos_key_aes128_cracked",
+                    "kerberos_key_aes256_cracked",
+                ):
+                    if not _has_column(conn, "name_items", _col):
+                        conn.execute(
+                            text(
+                                f"ALTER TABLE name_items ADD COLUMN {_col} INTEGER DEFAULT 0"
+                            )
+                        )
+        except Exception:
+            pass
     conn.commit()

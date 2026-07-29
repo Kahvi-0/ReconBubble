@@ -34,6 +34,7 @@
         notes: n.notes || "",
         floating_notes: Array.isArray(n.floating_notes) ? n.floating_notes : [],
         compromised: !!n.compromised,
+        impersonated: !!n.impersonated,
         linked_asset_id: n.linked_asset_id || "",
         linked_name_id: n.linked_name_id || "",
         asn: n.asn || "",
@@ -137,6 +138,24 @@
           "font-size": 7,
           "font-weight": 800,
           "color": "#fee2e2",
+          "text-valign": "center",
+          "text-halign": "center",
+          "z-index": 10001,
+        },
+      },
+      {
+        selector: 'node[type = "impersonated"]',
+        style: {
+          "shape": "round-rectangle",
+           "width": 76,
+          "height": 16,
+          "background-color": "#b45309",
+          "border-width": 1,
+          "border-color": "#78350f",
+           "label": "IMPERSONATED",
+          "font-size": 7,
+          "font-weight": 800,
+          "color": "#fef3c7",
           "text-valign": "center",
           "text-halign": "center",
           "z-index": 10001,
@@ -363,7 +382,7 @@
   }
 
   function isBadge(node) {
-    return node && node.isNode && node.isNode() && node.data("type") === "badge";
+    return node && node.isNode && node.isNode() && (node.data("type") === "badge" || node.data("type") === "impersonated");
   }
 
   function isPreview(node) {
@@ -412,16 +431,33 @@
     indicator.position({ x: p.x - w / 2 + 10, y: p.y - h / 2 - 10 });
   }
 
-  function syncBadgePosition(nodeId) {
+    function syncBadgePosition(nodeId) {
+    }
+  function syncAllBadges(nodeId) {
     const owner = cy.getElementById(nodeId);
-    const badge = cy.getElementById(badgeIdFor(nodeId));
-    if (!owner || !owner.length || !badge || !badge.length) return;
+    if (!owner || !owner.length) return;
+    const compromised = cy.getElementById(badgeIdFor(nodeId));
+    const impersonated = cy.getElementById(impersonatedBadgeIdFor(nodeId));
     const p = owner.position();
-    const w = owner.width();
     const h = owner.height();
-    const bw = badge.width();
-    const bh = badge.height();
-    badge.position({ x: p.x + w / 2 - bw / 2 + 2, y: p.y - h / 2 - bh / 2 - 2 });
+    const bh = 16;
+    const baseY = p.y - h / 2 - bh / 2 - 2;
+    const cExists = compromised && compromised.length;
+    const iExists = impersonated && impersonated.length;
+    if (cExists && iExists) {
+      const cBW = compromised.width();
+      const iBW = impersonated.width();
+      const gap = 6;
+      const total = cBW + gap + iBW;
+      compromised.position({ x: p.x - total / 2 + cBW / 2, y: baseY });
+      impersonated.position({ x: p.x - total / 2 + cBW + gap + iBW / 2, y: baseY });
+    } else if (cExists) {
+      const cBW = compromised.width();
+      compromised.position({ x: p.x + owner.width() / 2 - cBW / 2 + 2, y: baseY });
+    } else if (iExists) {
+      const iBW = impersonated.width();
+      impersonated.position({ x: p.x + owner.width() / 2 - iBW / 2 + 2, y: baseY });
+    }
   }
 
   function ensureNoteIndicator(nodeId) {
@@ -500,12 +536,13 @@
       grabbable: false,
       selectable: false,
     });
-    syncBadgePosition(nodeId);
+    syncAllBadges(nodeId);
   }
 
   function removeBadge(nodeId) {
     const b = cy.getElementById(badgeIdFor(nodeId));
     if (b && b.length) b.remove();
+    syncAllBadges(nodeId);
   }
 
   function removeFloatingNotes(ownerId) {
@@ -580,6 +617,7 @@
       notes: n.data("notes") || "",
       floating_notes: Array.isArray(n.data("floating_notes")) ? n.data("floating_notes") : [],
       compromised: !!n.data("compromised"),
+      impersonated: !!n.data("impersonated"),
       linked_asset_id: n.data("linked_asset_id") || "",
       linked_name_id: n.data("linked_name_id") || "",
       asn: n.data("asn") || "",
@@ -623,9 +661,48 @@
     saveTimer = setTimeout(saveNow, 350);
   }
 
+  function impersonatedBadgeIdFor(nodeId) {
+
+    return `badge_impersonated_${nodeId}`;
+  }
+
+  function ensureImpersonatedBadge(nodeId) {
+    if (cy.getElementById(impersonatedBadgeIdFor(nodeId)).length) return;
+    cy.add({
+      group: "nodes",
+       data: { id: impersonatedBadgeIdFor(nodeId), type: "impersonated", owner: nodeId, label: "IMPERSONATED" },
+      position: { x: 0, y: 0 },
+      grabbable: false,
+      selectable: false,
+    });
+    syncAllBadges(nodeId);
+  }
+
+  function removeImpersonatedBadge(nodeId) {
+    const b = cy.getElementById(impersonatedBadgeIdFor(nodeId));
+    if (b && b.length) b.remove();
+    syncAllBadges(nodeId);
+  }
+
+  function syncImpersonatedBadgePosition(nodeId) {
+    syncAllBadges(nodeId);
+  }
+
   function updateNodeClass(node) {
-    if (!!node.data("compromised")) ensureBadge(node.id());
-    else removeBadge(node.id());
+    if (!!node.data("compromised")) {
+      ensureBadge(node.id());
+      node.style("border-color", "#991b1b");
+    } else {
+      removeBadge(node.id());
+      if (!node.data("impersonated")) node.style("border-color", "transparent");
+    }
+    if (!!node.data("impersonated")) {
+      ensureImpersonatedBadge(node.id());
+      node.style("border-color", "#b45309");
+    } else {
+      removeImpersonatedBadge(node.id());
+      if (!node.data("compromised")) node.style("border-color", "transparent");
+    }
   }
 
   function addNode(type) {
@@ -649,6 +726,7 @@
         notes: "",
         floating_notes: [],
         compromised: false,
+        impersonated: false,
         linked_asset_id: "",
         linked_name_id: "",
         display: `${icon}\n\n${label} ${nextNodeId - 1}`,
@@ -694,7 +772,8 @@
           label,
           color: "#64748b",
           notes: "",
-          compromised: false,
+        compromised: false,
+        impersonated: false,
         display: `${icon}\n\n${label}`,
         },
         position: { x, y },
@@ -961,14 +1040,68 @@
 
     const fullName = `${name.first_name} ${name.middle_name} ${name.last_name}`.trim();
     let html = `
-      <div style="margin-top:4px; padding:8px; background:#0f172a; border-radius:8px; border:1px solid #2a3545;">
-        <div style="font-weight:600; margin-bottom:4px;">${escapeHtml(fullName)}</div>
+      <div style="margin-top:4px; padding:10px; background:#0f172a; border-radius:8px; border:1px solid #2a3545;">
     `;
-    if (name.email) html += `<div style="font-size:11px; margin-top:2px;">📧 ${escapeHtml(name.email)}</div>`;
-    if (name.phone) html += `<div style="font-size:11px; margin-top:2px;">📞 ${escapeHtml(name.phone)}</div>`;
-    if (name.ad_username) html += `<div style="font-size:11px; margin-top:2px;">🔑 ${escapeHtml(name.ad_username)}</div>`;
+
+    // Info fields
+    const infoFields = [
+      { label: fullName, show: !!fullName },
+      { label: `Email: ${name.email}`, show: !!(name.email && name.email.trim()) },
+      { label: `Phone: ${name.phone}`, show: !!(name.phone && name.phone.trim()) },
+      { label: `${name.ad_username.trim().endsWith('$') ? 'AD Computer' : 'AD User'}: ${name.ad_username}`, show: !!(name.ad_username && name.ad_username.trim()) },
+      { label: `Domain: ${name.domain}`, show: !!(name.domain && name.domain.trim()) },
+      { label: `Tags: ${name.tags}`, show: !!(name.tags && name.tags.trim()) },
+    ];
+    infoFields.filter(f => f.show).forEach(f => {
+      html += `<div style="font-size:11px; margin-bottom:2px;">${escapeHtml(f.label)}</div>`;
+    });
+
+    // Hash/credential fields with copy buttons
+    const credFields = [
+      { label: "Password", value: name.password },
+      { label: "NTLM Hash", value: name.ntlm_hash },
+      { label: "NTLMv1", value: name.ntlm_v1 },
+      { label: "NTLMv2", value: name.ntlm_v2 },
+      { label: "DCC2", value: name.dcc2 },
+      { label: "Kerberos AS-REP", value: name.kerberos_asrep },
+      { label: "Kerberos TGS", value: name.kerberos_tgs },
+      { label: "AES128 Key", value: name.kerberos_key_aes128 },
+      { label: "AES256 Key", value: name.kerberos_key_aes256 },
+    ];
+
+    const credsToShow = credFields.filter(f => f.value && f.value.trim());
+    if (credsToShow.length > 0) {
+      html += `<div style="margin-top:8px; padding-top:6px; border-top:1px solid #2a3545;">`;
+      credsToShow.forEach(f => {
+        const safeId = `topoCred_${f.label.replace(/\s+/g, '_')}_${nameId}`;
+        html += `
+          <div style="margin-top:6px;">
+            <div style="font-size:10px; color:#94a3b8; font-weight:600; margin-bottom:2px;">${escapeHtml(f.label)}</div>
+            <div style="display:flex; gap:4px; align-items:center;">
+              <div style="flex:1; min-width:0; background:#0b1220; border:1px solid #1e293b; border-radius:4px; padding:4px 6px; font-size:10px; font-family:monospace; color:#cbd5e1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" id="${safeId}" title="${escapeHtml(f.value)}">${escapeHtml(f.value)}</div>
+              <button class="topo-copy-btn" data-target="${safeId}" style="flex-shrink:0; padding:3px 8px; font-size:10px; background:#1e293b; color:#94a3b8; border:1px solid #334155; border-radius:4px; cursor:pointer;" title="Copy">Copy</button>
+            </div>
+          </div>
+        `;
+      });
+      html += `</div>`;
+    }
+
     html += `</div>`;
     infoDiv.innerHTML = html;
+
+    // Wire copy buttons
+    infoDiv.querySelectorAll('.topo-copy-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const targetId = btn.getAttribute('data-target');
+        const el = document.getElementById(targetId);
+        if (el) {
+          navigator.clipboard.writeText(el.textContent || '').catch(() => {});
+          btn.textContent = 'Copied';
+          setTimeout(() => { btn.textContent = 'Copy'; }, 1200);
+        }
+      });
+    });
   }
 
   async function renderAssetInfo(node, assetId) {
@@ -1087,6 +1220,10 @@
         <input id="topoCompromised" type="checkbox" ${d.compromised ? "checked" : ""} />
         Mark as compromised
       </label>
+      <label class="checkbox-label" style="margin-top:6px;">
+        <input id="topoImpersonated" type="checkbox" ${d.impersonated ? "checked" : ""} />
+        Impersonated
+      </label>
       <br/>
       ${isUser
         ? `<label style="margin-top:8px;">Link Name</label>
@@ -1130,6 +1267,12 @@
     });
     compEl && compEl.addEventListener("change", () => {
       node.data("compromised", !!compEl.checked);
+      updateNodeClass(node);
+      queueSave();
+    });
+    const impEl = document.getElementById("topoImpersonated");
+    impEl && impEl.addEventListener("change", () => {
+      node.data("impersonated", !!impEl.checked);
       updateNodeClass(node);
       queueSave();
     });
@@ -1317,7 +1460,7 @@
     const n = evt.target;
     if (!isVirtualNode(n)) {
       syncHandlePosition(n.id());
-      syncBadgePosition(n.id());
+      syncAllBadges(n.id());
       syncNoteIndicatorPosition(n.id());
       refreshFloatingNotes(n.id());
       saveNow();
@@ -1328,7 +1471,7 @@
     const n = evt.target;
     if (!isVirtualNode(n)) {
       syncHandlePosition(n.id());
-      syncBadgePosition(n.id());
+      syncAllBadges(n.id());
       syncNoteIndicatorPosition(n.id());
       refreshFloatingNotes(n.id());
     }
@@ -1350,6 +1493,7 @@
       const h = cy.getElementById(handleIdFor(n.id()));
       if (h && h.length) h.remove();
       removeBadge(n.id());
+      removeImpersonatedBadge(n.id());
       removeNoteIndicator(n.id());
       removeFloatingNotes(n.id());
       queueSave();
@@ -1555,28 +1699,13 @@
     realNodes().filter((n) => n.data("compromised")).forEach((n) => n.style("border-color", "#991b1b"));
   }
 
-  // Smooth red pulse for compromised nodes (paused when tab is hidden)
-  let pulsePhase = 0;
-  let pulseRAF = null;
-  function stepPulse() {
-    pulsePhase += 0.035;
-    const t = (Math.sin(pulsePhase) + 1) / 2;
-    const r = Math.round(153 + t * 102);
-    const g = Math.round(27 + t * 85);
-    const b = Math.round(27 + t * 85);
-    const color = `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`;
-    realNodes().filter((n) => n.data("compromised")).forEach((n) => {
-      n.style("border-color", color);
-    });
-    pulseRAF = requestAnimationFrame(stepPulse);
-  }
-  pulseRAF = requestAnimationFrame(stepPulse);
-  document.addEventListener("visibilitychange", () => {
-    if (document.hidden) {
-      cancelAnimationFrame(pulseRAF);
-      pulseRAF = null;
-    } else if (!pulseRAF) {
-      pulseRAF = requestAnimationFrame(stepPulse);
-    }
+  // Compromised nodes get static red border (no animation)
+  realNodes().filter((n) => n.data("compromised")).forEach((n) => {
+    n.style("border-color", "#991b1b");
+  });
+
+  // Impersonated nodes get static orange border
+  realNodes().filter((n) => n.data("impersonated")).forEach((n) => {
+    n.style("border-color", "#b45309");
   });
 })();

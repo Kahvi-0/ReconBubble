@@ -58,6 +58,7 @@ from .parsers import (
     import_smtp,
     import_bbot,
     import_bbot_cloud,
+    import_mixed_hashes,
 )
 
 DOMAIN_RE = re.compile(
@@ -613,16 +614,17 @@ def create_app(
         redirect_map = {
             "nmap_xml": "/assets",
             "subdomains": "/subdomains",
-            "names_emails": "/names",
+            "names_emails": "/users",
             "doc": "/docs",
-            "ad_users": "/names",
+            "ad_users": "/users",
             "creds": "/app-credentials",
             "urls": "/assets",
-            "names": "/names",
+            "names": "/users",
             "bbot": "/subdomains",
             "prowl_phase1": "/subdomains",
             "zone_transfers": "/subdomains",
-            "smtp": "/emails",
+            "smtp": "/users",
+            "mixed_hashes": "/users",
             "bbot_cloud": "/cloud",
         }
         try:
@@ -636,6 +638,7 @@ def create_app(
                     "creds": "pasted_creds.txt",
                     "urls": "pasted_urls.txt",
                     "names": "pasted_names.txt",
+                    "mixed_hashes": "pasted_mixed_hashes.txt",
                 }.get(kind, "pasted.txt")
                 fname = (
                     raw_filename.strip()
@@ -671,6 +674,17 @@ def create_app(
                         import_web_urls(s, art, Path(stored))
                     elif kind == "names":
                         import_names(s, art, Path(stored))
+                    elif kind == "mixed_hashes":
+                        result = import_mixed_hashes(s, art, Path(stored))
+                if kind == "mixed_hashes":
+                    return templates.TemplateResponse(
+                        "upload.html",
+                        {
+                            "request": request,
+                            "workspace": ws,
+                            "mixed_result": result,
+                        },
+                    )
                 return RedirectResponse(
                     url=redirect_map.get(kind, "/"), status_code=303
                 )
@@ -737,6 +751,17 @@ def create_app(
                         elif kind == "bbot_cloud":
                             result = import_bbot_cloud(s, art, Path(stored_path))
                             print(f"[bbot_cloud] Import complete: {result}")
+                        elif kind == "mixed_hashes":
+                            result = import_mixed_hashes(s, art, Path(stored_path))
+                if kind == "mixed_hashes":
+                    return templates.TemplateResponse(
+                        "upload.html",
+                        {
+                            "request": request,
+                            "workspace": ws,
+                            "mixed_result": result,
+                        },
+                    )
                 return RedirectResponse(
                     url=redirect_map.get(kind, "/"), status_code=303
                 )
@@ -4228,46 +4253,6 @@ def create_app(
             {"request": request, "grouped": grouped_filtered, "show_out": show_out, "excluded": excluded},
         )
 
-    @app.get("/emails", response_class=HTMLResponse)
-    def emails(request: Request):
-        with db() as s:
-            _, _, _, email_domains, _, _, _ = scope_sets(s)
-            _, _, _, s_email_domains, _, _, _ = scope_sets(s, sensitive_only=True)
-            rows = (
-                s.execute(select(Email).order_by(Email.domain.asc(), Email.email.asc()))
-                .scalars()
-                .all()
-            )
-        out = [
-            {
-                "email": x.email,
-                "domain": x.domain,
-                "in_scope": email_in_scope(x.email, email_domains),
-                "sensitive": email_in_scope(x.email, s_email_domains),
-            }
-            for x in rows
-        ]
-        return templates.TemplateResponse(
-            "emails.html", {"request": request, "rows": out}
-        )
-
-    @app.get("/emails/export")
-    def export_emails():
-        with db() as s:
-            _, _, _, email_domains, _, _, _ = scope_sets(s)
-            emails = (
-                s.execute(select(Email).order_by(Email.email.asc())).scalars().all()
-            )
-        lines = [x.email for x in emails if email_in_scope(x.email, email_domains)]
-        txt = "\n".join(lines)
-        return Response(
-            content=txt,
-            media_type="text/plain",
-            headers={
-                "Content-Disposition": "attachment; filename=reconbubble-emails.txt"
-            },
-        )
-
     @app.get("/docs", response_class=HTMLResponse)
     def docs(request: Request):
         from .parsers import DOC_NAME_FIELDS, DOC_SOFTWARE_FIELDS
@@ -5175,22 +5160,6 @@ def create_app(
         return {"ok": True}
 
     # Users & Credentials
-    @app.get("/users")
-    def users_page_legacy():
-        return RedirectResponse(url="/user-discovery", status_code=303)
-
-    @app.get("/user-discovery", response_class=HTMLResponse)
-    def user_discovery_page(request: Request):
-        with db() as s:
-            users = (
-                s.execute(select(ValidUser).order_by(ValidUser.username.asc()))
-                .scalars()
-                .all()
-            )
-        return templates.TemplateResponse(
-            "user_discovery.html", {"request": request, "users": users}
-        )
-
     @app.get("/app-credentials", response_class=HTMLResponse)
     def app_credentials_page(request: Request):
         with db() as s:
@@ -5481,8 +5450,8 @@ def create_app(
             s.commit()
         return {"ok": True}
 
-    @app.get("/names", response_class=HTMLResponse)
-    def names_page(request: Request):
+    @app.get("/users", response_class=HTMLResponse)
+    def users_page(request: Request):
         with db() as s:
             names = (
                 s.execute(
@@ -5494,8 +5463,8 @@ def create_app(
         compromised_ids = _topology_compromised_ids()
         compromised_name_ids = compromised_ids.get("name_ids", set()) if compromised_ids else set()
         return templates.TemplateResponse(
-            "names.html", {"request": request, "names": names, "compromised_name_ids": compromised_name_ids}
-        )
+            "users.html", {"request": request, "names": names, "compromised_name_ids": compromised_name_ids}
+            )
 
     @app.get("/api/names/list")
     def api_names_list():
@@ -5519,9 +5488,28 @@ def create_app(
                     "email": n.email,
                     "phone": n.phone,
                     "ad_username": n.ad_username,
+                    "domain": n.domain,
+                    "has_password": bool(n.password and n.password.strip()),
+                    "ntlm_hash": n.ntlm_hash,
+                    "ntlm_v1": n.ntlm_v1,
+                    "ntlm_v2": n.ntlm_v2,
+                    "dcc2": n.dcc2,
+                    "kerberos_asrep": n.kerberos_asrep,
+                    "kerberos_tgs": n.kerberos_tgs,
+                    "kerberos_key_aes128": n.kerberos_key_aes128,
+                    "kerberos_key_aes256": n.kerberos_key_aes256,
+                    "password_plaintext": n.password_plaintext or 0,
+                    "ntlm_hash_cracked": n.ntlm_hash_cracked or 0,
+                    "ntlm_v1_cracked": n.ntlm_v1_cracked or 0,
+                    "ntlm_v2_cracked": n.ntlm_v2_cracked or 0,
+                    "dcc2_cracked": n.dcc2_cracked or 0,
+                    "kerberos_asrep_cracked": n.kerberos_asrep_cracked or 0,
+                    "kerberos_tgs_cracked": n.kerberos_tgs_cracked or 0,
+                    "kerberos_key_aes128_cracked": n.kerberos_key_aes128_cracked or 0,
+                    "kerberos_key_aes256_cracked": n.kerberos_key_aes256_cracked or 0,
                     "tags": n.tags,
                     "topology_node_id": n.topology_node_id,
-                    "compromised": str(n.id) in compromised_name_ids,
+                    "compromised": str(n.id) in compromised_name_ids or bool((n.password or "").strip() or (n.ntlm_hash or "").strip()),
                 }
                 for n in names
             ]
@@ -5529,30 +5517,44 @@ def create_app(
 
     @app.post("/api/names/create")
     def api_name_create(
-        first_name: str = Form(...),
+        first_name: str = Form(""),
         middle_name: str = Form(""),
-        last_name: str = Form(...),
+        last_name: str = Form(""),
         email: str = Form(""),
         phone: str = Form(""),
         ad_username: str = Form(""),
+        domain: str = Form(""),
+        password: str = Form(""),
+        ntlm_hash: str = Form(""),
+        ntlm_v1: str = Form(""),
+        ntlm_v2: str = Form(""),
+        dcc2: str = Form(""),
+        kerberos_asrep: str = Form(""),
+        kerberos_tgs: str = Form(""),
+        kerberos_key_aes128: str = Form(""),
+        kerberos_key_aes256: str = Form(""),
         tags: str = Form(""),
     ):
-        first_name = first_name.strip()
-        last_name = last_name.strip()
-        if not first_name or not last_name:
-            return JSONResponse(
-                {"ok": False, "error": "First and last name are required"}, status_code=400
-            )
         with db() as s:
             s.add(
                 NameItem(
-                    first_name=first_name,
+                    first_name=first_name.strip(),
                     middle_name=middle_name.strip(),
-                    last_name=last_name,
+                    last_name=last_name.strip(),
                     email=email.strip(),
                     phone=phone.strip(),
                     ad_username=ad_username.strip(),
-                    tags=tags.strip(),
+                    domain=domain.strip(),
+                    password=password.strip(),
+                    ntlm_hash=ntlm_hash.strip(),
+                    ntlm_v1=ntlm_v1.strip(),
+                    ntlm_v2=ntlm_v2.strip(),
+                    dcc2=dcc2.strip(),
+                    kerberos_asrep=kerberos_asrep.strip(),
+                    kerberos_tgs=kerberos_tgs.strip(),
+                    kerberos_key_aes128=kerberos_key_aes128.strip(),
+                    kerberos_key_aes256=kerberos_key_aes256.strip(),
+                    tags=tags,
                 )
             )
             s.commit()
@@ -5561,20 +5563,33 @@ def create_app(
     @app.post("/api/names/update")
     def api_name_update(
         name_id: int = Form(...),
-        first_name: str = Form(...),
+        first_name: str = Form(""),
         middle_name: str = Form(""),
-        last_name: str = Form(...),
+        last_name: str = Form(""),
         email: str = Form(""),
         phone: str = Form(""),
         ad_username: str = Form(""),
+        domain: str = Form(""),
+        password: str = Form(""),
+        ntlm_hash: str = Form(""),
+        ntlm_v1: str = Form(""),
+        ntlm_v2: str = Form(""),
+        dcc2: str = Form(""),
+        kerberos_asrep: str = Form(""),
+        kerberos_tgs: str = Form(""),
+        kerberos_key_aes128: str = Form(""),
+        kerberos_key_aes256: str = Form(""),
+        password_plaintext: str = Form(""),
+        ntlm_hash_cracked: str = Form(""),
+        ntlm_v1_cracked: str = Form(""),
+        ntlm_v2_cracked: str = Form(""),
+        dcc2_cracked: str = Form(""),
+        kerberos_asrep_cracked: str = Form(""),
+        kerberos_tgs_cracked: str = Form(""),
+        kerberos_key_aes128_cracked: str = Form(""),
+        kerberos_key_aes256_cracked: str = Form(""),
         tags: str = Form(""),
     ):
-        first_name = first_name.strip()
-        last_name = last_name.strip()
-        if not first_name or not last_name:
-            return JSONResponse(
-                {"ok": False, "error": "First and last name are required"}, status_code=400
-            )
         with db() as s:
             name = s.scalar(select(NameItem).where(NameItem.id == name_id))
             if not name:
@@ -5585,7 +5600,36 @@ def create_app(
             name.email = email.strip()
             name.phone = phone.strip()
             name.ad_username = ad_username.strip()
+            name.domain = domain.strip()
+            name.password = password.strip()
+            name.ntlm_hash = ntlm_hash.strip()
+            name.ntlm_v1 = ntlm_v1.strip()
+            name.ntlm_v2 = ntlm_v2.strip()
+            name.dcc2 = dcc2.strip()
+            name.kerberos_asrep = kerberos_asrep.strip()
+            name.kerberos_tgs = kerberos_tgs.strip()
+            name.kerberos_key_aes128 = kerberos_key_aes128.strip()
+            name.kerberos_key_aes256 = kerberos_key_aes256.strip()
+            name.password_plaintext = 1 if password_plaintext else 0
+            name.ntlm_hash_cracked = 1 if ntlm_hash_cracked else 0
+            name.ntlm_v1_cracked = 1 if ntlm_v1_cracked else 0
+            name.ntlm_v2_cracked = 1 if ntlm_v2_cracked else 0
+            name.dcc2_cracked = 1 if dcc2_cracked else 0
+            name.kerberos_asrep_cracked = 1 if kerberos_asrep_cracked else 0
+            name.kerberos_tgs_cracked = 1 if kerberos_tgs_cracked else 0
+            name.kerberos_key_aes128_cracked = 1 if kerberos_key_aes128_cracked else 0
+            name.kerberos_key_aes256_cracked = 1 if kerberos_key_aes256_cracked else 0
             name.tags = tags.strip()
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/names/update-domain")
+    def api_name_update_domain(name_id: int = Form(...), domain: str = Form("")):
+        with db() as s:
+            name = s.scalar(select(NameItem).where(NameItem.id == name_id))
+            if not name:
+                return JSONResponse({"ok": False, "error": "Name not found"}, status_code=404)
+            name.domain = domain.strip()
             s.commit()
         return {"ok": True}
 
@@ -5599,26 +5643,32 @@ def create_app(
             s.commit()
         return {"ok": True}
 
-    @app.get("/user-discovery/export/usernames")
-    @app.get("/users/export/usernames")
-    def export_usernames():
+    @app.get("/api/domain-correlations")
+    def api_domain_correlations_get():
+        from reconbubble.models import DomainCorrelation
         with db() as s:
-            users = (
-                s.execute(select(ValidUser.username).order_by(ValidUser.username.asc()))
-                .scalars()
-                .all()
-            )
-        txt = "\n".join(users)
-        return Response(
-            content=txt,
-            media_type="text/plain",
-            headers={
-                "Content-Disposition": "attachment; filename=reconbubble-usernames.txt"
-            },
-        )
+            corrs = s.scalars(select(DomainCorrelation).order_by(DomainCorrelation.primary_domain)).all()
+            result = {}
+            for c in corrs:
+                if c.primary_domain not in result:
+                    result[c.primary_domain] = {"primary": c.primary_domain, "aliases": c.aliases.split(",") if c.aliases else []}
+            return result
+
+    @app.post("/api/domain-correlations/save")
+    async def api_domain_correlations_save(request: Request):
+        from reconbubble.models import DomainCorrelation
+        data = await request.json()
+        if not data:
+            return JSONResponse({"ok": False, "error": "No data"}, status_code=400)
+        with db() as s:
+            s.execute(DomainCorrelation.__table__.delete())
+            for primary, info in data.items():
+                aliases = ",".join(info.get("aliases", []))
+                s.add(DomainCorrelation(primary_domain=primary, aliases=aliases))
+            s.commit()
+        return {"ok": True}
 
     @app.get("/app-credentials/export/creds")
-    @app.get("/users/export/creds")
     def export_creds():
         with db() as s:
             creds = (

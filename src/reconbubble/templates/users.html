@@ -1,146 +1,1029 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Valid Users & Credentials</h1>
+<h1>Users</h1>
 
-<div class="card" style="margin-bottom:20px;">
-  <h2>Actions</h2>
-  <button class="btn" id="createUserBtn" type="button">Add user</button>
-  <button class="btn" id="createCredBtn" type="button">Add credential</button>
+<div class="card" style="margin-bottom:20px; display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
+  <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+    <button class="btn" id="createNameBtn" type="button">Add user</button>
+    <button class="btn" id="openDomainCorrelationBtn" type="button">Domain Correlation</button>
+    <button class="btn" id="exportCredsBtn" type="button">Export Creds</button>
+  </div>
+  <div style="width:1px; height:28px; background:#2a3a4a; margin:0 4px;"></div>
+  <select id="filterDomain" class="toolbar-select" title="Filter by domain"><option value="">All Domains</option></select>
+  <div class="toggle-row"><label class="filter-label">Compromised Only</label><label class="toggle-switch"><input type="checkbox" id="filterCompromised" /><span class="toggle-slider"></span></label></div>
+  <div class="toggle-row"><label class="filter-label">Passwords Only</label><label class="toggle-switch"><input type="checkbox" id="filterPasswords" /><span class="toggle-slider"></span></label></div>
+  <div class="toggle-row"><label class="filter-label">Hide Computers</label><label class="toggle-switch"><input type="checkbox" id="filterHideComputers" /><span class="toggle-slider"></span></label></div>
 </div>
 
-<div class="split">
-  <div class="card" style="flex:1;">
-    <div style="display:flex; justify-content:space-between; align-items:center;">
-      <h2>Valid Usernames</h2>
-      <a class="btn" href="/users/export/usernames">Export</a>
+<div class="card">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+    <h2 style="margin:0;">Names</h2>
+    <div id="nameToolbar" style="display:none; align-items:center; gap:10px;">
+      <span id="selectedCount" class="muted" style="font-size:12px;">0 selected</span>
+      <select id="bulkActions" style="width:auto; padding:6px 10px; margin:0;">
+        <option value="">Actions...</option>
+        <option value="add-domain">Add Domain</option>
+        <option value="add-topology">Add to Topology</option>
+        <option value="delete" style="color:#f87171;">Delete Selected</option>
+      </select>
     </div>
-    {% if users %}
-    <table>
-      <thead><tr><th>Username</th><th>Source</th><th>Notes</th></tr></thead>
-      <tbody>
-        {% for u in users %}
-        <tr>
-          <td><code>{{ u.username }}</code></td>
-          <td>{{ u.source }}</td>
-          <td>{{ u.notes }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="muted">No valid users yet. Upload a list or add manually.</p>
-    {% endif %}
   </div>
+  {% if names %}
+  <table>
+    <thead><tr><th style="width:32px;"><input type="checkbox" id="selectAll" title="Select all" /></th><th>First</th><th>Middle</th><th>Last</th><th>Email</th><th>Phone</th><th>AD Username</th><th>Domain</th><th style="padding-right:0px;">Tags</th><th style="width:60px;padding-left:0px;"></th></tr></thead>
+    <tbody>
+      {% for n in names %}
+        <tr class="name-row" data-id="{{ n.id }}" data-first="{{ n.first_name }}" data-middle="{{ n.middle_name }}" data-last="{{ n.last_name }}" data-email="{{ n.email }}" data-phone="{{ n.phone }}" data-ad-username="{{ n.ad_username }}" data-domain="{{ n.domain }}" data-password="{{ n.password }}" data-password-plaintext="{{ n.password_plaintext }}" data-ntlm-hash="{{ n.ntlm_hash }}" data-ntlm-hash-cracked="{{ n.ntlm_hash_cracked }}" data-ntlm-v1="{{ n.ntlm_v1 }}" data-ntlm-v1-cracked="{{ n.ntlm_v1_cracked }}" data-ntlm-v2="{{ n.ntlm_v2 }}" data-ntlm-v2-cracked="{{ n.ntlm_v2_cracked }}" data-dcc2="{{ n.dcc2 }}" data-dcc2-cracked="{{ n.dcc2_cracked }}" data-kerberos-asrep="{{ n.kerberos_asrep }}" data-kerberos-asrep-cracked="{{ n.kerberos_asrep_cracked }}" data-kerberos-tgs="{{ n.kerberos_tgs }}" data-kerberos-tgs-cracked="{{ n.kerberos_tgs_cracked }}" data-kerberos-key-aes128="{{ n.kerberos_key_aes128 }}" data-kerberos-key-aes128-cracked="{{ n.kerberos_key_aes128_cracked }}" data-kerberos-key-aes256="{{ n.kerberos_key_aes256 }}" data-kerberos-key-aes256-cracked="{{ n.kerberos_key_aes256_cracked }}" data-tags="{{ n.tags }}" data-topology-node-id="{{ n.topology_node_id }}" data-topo-compromised="{{ 1 if n.id|string in compromised_name_ids else 0 }}" data-compromised="{{ 1 if n.id|string in compromised_name_ids or (n.password and n.password.strip()) or (n.ntlm_hash and n.ntlm_hash.strip()) else 0 }}">
+         <td class="checkbox-cell" style="text-align:center;"><input type="checkbox" class="row-checkbox" data-id="{{ n.id }}" /></td>
+         <td>{{ n.first_name }}</td>
+         <td>{{ n.middle_name }}</td>
+         <td>{{ n.last_name }}</td>
+         <td>{% if n.email %}{{ n.email }}{% else %}<span class="muted">—</span>{% endif %}</td>
+         <td>{% if n.phone %}{{ n.phone }}{% else %}<span class="muted">—</span>{% endif %}</td>
+         <td>{% if n.ad_username %}{{ n.ad_username }}{% else %}<span class="muted">—</span>{% endif %}</td>
+         <td>{% if n.domain %}{{ n.domain }}{% else %}<span class="muted">—</span>{% endif %}</td>
+<td style="padding-right:0px;">{% set _has_hash = (n.ntlm_hash and n.ntlm_hash.strip()) or (n.ntlm_v1 and n.ntlm_v1.strip()) or (n.ntlm_v2 and n.ntlm_v2.strip()) or (n.dcc2 and n.dcc2.strip()) or (n.kerberos_asrep and n.kerberos_asrep.strip()) or (n.kerberos_tgs and n.kerberos_tgs.strip()) or (n.kerberos_key_aes128 and n.kerberos_key_aes128.strip()) or (n.kerberos_key_aes256 and n.kerberos_key_aes256.strip()) %}{% if n.id|string in compromised_name_ids or (n.password and n.password.strip()) or (n.ntlm_hash and n.ntlm_hash.strip()) %}<span class="topo-badge compromised">Compromised</span>{% endif %}{% if n.ad_username and n.ad_username.strip() %}<span class="topo-badge ad-user">{% if n.ad_username.strip().endswith('$') %}AD Computer{% else %}AD User{% endif %}</span>{% endif %}{% if n.password and n.password.strip() %}<span class="topo-badge has-password">Password</span>{% endif %}{% if _has_hash %}<span class="topo-badge has-hash">Hash</span>{% endif %}{% if n.tags %}<span class="user-tag">{{ n.tags }}</span>{% endif %}</td>
+          <td style="padding-left:0px;">
+            <div class="cred-actions">
+             <button class="cred-action-btn topo-btn" data-name-id="{{ n.id }}" data-topo-node-id="{{ n.topology_node_id }}" data-name-label="{% if n.ad_username and n.ad_username.strip() %}{{ n.ad_username }}{% elif n.email and n.email.strip() %}{{ n.email }}{% else %}{{ n.first_name }} {{ n.last_name }}{% endif %}" data-name-email="{{ n.email }}" data-name-phone="{{ n.phone }}" title="Add to Topology">+</button>
+             <button class="cred-action-btn del" data-del="{{ n.id }}" title="Delete">&#10005;</button>
+           </div>
+         </td>
+       </tr>
+       {% endfor %}
+     </tbody>
+   </table>
+   {% else %}
+    <p class="muted">No users yet. Add manually.</p>
+   {% endif %}
+</div>
 
-  <div class="card" style="flex:1;">
-    <div style="display:flex; justify-content:space-between; align-items:center;">
-      <h2>Credentials</h2>
-      <a class="btn" href="/users/export/creds">Export</a>
+<style>
+.topo-badge.ad-user { background: #1e3a5f; color: #93c5fd; border: 1px solid #2563eb; }
+.topo-badge.has-password { background: #14532d; color: #86efac; border: 1px solid #16a34a; }
+.topo-badge.has-hash { background: #431407; color: #fdba74; border: 1px solid #ea580c; }
+</style>
+
+<div id="nameDetail" class="name-detail-panel">
+  <div class="name-detail-header">
+    <span class="name-detail-name"></span>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn name-edit-btn" id="nameEditBtn" type="button" style="display:none;font-size:12px;padding:4px 10px;">Edit</button>
+      <button class="btn" id="nameSaveBtn" type="submit" form="nameDetailForm" style="display:none;font-size:12px;padding:4px 10px;">Save</button>
+      <button class="btn" type="button" id="cancelEditBtn" style="display:none;font-size:12px;padding:4px 10px;background:#1e2630;">Cancel</button>
+      <button class="cred-action-btn" id="closeDetailBtn" title="Close">&times;</button>
     </div>
-    {% if creds %}
-    <table>
-      <thead><tr><th>Username</th><th>Password</th><th>Service</th><th>URL</th><th>Notes</th></tr></thead>
-      <tbody>
-        {% for c in creds %}
-        <tr>
-          <td><code>{{ c.username }}</code></td>
-          <td><code>{{ c.password }}</code></td>
-          <td>{{ c.service }}</td>
-          <td>{% if c.url %}<a href="{{ c.url }}" target="_blank">link</a>{% else %}-{% endif %}</td>
-          <td>{{ c.notes }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    {% else %}
-    <p class="muted">No credentials yet. Upload user:pass pairs or add manually.</p>
-    {% endif %}
+  </div>
+  <div class="name-detail-body">
+    <div id="nameViewFields" class="name-view-fields">
+      <div class="name-detail-row multi">
+        <div class="name-detail-field"><label>First Name</label><span id="viewFirstName"></span></div>
+        <div class="name-detail-field"><label>Middle Name</label><span id="viewMiddleName"></span></div>
+        <div class="name-detail-field"><label>Last Name</label><span id="viewLastName"></span></div>
+      </div>
+      <div class="name-detail-row multi">
+        <div class="name-detail-field"><label>Email</label><span id="viewEmail"></span></div>
+        <div class="name-detail-field"><label>Phone</label><span id="viewPhone"></span></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>AD Username</label><span id="viewAdUsername"></span></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Domain</label><span id="viewDomain"></span></div>
+      </div>
+      <div class="name-cred-divider"></div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Password</label><div class="cred-display-wrap"><span id="viewPassword" class="cred-display" data-raw-value=""><span class="cred-value"></span><span class="cred-status"></span></span><button type="button" class="cred-copy-btn cred-copy-view" data-copy-id="viewPassword" title="Copy">Copy</button></div></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>NTLM Hash</label><div class="cred-display-wrap"><span id="viewNtlmHash" class="cred-display" data-raw-value=""><span class="cred-value"></span><span class="cred-status"></span></span><button type="button" class="cred-copy-btn cred-copy-view" data-copy-id="viewNtlmHash" title="Copy">Copy</button></div></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>NTLMv1</label><div class="cred-display-wrap"><span id="viewNtlmV1" class="cred-display" data-raw-value=""><span class="cred-value"></span><span class="cred-status"></span></span><button type="button" class="cred-copy-btn cred-copy-view" data-copy-id="viewNtlmV1" title="Copy">Copy</button></div></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>NTLMv2</label><div class="cred-display-wrap"><span id="viewNtlmV2" class="cred-display" data-raw-value=""><span class="cred-value"></span><span class="cred-status"></span></span><button type="button" class="cred-copy-btn cred-copy-view" data-copy-id="viewNtlmV2" title="Copy">Copy</button></div></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>DCC2</label><div class="cred-display-wrap"><span id="viewDcc2" class="cred-display" data-raw-value=""><span class="cred-value"></span><span class="cred-status"></span></span><button type="button" class="cred-copy-btn cred-copy-view" data-copy-id="viewDcc2" title="Copy">Copy</button></div></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Kerberos AS-REP</label><div class="cred-display-wrap"><span id="viewKerberosAsrep" class="cred-display" data-raw-value=""><span class="cred-value"></span><span class="cred-status"></span></span><button type="button" class="cred-copy-btn cred-copy-view" data-copy-id="viewKerberosAsrep" title="Copy">Copy</button></div></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Kerberos TGS</label><div class="cred-display-wrap"><span id="viewKerberosTgs" class="cred-display" data-raw-value=""><span class="cred-value"></span><span class="cred-status"></span></span><button type="button" class="cred-copy-btn cred-copy-view" data-copy-id="viewKerberosTgs" title="Copy">Copy</button></div></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Kerberos Key AES128</label><div class="cred-display-wrap"><span id="viewKerberosKeyAes128" class="cred-display" data-raw-value=""></span><button type="button" class="cred-copy-btn cred-copy-view" data-copy-id="viewKerberosKeyAes128" title="Copy">Copy</button></div></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Kerberos Key AES256</label><div class="cred-display-wrap"><span id="viewKerberosKeyAes256" class="cred-display" data-raw-value=""></span><button type="button" class="cred-copy-btn cred-copy-view" data-copy-id="viewKerberosKeyAes256" title="Copy">Copy</button></div></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Tags</label><span id="viewTags"></span></div>
+      </div>
+    </div>
+    <form id="nameDetailForm" style="display:none;">
+      <input type="hidden" name="name_id" id="detailNameId" />
+      <div class="name-detail-row multi">
+        <div class="name-detail-field"><label>First Name</label><input name="first_name" id="detailFirstName" /></div>
+        <div class="name-detail-field"><label>Middle Name</label><input name="middle_name" id="detailMiddleName" /></div>
+        <div class="name-detail-field"><label>Last Name</label><input name="last_name" id="detailLastName" /></div>
+      </div>
+      <div class="name-detail-row multi">
+        <div class="name-detail-field"><label>Email</label><input name="email" id="detailEmail" type="email" /></div>
+        <div class="name-detail-field"><label>Phone</label><input name="phone" id="detailPhone" type="tel" /></div>
+      </div>
+      <div class="name-detail-row multi">
+        <div class="name-detail-field"><label>AD Username</label><input name="ad_username" id="detailAdUsername" /></div>
+        <div class="name-detail-field"><label>Domain</label><input name="domain" id="detailDomain" /></div>
+      </div>
+      <div class="name-cred-divider"></div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Password</label><div class="cred-display-wrap"><input name="password" id="detailPassword" type="text" class="cred-input" /><button type="button" class="cred-copy-btn" data-copy-id="detailPassword" title="Copy">Copy</button></div><label style="font-size:11px;color:#8b9bb4;display:flex;align-items:center;gap:4px;margin-top:4px;"><input type="checkbox" name="password_plaintext" id="detailPasswordPlaintext" />Found in plain text?</label></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>NTLM Hash</label><div class="cred-display-wrap"><input name="ntlm_hash" id="detailNtlmHash" type="text" class="cred-input" /><button type="button" class="cred-copy-btn" data-copy-id="detailNtlmHash" title="Copy">Copy</button></div><label style="font-size:11px;color:#8b9bb4;display:flex;align-items:center;gap:4px;margin-top:4px;"><input type="checkbox" name="ntlm_hash_cracked" id="detailNtlmHashCracked" />Cracked?</label></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>NTLMv1</label><div class="cred-display-wrap"><input name="ntlm_v1" id="detailNtlmV1" type="text" class="cred-input" /><button type="button" class="cred-copy-btn" data-copy-id="detailNtlmV1" title="Copy">Copy</button></div><label style="font-size:11px;color:#8b9bb4;display:flex;align-items:center;gap:4px;margin-top:4px;"><input type="checkbox" name="ntlm_v1_cracked" id="detailNtlmV1Cracked" />Cracked?</label></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>NTLMv2</label><div class="cred-display-wrap"><input name="ntlm_v2" id="detailNtlmV2" type="text" class="cred-input" /><button type="button" class="cred-copy-btn" data-copy-id="detailNtlmV2" title="Copy">Copy</button></div><label style="font-size:11px;color:#8b9bb4;display:flex;align-items:center;gap:4px;margin-top:4px;"><input type="checkbox" name="ntlm_v2_cracked" id="detailNtlmV2Cracked" />Cracked?</label></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>DCC2</label><div class="cred-display-wrap"><input name="dcc2" id="detailDcc2" type="text" class="cred-input" /><button type="button" class="cred-copy-btn" data-copy-id="detailDcc2" title="Copy">Copy</button></div><label style="font-size:11px;color:#8b9bb4;display:flex;align-items:center;gap:4px;margin-top:4px;"><input type="checkbox" name="dcc2_cracked" id="detailDcc2Cracked" />Cracked?</label></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Kerberos AS-REP</label><textarea name="kerberos_asrep" id="detailKerberosAsrep" rows="4"></textarea><button type="button" class="cred-copy-btn" data-copy-id="detailKerberosAsrep" title="Copy">Copy</button><label style="font-size:11px;color:#8b9bb4;display:flex;align-items:center;gap:4px;margin-top:4px;"><input type="checkbox" name="kerberos_asrep_cracked" id="detailKerberosAsrepCracked" />Cracked?</label></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Kerberos TGS</label><textarea name="kerberos_tgs" id="detailKerberosTgs" rows="4"></textarea><button type="button" class="cred-copy-btn" data-copy-id="detailKerberosTgs" title="Copy">Copy</button><label style="font-size:11px;color:#8b9bb4;display:flex;align-items:center;gap:4px;margin-top:4px;"><input type="checkbox" name="kerberos_tgs_cracked" id="detailKerberosTgsCracked" />Cracked?</label></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Kerberos Key AES128</label><div class="cred-display-wrap"><input name="kerberos_key_aes128" id="detailKerberosKeyAes128" type="text" class="cred-input" /><button type="button" class="cred-copy-btn" data-copy-id="detailKerberosKeyAes128" title="Copy">Copy</button></div></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Kerberos Key AES256</label><div class="cred-display-wrap"><input name="kerberos_key_aes256" id="detailKerberosKeyAes256" type="text" class="cred-input" /><button type="button" class="cred-copy-btn" data-copy-id="detailKerberosKeyAes256" title="Copy">Copy</button></div></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Tags</label><input name="tags" id="detailTags" /></div>
+      </div>
+      <div id="formMsg" class="muted" style="margin:8px 0 0 4px;"></div>
+    </form>
   </div>
 </div>
 
-<div id="sidebarOverlay" class="overlay hidden"></div>
-<aside id="sidebar" class="sidebar hidden" aria-hidden="true">
-  <div class="sidebarHeader">
-    <div id="sidebarTitle" class="sidebarTitle">Details</div>
-    <button id="sidebarClose" class="btn" type="button">X</button>
+<div id="domainCorrelationPanel" class="domain-corr-panel">
+  <div class="domain-corr-header">
+    <span>Domain Correlation</span>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="btn" id="saveDomainCorrBtn" type="button" style="font-size:12px;padding:4px 10px;">Save</button>
+      <button class="cred-action-btn" id="closeDomainCorrBtn" title="Close">&times;</button>
+    </div>
   </div>
-  <div id="sidebarBody" class="sidebarBody"></div>
-</aside>
+  <div class="domain-corr-body">
+    <div class="domain-corr-add" style="display:flex;gap:6px;margin-bottom:12px;">
+      <input id="newDomainInput" type="text" placeholder="Add domain..." style="flex:1;margin:0;" />
+      <button class="btn" id="addDomainBtn" type="button" style="font-size:12px;padding:4px 10px;white-space:nowrap;">Add</button>
+    </div>
+    <div id="domainCorrList">
+    </div>
+  </div>
+</div>
 
+<div id="domainCorrToast" class="domain-corr-toast" style="display:none;"></div>
+{% endblock %}
+
+{% block scripts %}
 <script>
-  const overlay = document.getElementById("sidebarOverlay");
-  const sidebar = document.getElementById("sidebar");
-  const title = document.getElementById("sidebarTitle");
-  const body = document.getElementById("sidebarBody");
-  const closeBtn = document.getElementById("sidebarClose");
-  
-  function show() { overlay.classList.remove("hidden"); sidebar.classList.remove("hidden"); }
-  function hide() { overlay.classList.add("hidden"); sidebar.classList.add("hidden"); }
-  
-  overlay && overlay.addEventListener("click", hide);
-  closeBtn && closeBtn.addEventListener("click", hide);
-  window.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
+  const nameDetail = document.getElementById("nameDetail");
+  const closeDetailBtn = document.getElementById("closeDetailBtn");
+  const selectAll = document.getElementById("selectAll");
+  const rowCheckboxes = document.querySelectorAll(".row-checkbox");
+  const selectedCount = document.getElementById("selectedCount");
+  const bulkActions = document.getElementById("bulkActions");
+  const nameToolbar = document.getElementById("nameToolbar");
+  let isCreateMode = false;
 
-  document.getElementById("createUserBtn").addEventListener("click", () => {
-    title.textContent = "Add User";
-    body.innerHTML = `
-      <form id="userForm">
-        <label>Username *</label>
-        <input name="username" required />
-        <label style="margin-top:8px;">Source</label>
-        <input name="source" placeholder="e.g., LinkedIn, breach" />
-        <label style="margin-top:8px;">Notes</label>
-        <textarea name="notes" rows="3"></textarea>
-        <button class="btn" type="submit" style="margin-top:12px;">Add</button>
-        <div id="formMsg" class="muted" style="margin-top:8px;"></div>
-      </form>
-    `;
-    show();
-    document.getElementById("userForm").addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      const fd = new FormData(ev.target);
-      document.getElementById("formMsg").textContent = "Saving...";
-      const r = await fetch("/api/users/create", { method: "POST", body: fd });
-      const j = await r.json();
-      if (j.ok) {
-        document.getElementById("formMsg").textContent = "Saved!";
-        setTimeout(() => location.reload(), 500);
-      } else {
-        document.getElementById("formMsg").textContent = j.error || "Error";
+  function getVisibleRows() {
+    return Array.from(document.querySelectorAll('.name-row')).filter(r => r.style.display !== 'none');
+  }
+
+  function getVisibleCheckboxes() {
+    return Array.from(document.querySelectorAll('.row-checkbox')).filter(cb => cb.closest('.name-row').style.display !== 'none');
+  }
+
+  function updateSelection() {
+    const checked = document.querySelectorAll(".row-checkbox:checked");
+    const count = checked.length;
+    selectedCount.textContent = `${count} selected`;
+    nameToolbar.style.display = count > 0 ? "flex" : "none";
+  }
+
+  if (selectAll) {
+    selectAll.addEventListener("change", () => {
+      getVisibleCheckboxes().forEach(cb => cb.checked = selectAll.checked);
+      updateSelection();
+    });
+  }
+
+  rowCheckboxes.forEach(cb => {
+    cb.addEventListener("change", (e) => {
+      e.stopPropagation();
+      updateSelection();
+      const visible = getVisibleCheckboxes();
+      const allChecked = visible.length > 0 && visible.every(c => c.checked);
+      selectAll.checked = allChecked;
+    });
+  });
+
+  bulkActions.addEventListener("change", () => {
+    const action = bulkActions.value;
+    if (!action) return;
+    const selected = Array.from(document.querySelectorAll(".row-checkbox:checked")).map(cb => cb.getAttribute("data-id"));
+    if (selected.length === 0) { bulkActions.value = ""; return; }
+
+    if (action === "delete") {
+      if (!confirm(`Delete ${selected.length} selected name(s)?`)) { bulkActions.value = ""; return; }
+      selected.forEach(id => {
+        const fd = new FormData();
+        fd.append("name_id", id);
+        fetch("/api/names/delete", { method: "POST", body: fd });
+      });
+      setTimeout(() => location.reload(), 600);
+    } else if (action === "add-domain") {
+      const domain = prompt("Enter domain to add to selected names:");
+      if (domain && domain.trim()) {
+        const d = domain.trim();
+        selected.forEach(id => {
+          const fd = new FormData();
+          fd.append("name_id", id);
+          fd.append("domain", d);
+          fetch("/api/names/update-domain", { method: "POST", body: fd }).then(r => r.json()).then(j => {
+            if (j.ok) {
+              const row = document.querySelector(`.name-row[data-id="${id}"]`);
+              if (row) {
+                const domainCell = row.children[7];
+                domainCell.innerHTML = d;
+              }
+            }
+          });
+        });
+      }
+    } else if (action === "add-topology") {
+      selected.forEach(id => {
+        const row = document.querySelector(`.name-row[data-id="${id}"]`);
+        if (!row) return;
+        const adUser = (row.getAttribute('data-ad-username') || '').trim();
+        const email = (row.getAttribute('data-email') || '').trim();
+        const phone = row.getAttribute('data-phone') || '';
+        const label = adUser || email || `${row.getAttribute('data-first')} ${row.getAttribute('data-last')}`;
+        const btn = row.querySelector('.topo-btn');
+        if (btn && btn.getAttribute('data-topo-node-id')) return;
+        fetch("/api/topology/add-user", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ label, email, phone, name_id: id })
+        }).then(r => r.json()).then(j => {
+          if (j.ok && btn) {
+            btn.textContent = "✓";
+            btn.disabled = true;
+            btn.classList.remove('topo-topo');
+            btn.classList.add('topo-in');
+            btn.setAttribute('data-topo-node-id', j.node.id);
+          }
+        });
+      });
+    }
+    bulkActions.value = "";
+  });
+
+  let currentDetailData = null;
+
+  function setCredView(elId, value, statusText, rawValue) {
+    const el = document.getElementById(elId);
+    const valEl = el.querySelector('.cred-value');
+    if (valEl) {
+      valEl.textContent = value || '—';
+      const statEl = el.querySelector('.cred-status');
+      if (statEl) statEl.textContent = statusText || '';
+    } else {
+      el.textContent = value || '—';
+    }
+    el.setAttribute('data-raw-value', rawValue || '');
+  }
+
+  function showDetail(data) {
+    currentDetailData = data;
+    isCreateMode = !data.id;
+    document.querySelector('.name-detail-name').textContent = isCreateMode ? 'Add Name' : `${data.first_name} ${data.last_name}`;
+
+    document.getElementById('viewFirstName').textContent = data.first_name || '—';
+    document.getElementById('viewMiddleName').textContent = data.middle_name || '—';
+    document.getElementById('viewLastName').textContent = data.last_name || '—';
+    document.getElementById('viewEmail').textContent = data.email || '—';
+    document.getElementById('viewPhone').textContent = data.phone || '—';
+    document.getElementById('viewAdUsername').textContent = data.ad_username || '—';
+    document.getElementById('viewDomain').textContent = data.domain || '—';
+    setCredView('viewPassword', data.password || '', data.password && data.password_plaintext === '1' ? '- Found in plain text' : '', data.password || '');
+    setCredView('viewNtlmHash', data.ntlm_hash || '', data.ntlm_hash && data.ntlm_hash_cracked === '1' ? '- Cracked' : '', data.ntlm_hash || '');
+    setCredView('viewNtlmV1', data.ntlm_v1 || '', data.ntlm_v1 && data.ntlm_v1_cracked === '1' ? '- Cracked' : '', data.ntlm_v1 || '');
+    setCredView('viewNtlmV2', data.ntlm_v2 || '', data.ntlm_v2 && data.ntlm_v2_cracked === '1' ? '- Cracked' : '', data.ntlm_v2 || '');
+    setCredView('viewDcc2', data.dcc2 || '', data.dcc2 && data.dcc2_cracked === '1' ? '- Cracked' : '', data.dcc2 || '');
+    setCredView('viewKerberosAsrep', data.kerberos_asrep || '', data.kerberos_asrep && data.kerberos_asrep_cracked === '1' ? '- Cracked' : '', data.kerberos_asrep || '');
+    setCredView('viewKerberosTgs', data.kerberos_tgs || '', data.kerberos_tgs && data.kerberos_tgs_cracked === '1' ? '- Cracked' : '', data.kerberos_tgs || '');
+    setCredView('viewKerberosKeyAes128', data.kerberos_key_aes128 || '', '', data.kerberos_key_aes128 || '');
+    setCredView('viewKerberosKeyAes256', data.kerberos_key_aes256 || '', '', data.kerberos_key_aes256 || '');
+    document.getElementById('viewTags').textContent = data.tags || '—';
+
+    document.getElementById('detailNameId').value = data.id || '';
+    document.getElementById('detailFirstName').value = data.first_name || '';
+    document.getElementById('detailMiddleName').value = data.middle_name || '';
+    document.getElementById('detailLastName').value = data.last_name || '';
+    document.getElementById('detailEmail').value = data.email || '';
+    document.getElementById('detailPhone').value = data.phone || '';
+    document.getElementById('detailAdUsername').value = data.ad_username || '';
+    document.getElementById('detailDomain').value = data.domain || '';
+    document.getElementById('detailPassword').value = data.password || '';
+    document.getElementById('detailNtlmHash').value = data.ntlm_hash || '';
+    document.getElementById('detailNtlmV1').value = data.ntlm_v1 || '';
+    document.getElementById('detailNtlmV2').value = data.ntlm_v2 || '';
+    document.getElementById('detailDcc2').value = data.dcc2 || '';
+    document.getElementById('detailKerberosAsrep').value = data.kerberos_asrep || '';
+    document.getElementById('detailKerberosTgs').value = data.kerberos_tgs || '';
+    document.getElementById('detailKerberosKeyAes128').value = data.kerberos_key_aes128 || '';
+    document.getElementById('detailKerberosKeyAes256').value = data.kerberos_key_aes256 || '';
+    document.getElementById('detailTags').value = data.tags || '';
+    document.getElementById('detailPasswordPlaintext').checked = data.password_plaintext === '1';
+    document.getElementById('detailNtlmHashCracked').checked = data.ntlm_hash_cracked === '1';
+    document.getElementById('detailNtlmV1Cracked').checked = data.ntlm_v1_cracked === '1';
+    document.getElementById('detailNtlmV2Cracked').checked = data.ntlm_v2_cracked === '1';
+    document.getElementById('detailDcc2Cracked').checked = data.dcc2_cracked === '1';
+    document.getElementById('detailKerberosAsrepCracked').checked = data.kerberos_asrep_cracked === '1';
+    document.getElementById('detailKerberosTgsCracked').checked = data.kerberos_tgs_cracked === '1';
+
+    if (isCreateMode) {
+      document.getElementById('nameViewFields').style.display = 'none';
+      document.getElementById('nameDetailForm').style.display = '';
+      document.getElementById('nameEditBtn').style.display = 'none';
+      document.getElementById('nameSaveBtn').style.display = '';
+      document.getElementById('nameSaveBtn').textContent = 'Add';
+      document.getElementById('cancelEditBtn').style.display = 'none';
+    } else {
+      document.getElementById('nameViewFields').style.display = '';
+      document.getElementById('nameDetailForm').style.display = 'none';
+      document.getElementById('nameEditBtn').style.display = '';
+      document.getElementById('nameSaveBtn').style.display = 'none';
+      document.getElementById('nameSaveBtn').textContent = 'Save';
+      document.getElementById('cancelEditBtn').style.display = 'none';
+    }
+    nameDetail.classList.add('active');
+  }
+
+  document.querySelectorAll('.cred-copy-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-copy-id');
+      const el = document.getElementById(id);
+      const text = el ? (el.value || (el.getAttribute('data-raw-value') || el.textContent) || '').trim() : '';
+      if (text) {
+        navigator.clipboard.writeText(text);
+        const orig = btn.textContent;
+        btn.textContent = '✓';
+        setTimeout(() => { btn.textContent = orig; }, 1200);
       }
     });
   });
 
-  document.getElementById("createCredBtn").addEventListener("click", () => {
-    title.textContent = "Add Credential";
-    body.innerHTML = `
-      <form id="credForm">
-        <label>Username *</label>
-        <input name="username" required />
-        <label style="margin-top:8px;">Password</label>
-        <input name="password" type="text" />
-        <label style="margin-top:8px;">Service / Platform</label>
-        <input name="service" placeholder="e.g., Gmail, O365" />
-        <label style="margin-top:8px;">URL</label>
-        <input name="url" placeholder="https://..." />
-        <label style="margin-top:8px;">Notes</label>
-        <textarea name="notes" rows="3"></textarea>
-        <button class="btn" type="submit" style="margin-top:12px;">Add</button>
-        <div id="formMsg" class="muted" style="margin-top:8px;"></div>
-      </form>
-    `;
-    show();
-    document.getElementById("credForm").addEventListener("submit", async (ev) => {
-      ev.preventDefault();
-      const fd = new FormData(ev.target);
-      document.getElementById("formMsg").textContent = "Saving...";
-      const r = await fetch("/api/creds/create", { method: "POST", body: fd });
-      const j = await r.json();
-      if (j.ok) {
-        document.getElementById("formMsg").textContent = "Saved!";
-        setTimeout(() => location.reload(), 500);
+  function enterEditMode() {
+    document.getElementById('nameViewFields').style.display = 'none';
+    document.getElementById('nameDetailForm').style.display = '';
+    document.getElementById('nameEditBtn').style.display = 'none';
+    document.getElementById('nameSaveBtn').style.display = '';
+    document.getElementById('nameSaveBtn').textContent = 'Save';
+    document.getElementById('cancelEditBtn').style.display = '';
+  }
+
+  function exitEditMode() {
+    document.getElementById('nameSaveBtn').style.display = 'none';
+    document.getElementById('cancelEditBtn').style.display = 'none';
+    document.getElementById('nameEditBtn').style.display = '';
+    if (currentDetailData) {
+      showDetail(currentDetailData);
+    }
+  }
+
+  function hideDetail() {
+    nameDetail.classList.remove('active');
+    document.getElementById('nameSaveBtn').style.display = 'none';
+    document.getElementById('cancelEditBtn').style.display = 'none';
+    document.getElementById('nameEditBtn').style.display = '';
+  }
+
+  document.getElementById('createNameBtn').addEventListener('click', () => {
+    showDetail({});
+  });
+
+  document.getElementById('nameEditBtn').addEventListener('click', enterEditMode);
+  document.getElementById('cancelEditBtn').addEventListener('click', exitEditMode);
+  document.getElementById('closeDetailBtn').addEventListener('click', hideDetail);
+
+  // --- Row Filtering ---
+  function loadFilterState() {
+    return {
+      domain: localStorage.getItem('userFilterDomain') || '',
+      compromised: localStorage.getItem('userFilterCompromised') === '1',
+      passwords: localStorage.getItem('userFilterPasswords') === '1',
+      hideComputers: localStorage.getItem('userFilterHideComputers') === '1',
+    };
+  }
+  function saveFilterState(fs) {
+    localStorage.setItem('userFilterDomain', fs.domain);
+    localStorage.setItem('userFilterCompromised', fs.compromised ? '1' : '0');
+    localStorage.setItem('userFilterPasswords', fs.passwords ? '1' : '0');
+    localStorage.setItem('userFilterHideComputers', fs.hideComputers ? '1' : '0');
+  }
+  function applyRowFilters() {
+    var fs = loadFilterState();
+    var domain = fs.domain;
+    var compromised = fs.compromised;
+    var passwords = fs.passwords;
+    var hideComputers = fs.hideComputers;
+    var resolver = window.resolveDomainPrimary || function(d) { return d; };
+    document.querySelectorAll('.name-row').forEach(function(row) {
+      var show = true;
+      if (domain) {
+        var rowDomain = (row.getAttribute('data-domain') || '').trim();
+        var primaryDomain = resolver(rowDomain);
+        if (primaryDomain !== domain) show = false;
+      }
+      if (compromised && row.getAttribute('data-compromised') !== '1') show = false;
+      if (passwords) {
+        var hasPassword = (row.getAttribute('data-password') || '').trim();
+        var hasHash = (row.getAttribute('data-ntlm-hash') || '').trim() || (row.getAttribute('data-ntlm-v1') || '').trim() || (row.getAttribute('data-ntlm-v2') || '').trim() || (row.getAttribute('data-dcc2') || '').trim() || (row.getAttribute('data-kerberos-asrep') || '').trim() || (row.getAttribute('data-kerberos-tgs') || '').trim() || (row.getAttribute('data-kerberos-key-aes128') || '').trim() || (row.getAttribute('data-kerberos-key-aes256') || '').trim();
+        if (!hasPassword && !hasHash) show = false;
+      }
+      if (hideComputers) {
+        var adUser = (row.getAttribute('data-ad-username') || '').trim();
+        if (adUser && adUser.endsWith('$')) show = false;
+      }
+      row.style.display = show ? '' : 'none';
+    });
+  }
+  function populateDomainFilter() {
+    var sel = document.getElementById('filterDomain');
+    sel.innerHTML = '<option value="">All Domains</option>';
+    var primaries = window.getPrimaryDomains ? window.getPrimaryDomains() : [];
+    if (primaries.length === 0) {
+      var domains = new Set();
+      document.querySelectorAll('.name-row').forEach(function(row) {
+        var d = (row.getAttribute('data-domain') || '').trim();
+        if (d) domains.add(d);
+      });
+      primaries = Array.from(domains);
+    }
+    var sorted = primaries.sort();
+    sorted.forEach(function(d) {
+      var opt = document.createElement('option');
+      opt.value = d;
+      opt.textContent = d;
+      sel.appendChild(opt);
+    });
+  }
+  (function initFilters() {
+    populateDomainFilter();
+    var fs = loadFilterState();
+    document.getElementById('filterDomain').value = fs.domain;
+    document.getElementById('filterCompromised').checked = fs.compromised;
+    document.getElementById('filterPasswords').checked = fs.passwords;
+    document.getElementById('filterHideComputers').checked = fs.hideComputers;
+    applyRowFilters();
+  })();
+  document.getElementById('filterDomain').addEventListener('change', function() {
+    var fs = loadFilterState();
+    fs.domain = this.value;
+    saveFilterState(fs);
+    applyRowFilters();
+  });
+  document.getElementById('filterCompromised').addEventListener('change', function() {
+    var fs = loadFilterState();
+    fs.compromised = this.checked;
+    saveFilterState(fs);
+    applyRowFilters();
+  });
+  document.getElementById('filterPasswords').addEventListener('change', function() {
+    var fs = loadFilterState();
+    fs.passwords = this.checked;
+    saveFilterState(fs);
+    applyRowFilters();
+  });
+  document.getElementById('filterHideComputers').addEventListener('change', function() {
+    var fs = loadFilterState();
+    fs.hideComputers = this.checked;
+    saveFilterState(fs);
+    applyRowFilters();
+  });
+
+   async function exportCredsTable() {
+    const exportBtn = document.getElementById('exportCredsBtn');
+    const rows = Array.from(document.querySelectorAll('.name-row'));
+    const credRows = rows.filter(r => {
+      const hasPassword = (r.getAttribute('data-password') || '').trim();
+      const hasNtlm = (r.getAttribute('data-ntlm-hash') || '').trim();
+      const hasNtlmV1 = (r.getAttribute('data-ntlm-v1') || '').trim();
+      const hasNtlmV2 = (r.getAttribute('data-ntlm-v2') || '').trim();
+      const hasDcc2 = (r.getAttribute('data-dcc2') || '').trim();
+      const hasAsrep = (r.getAttribute('data-kerberos-asrep') || '').trim();
+      const hasTgs = (r.getAttribute('data-kerberos-tgs') || '').trim();
+      const hasAes128 = (r.getAttribute('data-kerberos-key-aes128') || '').trim();
+      const hasAes256 = (r.getAttribute('data-kerberos-key-aes256') || '').trim();
+      return hasPassword || hasNtlm || hasNtlmV1 || hasNtlmV2 || hasDcc2 || hasAsrep || hasTgs || hasAes128 || hasAes256;
+    });
+
+    if (credRows.length === 0) {
+      exportBtn.textContent = 'No creds to export';
+      setTimeout(() => { exportBtn.textContent = 'Export Creds'; }, 1500);
+      return;
+    }
+
+    if (!Object.keys(domainCorrData).length) {
+      const r = await fetch("/api/domain-correlations");
+      if (r.ok) domainCorrData = await r.json();
+    }
+
+    const aliasToPrimary = {};
+    for (const [primary, info] of Object.entries(domainCorrData)) {
+      (info.aliases || []).forEach(alias => {
+        if (alias.trim()) {
+          aliasToPrimary[alias.trim().toLowerCase()] = primary;
+        }
+      });
+    }
+    function resolveDomain(domain) {
+      if (!domain || !domain.trim()) return domain;
+      const lower = domain.trim().toLowerCase();
+      return aliasToPrimary[lower] || domain;
+    }
+
+    const hashTypeMap = [
+      { key: 'ntlm-hash', crackedKey: 'ntlm-hash-cracked', label: 'NTLM' },
+      { key: 'ntlm-v1', crackedKey: 'ntlm-v1-cracked', label: 'NTLMv1' },
+      { key: 'ntlm-v2', crackedKey: 'ntlm-v2-cracked', label: 'NTLMv2' },
+      { key: 'dcc2', crackedKey: 'dcc2-cracked', label: 'DCC2' },
+      { key: 'kerberos-asrep', crackedKey: 'kerberos-asrep-cracked', label: 'Kerberos AS-REP' },
+      { key: 'kerberos-tgs', crackedKey: 'kerberos-tgs-cracked', label: 'Kerberos TGS' },
+      { key: 'kerberos-key-aes128', crackedKey: 'kerberos-key-aes128-cracked', label: 'Kerberos AES128' },
+      { key: 'kerberos-key-aes256', crackedKey: 'kerberos-key-aes256-cracked', label: 'Kerberos AES256' },
+    ];
+
+    const tableRows = [];
+    credRows.forEach(row => {
+      const adUser = (row.getAttribute('data-ad-username') || '').trim() || '';
+      const domain = (row.getAttribute('data-domain') || '').trim() || '';
+      const email = (row.getAttribute('data-email') || '').trim() || '';
+      const password = (row.getAttribute('data-password') || '').trim() || '';
+      const passwordPlaintext = row.getAttribute('data-password-plaintext');
+      const resolvedDomain = resolveDomain(domain);
+      const account = adUser && resolvedDomain ? `${resolvedDomain}\\${adUser}` : (email || adUser || '');
+
+      if (passwordPlaintext === '1') {
+        tableRows.push({ account, hashFormat: 'N/A', recovered: 'Yes' });
+      }
+
+      hashTypeMap.forEach(h => {
+        const hasHash = (row.getAttribute(`data-${h.key}`) || '').trim();
+        if (hasHash) {
+          const isCracked = row.getAttribute(`data-${h.crackedKey}`);
+          tableRows.push({ account, hashFormat: h.label, recovered: isCracked === '1' ? 'Yes' : 'No' });
+        }
+      });
+    });
+
+    const accountColWidth = Math.max(100, Math.max(...tableRows.map(r => r.account.length)) * 8.5 + 32);
+    const mocColWidth = 240;
+    const hfColWidth = 120;
+    const recColWidth = Math.max(80, Math.max('Recovered'.length, ...tableRows.map(r => r.recovered.length)) * 9 + 32);
+    const totalWidth = accountColWidth + mocColWidth + hfColWidth + recColWidth;
+
+    let html = '<table style="border-collapse:collapse; font-family:Calibri,sans-serif; font-size:10pt; table-layout:fixed; width:' + totalWidth + 'px;">';
+    html += '<tr><th style="padding:4px 6px; border:1px solid #cbd5e1; font-size:9pt; width:' + accountColWidth + 'px;">Account</th><th style="padding:4px 6px; border:1px solid #cbd5e1; font-size:9pt; width:' + mocColWidth + 'px;">Method of Compromise</th><th style="padding:4px 6px; border:1px solid #cbd5e1; font-size:9pt; width:' + hfColWidth + 'px;">Hash Format</th><th style="padding:4px 6px; border:1px solid #cbd5e1; font-size:9pt; width:' + recColWidth + 'px;">Recovered</th></tr>';
+
+    tableRows.forEach(r => {
+      html += '<tr>';
+      html += '<td style="padding:4px 6px; border:1px solid #e2e8f0; font-size:9pt; width:' + accountColWidth + 'px; overflow:hidden; text-overflow:ellipsis;">' + r.account + '</td>';
+      html += '<td style="padding:4px 6px; border:1px solid #e2e8f0; font-size:9pt; width:' + mocColWidth + 'px;"></td>';
+      html += '<td style="padding:4px 6px; border:1px solid #e2e8f0; font-size:9pt; width:' + hfColWidth + 'px;">' + r.hashFormat + '</td>';
+      html += '<td style="padding:4px 6px; border:1px solid #e2e8f0; font-size:9pt; width:' + recColWidth + 'px; text-align:center;">' + r.recovered + '</td>';
+      html += '</tr>';
+    });
+    html += '</table>';
+
+    const uniqueUsers = [...new Set(tableRows.map(r => r.account))].length;
+
+    if (navigator.clipboard && navigator.clipboard.write) {
+      const blobHtml = new Blob([html], { type: 'text/html' });
+      const blobText = new Blob([html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()], { type: 'text/plain' });
+      const item = new ClipboardItem({ 'text/html': blobHtml, 'text/plain': blobText });
+      navigator.clipboard.write([item]).then(() => {
+        exportBtn.textContent = `Copied ${uniqueUsers} user(s)!`;
+        setTimeout(() => { exportBtn.textContent = 'Export Creds'; }, 2000);
+      }).catch(() => {
+        exportBtn.textContent = 'Copy failed';
+        setTimeout(() => { exportBtn.textContent = 'Export Creds'; }, 2000);
+      });
+    } else {
+      const div = document.createElement('div');
+      div.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;overflow:hidden;';
+      div.innerHTML = html;
+      document.body.appendChild(div);
+      const range = document.createRange();
+      range.selectNodeContents(div);
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(range);
+      document.execCommand('copy');
+      sel.removeAllRanges();
+      div.remove();
+      exportBtn.textContent = `Copied ${uniqueUsers} user(s)!`;
+      setTimeout(() => { exportBtn.textContent = 'Export Creds'; }, 2000);
+    }
+    setTimeout(() => { exportBtn.textContent = 'Export Creds'; }, 2000);
+  }
+
+  document.getElementById('exportCredsBtn').addEventListener('click', exportCredsTable);
+
+  document.querySelectorAll('[data-del]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const nameId = btn.getAttribute('data-del');
+      if (!confirm("Delete this name?")) return;
+      const fd = new FormData();
+      fd.append("name_id", nameId);
+      await fetch("/api/names/delete", { method: "POST", body: fd });
+      location.reload();
+    });
+  });
+
+ document.querySelectorAll('.topo-btn').forEach(btn => {
+   const topoNodeId = btn.getAttribute('data-topo-node-id');
+
+   if (topoNodeId) {
+     btn.textContent = "✓";
+     btn.title = "Already in topology";
+     btn.disabled = true;
+     btn.classList.add('topo-in');
+     return;
+   }
+
+   btn.title = "Add to topology";
+   btn.classList.add('topo-topo');
+
+   btn.addEventListener('click', async () => {
+     const label = btn.getAttribute('data-name-label');
+     const email = btn.getAttribute('data-name-email') || '';
+     const phone = btn.getAttribute('data-name-phone') || '';
+     const nameId = btn.getAttribute('data-name-id');
+     btn.disabled = true;
+     btn.textContent = "...";
+     try {
+       const r = await fetch("/api/topology/add-user", {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({ label, email, phone, name_id: nameId })
+       });
+       const j = await r.json();
+       if (j.ok) {
+         btn.textContent = "✓";
+         btn.title = "Already in topology";
+         btn.classList.remove('topo-topo');
+         btn.classList.add('topo-in');
+         btn.setAttribute('data-topo-node-id', j.node.id);
+       } else {
+         alert(j.error || "Failed to add user to topology");
+         btn.textContent = "+";
+         btn.disabled = false;
+       }
+     } catch (e) {
+       alert("Error: " + e.message);
+       btn.textContent = "+";
+       btn.disabled = false;
+     }
+   });
+ });
+
+  document.querySelectorAll('.name-row').forEach(row => {
+    row.addEventListener('click', (e) => {
+      if (e.target.closest('.cred-actions') || e.target.closest('.row-checkbox') || e.target.closest('.checkbox-cell') || e.target.closest('#selectAll')) return;
+      const data = {
+        id: row.getAttribute('data-id'),
+        first_name: row.getAttribute('data-first'),
+        middle_name: row.getAttribute('data-middle'),
+        last_name: row.getAttribute('data-last'),
+        email: row.getAttribute('data-email'),
+        phone: row.getAttribute('data-phone'),
+        ad_username: row.getAttribute('data-ad-username'),
+        domain: row.getAttribute('data-domain'),
+        password: row.getAttribute('data-password'),
+        ntlm_hash: row.getAttribute('data-ntlm-hash'),
+        ntlm_v1: row.getAttribute('data-ntlm-v1'),
+        ntlm_v2: row.getAttribute('data-ntlm-v2'),
+        dcc2: row.getAttribute('data-dcc2'),
+        kerberos_asrep: row.getAttribute('data-kerberos-asrep'),
+        kerberos_tgs: row.getAttribute('data-kerberos-tgs'),
+        kerberos_key_aes128: row.getAttribute('data-kerberos-key-aes128'),
+        kerberos_key_aes256: row.getAttribute('data-kerberos-key-aes256'),
+        password_plaintext: row.getAttribute('data-password-plaintext'),
+        ntlm_hash_cracked: row.getAttribute('data-ntlm-hash-cracked'),
+        ntlm_v1_cracked: row.getAttribute('data-ntlm-v1-cracked'),
+        ntlm_v2_cracked: row.getAttribute('data-ntlm-v2-cracked'),
+        dcc2_cracked: row.getAttribute('data-dcc2-cracked'),
+        kerberos_asrep_cracked: row.getAttribute('data-kerberos-asrep-cracked'),
+        kerberos_tgs_cracked: row.getAttribute('data-kerberos-tgs-cracked'),
+        kerberos_key_aes128_cracked: row.getAttribute('data-kerberos-key-aes128-cracked'),
+        kerberos_key_aes256_cracked: row.getAttribute('data-kerberos-key-aes256-cracked'),
+        tags: row.getAttribute('data-tags'),
+      };
+      showDetail(data);
+    });
+  });
+
+  document.getElementById('nameDetailForm').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const form = ev.target;
+    const fd = new FormData(form);
+    const endpoint = isCreateMode ? "/api/names/create" : "/api/names/update";
+    document.getElementById('formMsg').textContent = "Saving...";
+    const r = await fetch(endpoint, { method: "POST", body: fd });
+    const j = await r.json().catch(() => ({ ok: false, error: "Error" }));
+    if (j.ok) {
+      document.getElementById('formMsg').textContent = isCreateMode ? "Added!" : "Saved!";
+      if (isCreateMode) {
+        setTimeout(() => {
+          hideDetail();
+          location.reload();
+        }, 400);
       } else {
-        document.getElementById("formMsg").textContent = j.error || "Error";
+        const updated = {
+          id: fd.get('name_id'),
+          first_name: fd.get('first_name'),
+          middle_name: fd.get('middle_name'),
+          last_name: fd.get('last_name'),
+          email: fd.get('email'),
+          phone: fd.get('phone'),
+          ad_username: fd.get('ad_username'),
+          domain: fd.get('domain'),
+          password: fd.get('password'),
+          ntlm_hash: fd.get('ntlm_hash'),
+          ntlm_v1: fd.get('ntlm_v1'),
+          ntlm_v2: fd.get('ntlm_v2'),
+          dcc2: fd.get('dcc2'),
+          kerberos_asrep: fd.get('kerberos_asrep'),
+          kerberos_tgs: fd.get('kerberos_tgs'),
+          kerberos_key_aes128: fd.get('kerberos_key_aes128'),
+          kerberos_key_aes256: fd.get('kerberos_key_aes256'),
+          password_plaintext: fd.has('password_plaintext') ? 1 : 0,
+          ntlm_hash_cracked: fd.has('ntlm_hash_cracked') ? 1 : 0,
+          ntlm_v1_cracked: fd.has('ntlm_v1_cracked') ? 1 : 0,
+          ntlm_v2_cracked: fd.has('ntlm_v2_cracked') ? 1 : 0,
+          dcc2_cracked: fd.has('dcc2_cracked') ? 1 : 0,
+          kerberos_asrep_cracked: fd.has('kerberos_asrep_cracked') ? 1 : 0,
+          kerberos_tgs_cracked: fd.has('kerberos_tgs_cracked') ? 1 : 0,
+          tags: fd.get('tags'),
+        };
+        currentDetailData = updated;
+        exitEditMode();
+        const row = document.querySelector(`.name-row[data-id="${updated.id}"]`);
+        if (row) {
+          row.setAttribute('data-first', updated.first_name);
+          row.setAttribute('data-middle', updated.middle_name);
+          row.setAttribute('data-last', updated.last_name);
+          row.setAttribute('data-email', updated.email);
+          row.setAttribute('data-phone', updated.phone);
+          row.setAttribute('data-ad-username', updated.ad_username);
+          row.setAttribute('data-domain', updated.domain);
+          row.setAttribute('data-password', updated.password);
+          row.setAttribute('data-ntlm-hash', updated.ntlm_hash);
+          row.setAttribute('data-ntlm-v1', updated.ntlm_v1);
+          row.setAttribute('data-ntlm-v2', updated.ntlm_v2);
+          row.setAttribute('data-dcc2', updated.dcc2);
+          row.setAttribute('data-kerberos-asrep', updated.kerberos_asrep);
+          row.setAttribute('data-kerberos-tgs', updated.kerberos_tgs);
+          row.setAttribute('data-kerberos-key-aes128', updated.kerberos_key_aes128);
+          row.setAttribute('data-kerberos-key-aes256', updated.kerberos_key_aes256);
+          row.setAttribute('data-password-plaintext', updated.password_plaintext ?? '');
+          row.setAttribute('data-ntlm-hash-cracked', updated.ntlm_hash_cracked ?? '');
+          row.setAttribute('data-ntlm-v1-cracked', updated.ntlm_v1_cracked ?? '');
+          row.setAttribute('data-ntlm-v2-cracked', updated.ntlm_v2_cracked ?? '');
+          row.setAttribute('data-dcc2-cracked', updated.dcc2_cracked ?? '');
+          row.setAttribute('data-kerberos-asrep-cracked', updated.kerberos_asrep_cracked ?? '');
+          row.setAttribute('data-kerberos-tgs-cracked', updated.kerberos_tgs_cracked ?? '');
+          row.setAttribute('data-kerberos-key-aes128-cracked', updated.kerberos_key_aes128_cracked ?? '');
+          row.setAttribute('data-kerberos-key-aes256-cracked', updated.kerberos_key_aes256_cracked ?? '');
+          row.setAttribute('data-tags', updated.tags);
+          row.children[1].textContent = updated.first_name;
+          row.children[2].textContent = updated.middle_name;
+          row.children[3].textContent = updated.last_name;
+          row.children[4].innerHTML = updated.email || '<span class="muted">—</span>';
+          row.children[5].innerHTML = updated.phone || '<span class="muted">—</span>';
+          row.children[6].innerHTML = updated.ad_username || '<span class="muted">—</span>';
+          row.children[7].innerHTML = updated.domain || '<span class="muted">—</span>';
+          let tagsHtml = '';
+          const hasCred = (updated.password && updated.password.trim()) || (updated.ntlm_hash && updated.ntlm_hash.trim());
+          const topoCompromised = row.getAttribute('data-topo-compromised') === '1';
+          if (topoCompromised || hasCred) {
+            tagsHtml += '<span class="topo-badge compromised">Compromised</span>';
+          }
+          if (updated.ad_username && updated.ad_username.trim()) {
+            tagsHtml += '<span class="topo-badge ad-user">' + (updated.ad_username.trim().endsWith('$') ? 'AD Computer' : 'AD User') + '</span>';
+          }
+          if (updated.password && updated.password.trim()) {
+            tagsHtml += '<span class="topo-badge has-password">Password</span>';
+          }
+          const hasHash = (updated.ntlm_hash && updated.ntlm_hash.trim()) || (updated.ntlm_v1 && updated.ntlm_v1.trim()) || (updated.ntlm_v2 && updated.ntlm_v2.trim()) || (updated.dcc2 && updated.dcc2.trim()) || (updated.kerberos_asrep && updated.kerberos_asrep.trim()) || (updated.kerberos_tgs && updated.kerberos_tgs.trim()) || (updated.kerberos_key_aes128 && updated.kerberos_key_aes128.trim()) || (updated.kerberos_key_aes256 && updated.kerberos_key_aes256.trim());
+          if (hasHash) {
+            tagsHtml += '<span class="topo-badge has-hash">Hash</span>';
+          }
+          tagsHtml += updated.tags ? '<span class="user-tag">' + updated.tags + '</span>' : '';
+          row.children[8].innerHTML = tagsHtml;
+          row.setAttribute('data-compromised', (topoCompromised || hasCred) ? '1' : '0');
+        }
+      }
+    } else {
+      document.getElementById('formMsg').textContent = j.error || "Error";
+    }
+  });
+
+  // Domain Correlation Panel
+  const domainCorrPanel = document.getElementById("domainCorrelationPanel");
+  const openDomainCorrBtn = document.getElementById("openDomainCorrelationBtn");
+  const closeDomainCorrBtn = document.getElementById("closeDomainCorrBtn");
+  const saveDomainCorrBtn = document.getElementById("saveDomainCorrBtn");
+  const newDomainInput = document.getElementById("newDomainInput");
+  const addDomainBtn = document.getElementById("addDomainBtn");
+  const domainCorrList = document.getElementById("domainCorrList");
+  const domainCorrToast = document.getElementById("domainCorrToast");
+  let domainCorrData = {};
+  window.getPrimaryDomains = function() {
+    return Object.keys(domainCorrData);
+  };
+  window.resolveDomainPrimary = function(domainVal) {
+    if (!domainVal) return domainVal;
+    var low = domainVal.toLowerCase();
+    for (var p in domainCorrData) {
+      if (p.toLowerCase() === low || (domainCorrData[p].aliases || []).some(function(a) { return a.toLowerCase() === low; })) {
+        return p;
+      }
+    }
+    return domainVal;
+  };
+
+  function showToast(msg) {
+    domainCorrToast.textContent = msg;
+    domainCorrToast.style.display = "block";
+    setTimeout(() => { domainCorrToast.style.display = "none"; }, 2000);
+  }
+
+  function cleanupRedundantPrimaries() {
+    const allAliases = new Set();
+    for (const [domain, info] of Object.entries(domainCorrData)) {
+      (info.aliases || []).forEach(alias => {
+        if (alias.trim()) allAliases.add(alias.trim().toLowerCase());
+      });
+    }
+    for (const domain of Object.keys(domainCorrData)) {
+      if (allAliases.has(domain.toLowerCase())) {
+        delete domainCorrData[domain];
+      }
+    }
+  }
+
+  function renderDomainCorr() {
+    domainCorrList.innerHTML = "";
+    for (const [domain, info] of Object.entries(domainCorrData)) {
+      const item = document.createElement("div");
+      item.className = "domain-corr-item";
+      item.dataset.domain = domain;
+
+      let aliasesHtml = "";
+      (info.aliases || []).forEach((alias, ai) => {
+        aliasesHtml += `<div class="domain-corr-alias-row">
+          <input type="text" value="${alias}" data-domain="${domain}" data-alias-idx="${ai}" class="domain-corr-alias-input" />
+          <button type="button" class="domain-corr-alias-remove" data-domain="${domain}" data-alias-idx="${ai}">&times;</button>
+        </div>`;
+      });
+
+      item.innerHTML = `
+        <div class="domain-corr-item-header">
+          <span class="domain-corr-item-label">${domain}</span>
+          <button type="button" class="domain-corr-item-remove" data-domain="${domain}" title="Remove domain">&times;</button>
+        </div>
+        <div class="domain-corr-aliases-container">${aliasesHtml}</div>
+        <button type="button" class="domain-corr-add-alias-btn" data-domain="${domain}">+ Add Alias</button>
+      `;
+      domainCorrList.appendChild(item);
+    }
+
+    // Wire up alias inputs
+    domainCorrList.querySelectorAll(".domain-corr-alias-input").forEach(inp => {
+      inp.addEventListener("input", (e) => {
+        const d = e.target.dataset.domain;
+        const ai = parseInt(e.target.dataset.aliasIdx);
+        if (domainCorrData[d] && domainCorrData[d].aliases) {
+          domainCorrData[d].aliases[ai] = e.target.value;
+        }
+      });
+    });
+
+    // Wire up alias remove buttons
+    domainCorrList.querySelectorAll(".domain-corr-alias-remove").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        const d = e.target.dataset.domain;
+        const ai = parseInt(e.target.dataset.aliasIdx);
+        if (domainCorrData[d] && domainCorrData[d].aliases) {
+          domainCorrData[d].aliases.splice(ai, 1);
+          cleanupRedundantPrimaries();
+          renderDomainCorr();
+          populateDomainFilter();
+        }
+      });
+    });
+
+    // Wire up remove domain buttons
+    domainCorrList.querySelectorAll(".domain-corr-item-remove").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        const d = e.target.dataset.domain;
+        delete domainCorrData[d];
+        renderDomainCorr();
+        populateDomainFilter();
+      });
+    });
+
+    // Wire up add alias buttons
+    domainCorrList.querySelectorAll(".domain-corr-add-alias-btn").forEach(btn => {
+      btn.addEventListener("click", (e) => {
+        const d = e.target.dataset.domain;
+        if (domainCorrData[d]) {
+          if (!domainCorrData[d].aliases) domainCorrData[d].aliases = [];
+          domainCorrData[d].aliases.push("");
+          renderDomainCorr();
+        }
+      });
+    });
+  }
+
+  function loadDomains() {
+    // Gather existing domains from users
+    const existingDomains = new Set();
+    document.querySelectorAll(".name-row").forEach(row => {
+      const d = (row.getAttribute("data-domain") || "").trim();
+      if (d) existingDomains.add(d);
+    });
+
+    // Fetch saved correlations
+    fetch("/api/domain-correlations").then(r => r.json()).then(data => {
+      domainCorrData = data;
+      // Add any existing domains not in saved data
+      existingDomains.forEach(d => {
+        if (!domainCorrData[d]) {
+          domainCorrData[d] = { primary: d, aliases: [] };
+        }
+      });
+      cleanupRedundantPrimaries();
+      renderDomainCorr();
+      populateDomainFilter();
+    });
+  }
+
+  openDomainCorrBtn.addEventListener("click", () => {
+    domainCorrPanel.classList.add("active");
+    loadDomains();
+  });
+
+  closeDomainCorrBtn.addEventListener("click", () => {
+    domainCorrPanel.classList.remove("active");
+  });
+
+  addDomainBtn.addEventListener("click", () => {
+    const val = newDomainInput.value.trim();
+    if (val && !domainCorrData[val]) {
+      domainCorrData[val] = { primary: val, aliases: [] };
+      cleanupRedundantPrimaries();
+      newDomainInput.value = "";
+      renderDomainCorr();
+      populateDomainFilter();
+    }
+  });
+
+  saveDomainCorrBtn.addEventListener("click", () => {
+    cleanupRedundantPrimaries();
+    renderDomainCorr();
+    fetch("/api/domain-correlations/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(domainCorrData)
+    }).then(r => r.json()).then(j => {
+      if (j.ok) {
+        showToast("Domain correlations saved");
+        populateDomainFilter();
       }
     });
   });

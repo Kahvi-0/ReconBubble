@@ -18,14 +18,15 @@
       <option value="subdomains">Subdomains list</option>
       <option value="names_emails">Names - Email List</option>
       <option value="doc">OSINT document</option>
-      <option value="ad_users">Active Directory Users</option>
-      <option value="creds">Credentials (user:pass)</option>
-      <option value="urls">Web URLs list</option>
-      <option value="names">Names list</option>
-      <option value="bbot">BBOT - Subdomain Enum (JSON)</option>
-      <option value="prowl_phase1">Prowler phase 1 (json)</option>
-      <option value="zone_transfers">Prowler phase 2 - zone transfers (json)</option>
-      <option value="smtp">Prowler phase 3 - SMTP (json)</option>
+    <option value="ad_users">Active Directory Users</option>
+    <option value="mixed_hashes">AD - Mixed Hashes (auto-detect)</option>
+    <option value="creds">Credentials (user:pass)</option>
+    <option value="urls">Web URLs list</option>
+    <option value="names">Names list</option>
+    <option value="bbot">BBOT - Subdomain Enum (JSON)</option>
+    <option value="prowl_phase1">Prowler phase 1 (json)</option>
+    <option value="zone_transfers">Prowler phase 2 - zone transfers (json)</option>
+    <option value="smtp">Prowler phase 3 - SMTP (json)</option>
     </select>
     <label>File(s) or Directory</label>
     <input type="file" name="file" id="fileInput" multiple />
@@ -43,11 +44,12 @@
       <option value="nmap_xml">Nmap XML</option>
       <option value="subdomains">Subdomains list</option>
       <option value="names_emails">Names - Email List</option>
-      <option value="ad_users">Active Directory Users</option>
-      <option value="creds">Credentials (user:pass)</option>
-      <option value="urls">Web URLs list</option>
-      <option value="names">Names list</option>
-      <option value="bbot">BBOT (json)</option>
+    <option value="ad_users">Active Directory Users</option>
+    <option value="mixed_hashes">AD - Mixed Hashes (auto-detect)</option>
+    <option value="creds">Credentials (user:pass)</option>
+    <option value="urls">Web URLs list</option>
+    <option value="names">Names list</option>
+    <option value="bbot">BBOT (json)</option>
     </select>
     <label>Optional filename</label>
     <input name="raw_filename" placeholder="pasted_scan.xml" />
@@ -68,6 +70,7 @@ const rawPlaceholders = {
   subdomains: "Paste subdomains, one per line (e.g. example.com, www.example.com)…",
   names_emails: "Paste email addresses, one per line…",
   ad_users: "Paste AD usernames, one per line…",
+  mixed_hashes: "Paste hash formats, one per line (auto-detects Kerberoast, NTLMv1, NTLMv2, DCC2, AS-REP)…",
   creds: "Paste credentials as user:pass, one per line…",
   urls: "Paste URLs, one per line…",
   names: "Paste names as FirstName MiddleName LastName, one per line…",
@@ -81,5 +84,175 @@ if (rawSelect && rawArea) {
     rawArea.placeholder = rawPlaceholders[this.value] || "Paste data…";
   });
 }
+
+function renderMixedResults(data) {
+  addMixedUploadLogEntry(data);
+  const existing = document.getElementById('mixed-results-card');
+  if (existing) existing.remove();
+
+  const counts = data.counts || {};
+  const unmatched = data.unmatched || [];
+  let html = '<div class="card" id="mixed-results-card" style="margin-top:20px;">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">';
+  html += '<h2 style="margin:0;">Mixed Hash Import Results</h2>';
+  html += '<button class="btn" style="padding:4px 12px;font-size:12px;" onclick="clearMixedResults()">Dismiss</button>';
+  html += '</div>';
+  html += '<div style="display:flex;gap:16px;flex-wrap:wrap;">';
+  html += '<span><strong>NTLM:</strong> ' + (counts.ntlm || 0) + ' added</span>';
+  html += '<span><strong>Kerberoast:</strong> ' + (counts.kerberoast || 0) + ' added</span>';
+  html += '<span><strong>NTLMv1:</strong> ' + (counts.ntlmv1 || 0) + ' added</span>';
+  html += '<span><strong>NTLMv2:</strong> ' + (counts.ntlmv2 || 0) + ' added</span>';
+  html += '<span><strong>DCC2:</strong> ' + (counts.dcc2 || 0) + ' added</span>';
+  html += '<span><strong>AS-REP:</strong> ' + (counts.krb5asrep || 0) + ' added</span>';
+  html += '<span class="muted"><strong>Skipped (duplicates):</strong> ' + (counts.skipped || 0) + '</span>';
+  html += '</div>';
+  if (unmatched.length > 0) {
+    html += '<h3 style="margin-top:16px;color:#b91c1c;">Unmatched Lines (' + unmatched.length + ')</h3>';
+    html += '<div style="max-height:300px;overflow-y:auto;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px;font-family:monospace;font-size:12px;white-space:pre-wrap;">';
+    html += unmatched.map(function(l){return escapeHtml(l);}).join('\n');
+    html += '</div>';
+  }
+  html += '<p class="muted" style="margin-top:10px;">Uploaded successfully. <a href="/users">View Users page</a></p>';
+  html += '</div>';
+
+  document.getElementById('upload-content-end').insertAdjacentHTML('beforeend', html);
+}
+
+function escapeHtml(t) {
+  var d = document.createElement('div');
+  d.textContent = t;
+  return d.innerHTML;
+}
+
+function clearMixedResults() {
+  localStorage.removeItem('mixedHashResults');
+  var el = document.getElementById('mixed-results-card');
+  if (el) el.remove();
+}
+
+var typeNamesMap = {
+  mixed_hashes: 'Mixed Hashes'
+};
+
+function getUploadLog() {
+  try {
+    return JSON.parse(localStorage.getItem('hashUploadLog') || '[]');
+  } catch(e) { return []; }
+}
+
+function saveUploadLog(log) {
+  localStorage.setItem('hashUploadLog', JSON.stringify(log));
+}
+
+function addUploadLogEntry(hashType, result) {
+  var log = getUploadLog();
+  log.unshift({
+    type: hashType,
+    label: typeNamesMap[hashType] || hashType,
+    timestamp: new Date().toISOString(),
+    added: result.added || 0,
+    skipped: result.skipped || 0,
+    unmatched: result.unmatched || []
+  });
+  if (log.length > 50) log = log.slice(0, 50);
+  saveUploadLog(log);
+  renderUploadLog();
+}
+
+function addMixedUploadLogEntry(result) {
+  addUploadLogEntry('mixed_hashes', {
+    added: Object.values(result.counts || {}).reduce((a, b) => a + (typeof b === 'number' ? b : 0), 0) - (result.counts?.skipped || 0),
+    skipped: result.counts?.skipped || 0,
+    unmatched: result.unmatched || []
+  });
+}
+
+function renderUploadLog() {
+  var container = document.getElementById('upload-log-container');
+  if (!container) return;
+  var log = getUploadLog();
+  var html = '';
+  html += '<div class="card" id="upload-log-card" style="margin-top:20px;">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">';
+  html += '<h2 style="margin:0;">Upload Log</h2>';
+  html += '<button class="btn" style="padding:4px 12px;font-size:12px;" onclick="clearUploadLog()">Clear Log</button>';
+  html += '</div>';
+  if (log.length === 0) {
+    html += '<p class="muted">No uploads yet.</p>';
+  } else {
+    html += '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+    html += '<thead><tr style="text-align:left;border-bottom:2px solid #e2e8f0;">';
+    html += '<th style="padding:6px 8px;">Time</th>';
+    html += '<th style="padding:6px 8px;">Type</th>';
+    html += '<th style="padding:6px 8px;text-align:right;">Imported</th>';
+    html += '<th style="padding:6px 8px;text-align:right;">Skipped</th>';
+    html += '<th style="padding:6px 8px;text-align:right;">Failed</th>';
+    html += '<th style="padding:6px 8px;width:40px;"></th>';
+    html += '</tr></thead><tbody>';
+    log.forEach(function(entry, idx) {
+      var ts = new Date(entry.timestamp);
+      var timeStr = ts.toLocaleDateString() + ' ' + ts.toLocaleTimeString();
+      var failedCount = entry.unmatched ? entry.unmatched.length : 0;
+      var hasFailed = failedCount > 0;
+      html += '<tr style="border-bottom:1px solid #f1f5f9;">';
+      html += '<td style="padding:6px 8px;color:#64748b;white-space:nowrap;">' + escapeHtml(timeStr) + '</td>';
+      html += '<td style="padding:6px 8px;"><strong>' + escapeHtml(entry.label || entry.type) + '</strong></td>';
+      html += '<td style="padding:6px 8px;text-align:right;">' + (entry.added || 0) + '</td>';
+      html += '<td style="padding:6px 8px;text-align:right;color:#64748b;">' + (entry.skipped || 0) + '</td>';
+      html += '<td style="padding:6px 8px;text-align:right;' + (hasFailed ? 'color:#b91c1c;font-weight:bold;' : '') + '">' + failedCount + '</td>';
+      html += '<td style="padding:6px 8px;text-align:center;">';
+      if (hasFailed) {
+        html += '<button style="background:none;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;padding:2px 8px;font-size:11px;" onclick="toggleFailedLines(' + idx + ')" id="toggle-btn-' + idx + '">Show</button>';
+      }
+      html += '</td>';
+      html += '</tr>';
+      if (hasFailed) {
+        html += '<tr id="detail-row-' + idx + '" style="display:none;"><td colspan="6" style="padding:0;">';
+        html += '<div style="margin:0 16px 10px 16px;max-height:250px;overflow-y:auto;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:10px;font-family:monospace;font-size:12px;white-space:pre-wrap;">';
+        html += entry.unmatched.map(function(l){ return escapeHtml(l); }).join('\n');
+        html += '</div></td></tr>';
+      }
+    });
+    html += '</tbody></table>';
+  }
+  html += '</div>';
+  container.innerHTML = html;
+}
+
+function toggleFailedLines(idx) {
+  var row = document.getElementById('detail-row-' + idx);
+  var btn = document.getElementById('toggle-btn-' + idx);
+  if (!row || !btn) return;
+  if (row.style.display === 'none') {
+    row.style.display = '';
+    btn.textContent = 'Hide';
+  } else {
+    row.style.display = 'none';
+    btn.textContent = 'Show';
+  }
+}
+
+function clearUploadLog() {
+  localStorage.removeItem('hashUploadLog');
+  renderUploadLog();
+}
+
+window.addEventListener('DOMContentLoaded', function() {
+  var stored = localStorage.getItem('mixedHashResults');
+  if (stored) {
+    try { renderMixedResults(JSON.parse(stored)); } catch(e) { localStorage.removeItem('mixedHashResults'); }
+  }
+  renderUploadLog();
+});
 </script>
+
+<div id="upload-log-container"></div>
+<div id="upload-content-end"></div>
+
+{% if mixed_result is defined and mixed_result %}
+<script>
+localStorage.setItem('mixedHashResults', {{ mixed_result | tojson }});
+renderMixedResults({{ mixed_result | tojson }});
+</script>
+{% endif %}
 {% endblock %}
