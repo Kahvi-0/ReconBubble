@@ -10,6 +10,7 @@
   </div>
   <div style="width:1px; height:28px; background:#2a3a4a; margin:0 4px;"></div>
   <select id="filterDomain" class="toolbar-select" title="Filter by domain"><option value="">All Domains</option></select>
+  <input type="text" id="filterSearch" class="toolbar-search" placeholder="Search..." />
   <div class="toggle-row"><label class="filter-label">No Domain</label><label class="toggle-switch"><input type="checkbox" id="filterNoDomain" /><span class="toggle-slider"></span></label></div>
   <div class="toggle-row"><label class="filter-label">Compromised Only</label><label class="toggle-switch"><input type="checkbox" id="filterCompromised" /><span class="toggle-slider"></span></label></div>
   <div class="toggle-row"><label class="filter-label">Passwords Only</label><label class="toggle-switch"><input type="checkbox" id="filterPasswords" /><span class="toggle-slider"></span></label></div>
@@ -429,6 +430,14 @@
   document.getElementById('cancelEditBtn').addEventListener('click', exitEditMode);
   document.getElementById('closeDetailBtn').addEventListener('click', hideDetail);
 
+  document.addEventListener('click', (e) => {
+    if (nameDetail.classList.contains('active')) {
+      if (!nameDetail.contains(e.target) && !e.target.closest('.name-row') && e.target.id !== 'createNameBtn') {
+        hideDetail();
+      }
+    }
+  });
+
   // --- Row Filtering ---
   function loadFilterState() {
     return {
@@ -437,6 +446,7 @@
       compromised: localStorage.getItem('userFilterCompromised') === '1',
       passwords: localStorage.getItem('userFilterPasswords') === '1',
       hideComputers: localStorage.getItem('userFilterHideComputers') === '1',
+      search: localStorage.getItem('userFilterSearch') || '',
     };
   }
   function saveFilterState(fs) {
@@ -445,6 +455,7 @@
     localStorage.setItem('userFilterCompromised', fs.compromised ? '1' : '0');
     localStorage.setItem('userFilterPasswords', fs.passwords ? '1' : '0');
     localStorage.setItem('userFilterHideComputers', fs.hideComputers ? '1' : '0');
+    localStorage.setItem('userFilterSearch', fs.search);
   }
   function applyRowFilters() {
     var fs = loadFilterState();
@@ -453,6 +464,7 @@
     var compromised = fs.compromised;
     var passwords = fs.passwords;
     var hideComputers = fs.hideComputers;
+    var search = fs.search;
     var resolver = window.resolveDomainPrimary || function(d) { return d; };
     document.querySelectorAll('.name-row').forEach(function(row) {
       var show = true;
@@ -473,6 +485,19 @@
       if (hideComputers) {
         var adUser = (row.getAttribute('data-ad-username') || '').trim();
         if (adUser && adUser.endsWith('$')) show = false;
+      }
+      if (show && search) {
+        var text = [
+          row.getAttribute('data-first'),
+          row.getAttribute('data-middle'),
+          row.getAttribute('data-last'),
+          row.getAttribute('data-email'),
+          row.getAttribute('data-phone'),
+          row.getAttribute('data-ad-username'),
+          row.getAttribute('data-domain'),
+          row.getAttribute('data-tags')
+        ].join(' ').toLowerCase();
+        if (text.indexOf(search.toLowerCase()) === -1) show = false;
       }
       row.style.display = show ? '' : 'none';
     });
@@ -501,6 +526,7 @@
     populateDomainFilter();
     var fs = loadFilterState();
     document.getElementById('filterDomain').value = fs.domain;
+    document.getElementById('filterSearch').value = fs.search;
     document.getElementById('filterNoDomain').checked = fs.noDomain;
     document.getElementById('filterCompromised').checked = fs.compromised;
     document.getElementById('filterPasswords').checked = fs.passwords;
@@ -510,6 +536,12 @@
   document.getElementById('filterDomain').addEventListener('change', function() {
     var fs = loadFilterState();
     fs.domain = this.value;
+    saveFilterState(fs);
+    applyRowFilters();
+  });
+  document.getElementById('filterSearch').addEventListener('input', function() {
+    var fs = loadFilterState();
+    fs.search = this.value;
     saveFilterState(fs);
     applyRowFilters();
   });
@@ -1014,6 +1046,14 @@
 
   closeDomainCorrBtn.addEventListener("click", () => {
     domainCorrPanel.classList.remove("active");
+  });
+
+  document.addEventListener("click", (e) => {
+    if (domainCorrPanel.classList.contains("active")) {
+      if (!domainCorrPanel.contains(e.target) && e.target !== openDomainCorrBtn && !openDomainCorrBtn.contains(e.target)) {
+        domainCorrPanel.classList.remove("active");
+      }
+    }
   });
 
   addDomainBtn.addEventListener("click", () => {
