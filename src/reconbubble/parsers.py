@@ -1291,7 +1291,7 @@ def import_bbot_cloud(session: Session, artifact: Artifact, path: Path) -> dict:
     }
 
 
-_KERBEROAST_RE = re.compile(r"^\$krb5tgs\$(\d+)\$[*]?(\w+)\$(\w+)")
+_KERBEROAST_RE = re.compile(r"^\$krb5tgs\$(\d+)\$[*]?([^$]+)\$([^$]+)")
 _NTLMV1_RE = re.compile(r"^([^:]+)::([^:]+):([^:]+):([^:]+):([^:]+)$")
 _NTLMV2_RE = re.compile(r"^([^:]+)::([^:]+):(.+)$")
 _DCC2_RE = re.compile(r"^\$DCC2\$(\d+)#([^#]+)#(.+)$")
@@ -1323,8 +1323,10 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
         if m_krb:
             matched = True
             hash_type = m_krb.group(1)
-            raw_user = m_krb.group(2).lstrip("*")
-            realm_domain = m_krb.group(3)
+            raw_user = m_krb.group(2).lstrip("*").strip()
+            if "\\" in raw_user:
+                raw_user = raw_user.split("\\")[-1]
+            realm_domain = m_krb.group(3).strip()
             if raw_user:
                 user_item = session.scalar(
                     select(NameItem).where(NameItem.ad_username.ilike(raw_user))

@@ -10,6 +10,7 @@
   </div>
   <div style="width:1px; height:28px; background:#2a3a4a; margin:0 4px;"></div>
   <select id="filterDomain" class="toolbar-select" title="Filter by domain"><option value="">All Domains</option></select>
+  <div class="toggle-row"><label class="filter-label">No Domain</label><label class="toggle-switch"><input type="checkbox" id="filterNoDomain" /><span class="toggle-slider"></span></label></div>
   <div class="toggle-row"><label class="filter-label">Compromised Only</label><label class="toggle-switch"><input type="checkbox" id="filterCompromised" /><span class="toggle-slider"></span></label></div>
   <div class="toggle-row"><label class="filter-label">Passwords Only</label><label class="toggle-switch"><input type="checkbox" id="filterPasswords" /><span class="toggle-slider"></span></label></div>
   <div class="toggle-row"><label class="filter-label">Hide Computers</label><label class="toggle-switch"><input type="checkbox" id="filterHideComputers" /><span class="toggle-slider"></span></label></div>
@@ -432,6 +433,7 @@
   function loadFilterState() {
     return {
       domain: localStorage.getItem('userFilterDomain') || '',
+      noDomain: localStorage.getItem('userFilterNoDomain') === '1',
       compromised: localStorage.getItem('userFilterCompromised') === '1',
       passwords: localStorage.getItem('userFilterPasswords') === '1',
       hideComputers: localStorage.getItem('userFilterHideComputers') === '1',
@@ -439,6 +441,7 @@
   }
   function saveFilterState(fs) {
     localStorage.setItem('userFilterDomain', fs.domain);
+    localStorage.setItem('userFilterNoDomain', fs.noDomain ? '1' : '0');
     localStorage.setItem('userFilterCompromised', fs.compromised ? '1' : '0');
     localStorage.setItem('userFilterPasswords', fs.passwords ? '1' : '0');
     localStorage.setItem('userFilterHideComputers', fs.hideComputers ? '1' : '0');
@@ -446,6 +449,7 @@
   function applyRowFilters() {
     var fs = loadFilterState();
     var domain = fs.domain;
+    var noDomain = fs.noDomain;
     var compromised = fs.compromised;
     var passwords = fs.passwords;
     var hideComputers = fs.hideComputers;
@@ -457,11 +461,14 @@
         var primaryDomain = resolver(rowDomain);
         if (primaryDomain !== domain) show = false;
       }
+      if (noDomain) {
+        var rowDomain = (row.getAttribute('data-domain') || '').trim();
+        if (rowDomain) show = false;
+      }
       if (compromised && row.getAttribute('data-compromised') !== '1') show = false;
       if (passwords) {
         var hasPassword = (row.getAttribute('data-password') || '').trim();
-        var hasHash = (row.getAttribute('data-ntlm-hash') || '').trim() || (row.getAttribute('data-ntlm-v1') || '').trim() || (row.getAttribute('data-ntlm-v2') || '').trim() || (row.getAttribute('data-dcc2') || '').trim() || (row.getAttribute('data-kerberos-asrep') || '').trim() || (row.getAttribute('data-kerberos-tgs') || '').trim() || (row.getAttribute('data-kerberos-key-aes128') || '').trim() || (row.getAttribute('data-kerberos-key-aes256') || '').trim();
-        if (!hasPassword && !hasHash) show = false;
+        if (!hasPassword) show = false;
       }
       if (hideComputers) {
         var adUser = (row.getAttribute('data-ad-username') || '').trim();
@@ -494,6 +501,7 @@
     populateDomainFilter();
     var fs = loadFilterState();
     document.getElementById('filterDomain').value = fs.domain;
+    document.getElementById('filterNoDomain').checked = fs.noDomain;
     document.getElementById('filterCompromised').checked = fs.compromised;
     document.getElementById('filterPasswords').checked = fs.passwords;
     document.getElementById('filterHideComputers').checked = fs.hideComputers;
@@ -502,6 +510,12 @@
   document.getElementById('filterDomain').addEventListener('change', function() {
     var fs = loadFilterState();
     fs.domain = this.value;
+    saveFilterState(fs);
+    applyRowFilters();
+  });
+  document.getElementById('filterNoDomain').addEventListener('change', function() {
+    var fs = loadFilterState();
+    fs.noDomain = this.checked;
     saveFilterState(fs);
     applyRowFilters();
   });

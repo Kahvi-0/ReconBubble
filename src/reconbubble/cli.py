@@ -91,9 +91,12 @@ def run(
     ctx: typer.Context,
     port: int = typer.Option(5000, "--port", "-p"),
     bind: str = typer.Option("127.0.0.1", "--bind", help="Bind address (default localhost only)"),
+    listen_all: bool = typer.Option(False, "--listen-all", help="Listen on all interfaces (0.0.0.0) instead of localhost only"),
 ):
-    if bind == "0.0.0.0":
-        typer.echo("Refusing to bind to 0.0.0.0 (non-local). Use --bind 127.0.0.1 for local-only.")
+    if listen_all:
+        bind = "0.0.0.0"
+    if bind == "0.0.0.0" and not listen_all:
+        typer.echo("Refusing to bind to 0.0.0.0 (non-local). Use --listen-all to listen on all interfaces or --bind 127.0.0.1 for local-only.")
         raise typer.Exit(code=2)
     cfg = ctx.obj
     ws = Workspace.from_db(cfg["database"], cfg["workspace"])
