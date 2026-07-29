@@ -645,10 +645,22 @@ def import_ad_users(session: Session, artifact: Artifact, path: Path) -> int:
         s = s.split()[0].strip()
         if not s:
             continue
-        existing = session.scalar(select(NameItem).where(NameItem.ad_username == s))
+        domain = ""
+        username = s
+        if "\\" in s:
+            parts = s.rsplit("\\", 1)
+            domain = parts[0].strip()
+            username = parts[1].strip()
+        elif "/" in s:
+            parts = s.rsplit("/", 1)
+            domain = parts[0].strip()
+            username = parts[1].strip()
+        existing = session.scalar(select(NameItem).where(NameItem.ad_username == username))
         if existing:
+            if domain and not existing.domain:
+                existing.domain = domain
             continue
-        session.add(NameItem(first_name="", middle_name="", last_name="", ad_username=s))
+        session.add(NameItem(first_name="", middle_name="", last_name="", ad_username=username, domain=domain))
         count += 1
     session.commit()
     return count
