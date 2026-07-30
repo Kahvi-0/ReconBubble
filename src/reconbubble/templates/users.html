@@ -507,14 +507,17 @@
     sel.innerHTML = '<option value="">All Domains</option>';
     var primaries = window.getPrimaryDomains ? window.getPrimaryDomains() : [];
     if (primaries.length === 0) {
-      var domains = new Set();
+      var seen = {};
       document.querySelectorAll('.name-row').forEach(function(row) {
         var d = (row.getAttribute('data-domain') || '').trim();
-        if (d) domains.add(d);
+        if (d) {
+          var low = d.toLowerCase();
+          if (!seen[low]) seen[low] = d;
+        }
       });
-      primaries = Array.from(domains);
+      primaries = Object.values(seen);
     }
-    var sorted = primaries.sort();
+    var sorted = primaries.sort(function(a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
     sorted.forEach(function(d) {
       var opt = document.createElement('option');
       opt.value = d;
