@@ -471,7 +471,7 @@
       if (domain) {
         var rowDomain = (row.getAttribute('data-domain') || '').trim();
         var primaryDomain = resolver(rowDomain);
-        if (primaryDomain !== domain) show = false;
+        if (primaryDomain.toLowerCase() !== domain.toLowerCase()) show = false;
       }
       if (noDomain) {
         var rowDomain = (row.getAttribute('data-domain') || '').trim();
@@ -1027,9 +1027,10 @@
     // Fetch saved correlations
     fetch("/api/domain-correlations").then(r => r.json()).then(data => {
       domainCorrData = data;
-      // Add any existing domains not in saved data
+      // Add any existing domains not in saved data (case-insensitive check)
       existingDomains.forEach(d => {
-        if (!domainCorrData[d]) {
+        const existingKey = Object.keys(domainCorrData).find(k => k.toLowerCase() === d.toLowerCase());
+        if (!existingKey) {
           domainCorrData[d] = { primary: d, aliases: [] };
         }
       });
@@ -1062,7 +1063,9 @@
 
   addDomainBtn.addEventListener("click", () => {
     const val = newDomainInput.value.trim();
-    if (val && !domainCorrData[val]) {
+    if (!val) return;
+    const existingKey = Object.keys(domainCorrData).find(k => k.toLowerCase() === val.toLowerCase());
+    if (!existingKey) {
       domainCorrData[val] = { primary: val, aliases: [] };
       cleanupRedundantPrimaries();
       newDomainInput.value = "";
