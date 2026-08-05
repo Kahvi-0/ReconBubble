@@ -1,5 +1,5 @@
 # ReconBubble
-Tool used to help organize pentest scope, scan results, OSINT information, assets and more! 
+Tool used to help organize pentest scope, scan results, OSINT information, assets and more! Built with Local, grass fed LLM models.
 
 <img width="1569" height="588" alt="image" src="https://github.com/user-attachments/assets/e9f5f7ae-ae31-4562-9d89-42bb8dddfb12" />
 
