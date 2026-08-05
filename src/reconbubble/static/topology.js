@@ -1,4 +1,4 @@
-(function () {
+(async function () {
   const el = document.getElementById("topologyCy");
   const inspector = document.getElementById("topologyInspector");
   const inspectorWrap = document.getElementById("topologyInspectorWrap");
@@ -17,7 +17,15 @@
     asn: "🌍",
   };
 
-  const initial = window.TOPOLOGY_DATA || { nodes: [], edges: [] };
+  let initial = { nodes: [], edges: [] };
+  try {
+    const r = await fetch("/api/topology");
+    if (r.ok) {
+      const j = await r.json();
+      initial = j.map || j;
+    }
+  } catch (_) {}
+
   const elements = [];
   (initial.nodes || []).forEach((n, i) => {
     const label = (n.label || "Node").trim();

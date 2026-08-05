@@ -2,8 +2,297 @@
 {% block content %}
 <h1>SMB Shares</h1>
 
-<div class="card">
-  <h2>Under Construction</h2>
-  <p class="muted">SMB shares enumeration and tracking will be added here next.</p>
+<div class="card" style="margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; gap:12px;">
+  <button class="btn" id="addShareBtn" type="button">Add share entries</button>
+  <span class="muted">{{ shares|length }} share{{ 's' if shares|length != 1 else '' }} across {{ hosts_map|length }} host{{ 's' if hosts_map|length != 1 else '' }}</span>
 </div>
+
+<style>
+.smb-panel {
+  position: fixed; top: 0; right: -420px; width: 420px; height: 100vh;
+  background: #111418; border-left: 1px solid #2a3545;
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.5); z-index: 1600;
+  transition: right 0.3s ease; display: flex; flex-direction: column; overflow-y: auto;
+}
+.smb-panel.active { right: 0; }
+.smb-panel-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid #2a3545; background: #0f1318;
+  font-weight: 600; font-size: 18px; position: sticky; top: 0; z-index: 10;
+}
+.smb-panel-body { padding: 16px 20px; flex: 1; overflow-y: auto; }
+.smb-host-card { margin-bottom: 16px; border: 1px solid #2a3545; border-radius: 4px; overflow: hidden; }
+.smb-host-header {
+  background: #0f1318; padding: 10px 14px; border-bottom: 1px solid #2a3545;
+  font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: space-between;
+}
+.smb-host-header code { color: #7dd3fc; background: #1e3a5f; padding: 2px 8px; border-radius: 3px; font-size: 13px; }
+.smb-share-row { padding: 8px 14px; border-bottom: 1px solid #1a2332; }
+.smb-share-row:hover { background: #0f141b; }
+.smb-share-row:last-child { border-bottom: none; }
+.smb-share-top { display: flex; align-items: center; gap: 8px; }
+.smb-share-name { font-family: 'Courier New', monospace; font-size: 13px; color: #e8e8e8; white-space: nowrap; }
+.smb-share-spacer { flex: 1; }
+.smb-share-access-inline { flex-shrink: 0; }
+.smb-share-actions { flex-shrink: 0; display: flex; gap: 4px; }
+.smb-share-bottom { margin-top: 4px; }
+.smb-share-edit, .smb-share-del {
+  opacity: 0.4; transition: opacity 0.2s; cursor: pointer;
+  background: none; border: none; font-size: 14px; padding: 2px 6px;
+}
+.smb-share-edit { color: #60a5fa; }
+.smb-share-del { color: #ef4444; }
+.smb-share-edit:hover, .smb-share-del:hover { opacity: 1; }
+.pill-access-read { background: #1e3a5f; color: #93c5fd; border: 1px solid #2563eb; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+.pill-access-write { background: #14532d; color: #86efac; border: 1px solid #16a34a; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+.pill-access-full { background: #431407; color: #fdba74; border: 1px solid #ea580c; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+.pill-access-none { background: #1f2937; color: #9ca3af; border: 1px solid #374151; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+.smb-share-entry { margin-bottom: 8px; border: 1px solid #2a3545; border-radius: 4px; padding: 8px; }
+.smb-share-entry-header { display: flex; gap: 6px; align-items: flex-end; }
+.smb-share-entry-header .smb-field { flex: 1; display: flex; flex-direction: column; }
+.smb-share-entry-header .smb-field-access { flex: 0 0 110px; }
+.smb-notes-box { width: 100%; margin-top: 6px; }
+.smb-remove-row {
+  background: none; border: none; color: #ef4444; cursor: pointer;
+  font-size: 16px; padding: 4px 6px; opacity: 0.5; transition: opacity 0.2s;
+  line-height: 1; flex-shrink: 0;
+}
+.smb-remove-row:hover { opacity: 1; }
+.smb-add-row-btn { width: 100%; margin-top: 6px; padding: 6px; font-size: 12px; }
+</style>
+
+<div id="smbOverlay" class="overlay hidden"></div>
+
+<div id="smbPanel" class="smb-panel">
+  <div class="smb-panel-header">
+    <span id="smbPanelTitle">Add SMB Shares</span>
+    <button id="smbPanelClose" class="btn" type="button">Close</button>
+  </div>
+  <div class="smb-panel-body">
+    <div class="card" style="margin-bottom:0;">
+      <form id="smbForm">
+        <input type="hidden" id="smbEditId" value="" />
+        <label>Host *</label>
+        <input id="smbHostInput" placeholder="192.168.1.10 or HOSTNAME" required />
+        <div id="smbSharesContainer" style="margin-top:12px;"></div>
+        <button type="button" class="btn muted smb-add-row-btn" id="smbAddRowBtn">+ Add another share</button>
+        <button class="btn" type="submit" id="smbSubmitBtn" style="margin-top:12px; width:100%;">Add Entries</button>
+        <div id="smbFormMsg" class="muted" style="margin-top:8px;"></div>
+      </form>
+    </div>
+    <div class="card" style="margin-top:12px;" id="smbPasteCard">
+      <h3 style="margin-top:0; font-size:13px;">Paste SMBMAP data</h3>
+      <p class="muted" style="font-size:11px; margin-bottom:8px;">Format: <code>host:IP, share:NAME, privs:PERMS</code></p>
+      <textarea id="smbPasteArea" rows="5" placeholder="host:192.168.4.169, share:ADMIN$, privs:NO_ACCESS"></textarea>
+      <button class="btn" id="smbPasteBtn" type="button" style="margin-top:8px;">Parse & Paste</button>
+    </div>
+  </div>
+</div>
+
+{% if hosts_map %}
+<div class="card">
+  <h2>Discovered Shares</h2>
+  {% for host, host_shares in hosts_map.items() %}
+  <div class="smb-host-card">
+    <div class="smb-host-header">
+      <code>{{ host }}</code>
+      <span class="muted" style="font-size:12px; font-weight:400;">{{ host_shares|length }} share{{ 's' if host_shares|length != 1 else '' }}</span>
+    </div>
+    {% for sh in host_shares %}
+    <div class="smb-share-row">
+      <div class="smb-share-top">
+        <span class="smb-share-name">{{ sh.share }}</span>
+        <span class="smb-share-spacer"></span>
+        <span class="smb-share-access-inline">
+          {% if sh.access in ('READ', 'READ_LIST', 'READ_DATA') %}
+          <span class="pill-access-read">{{ sh.access }}</span>
+          {% elif sh.access in ('WRITE', 'WRITE_DATA', 'CHANGE') %}
+          <span class="pill-access-write">{{ sh.access }}</span>
+          {% elif sh.access in ('FULL', 'FULL_CONTROL', 'FULL_ACCESS') %}
+          <span class="pill-access-full">{{ sh.access }}</span>
+          {% else %}
+          <span class="pill-access-none">{{ sh.access or 'UNKNOWN' }}</span>
+          {% endif %}
+        </span>
+        <span class="smb-share-actions">
+          <button class="smb-share-edit" data-edit="{{ sh.id }}" data-host="{{ sh.host }}" data-share="{{ sh.share }}" data-access="{{ sh.access }}" data-notes="{{ sh.notes }}" title="Edit">&#9998;</button>
+          <button class="smb-share-del" data-del="{{ sh.id }}" title="Delete">&#10005;</button>
+        </span>
+      </div>
+      {% if sh.notes %}
+      <div class="smb-share-bottom">
+        <span class="muted smb-share-notes" style="font-size:11px; white-space:pre-wrap;">{{ sh.notes }}</span>
+      </div>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card">
+  <h2>No SMB Share Data</h2>
+  <p class="muted">Upload SMBMAP output or add entries manually.</p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+  var smbOverlay = document.getElementById('smbOverlay');
+  var smbPanel = document.getElementById('smbPanel');
+  var smbPanelClose = document.getElementById('smbPanelClose');
+  var addShareBtn = document.getElementById('addShareBtn');
+  var smbPanelTitle = document.getElementById('smbPanelTitle');
+  var smbHostInput = document.getElementById('smbHostInput');
+  var smbSharesContainer = document.getElementById('smbSharesContainer');
+  var smbAddRowBtn = document.getElementById('smbAddRowBtn');
+  var smbSubmitBtn = document.getElementById('smbSubmitBtn');
+  var smbEditId = document.getElementById('smbEditId');
+  var rowCounter = 0;
+
+  function addShareRow(name, acc, notes) {
+    rowCounter++;
+    var entry = document.createElement('div');
+    entry.className = 'smb-share-entry';
+    var esc = function(s) { return (s||'').replace(/"/g, '&quot;'); };
+    var opts = ['NO_ACCESS','READ','WRITE','FULL'];
+    var optHtml = opts.map(function(o) {
+      return '<option value="' + o + '"' + (acc === o ? ' selected' : '') + '>' + o + '</option>';
+    }).join('');
+    entry.innerHTML =
+      '<div class="smb-share-entry-header">' +
+        '<div class="smb-field"><input type="text" class="smb-share-field" placeholder="Share name" value="' + esc(name) + '" required /></div>' +
+        '<div class="smb-field smb-field-access"><select class="smb-access-field">' + optHtml + '</select></div>' +
+        '<button type="button" class="smb-remove-row" title="Remove">&#10005;</button>' +
+      '</div>' +
+      '<div class="smb-notes-box"><textarea class="smb-notes-field" rows="2" placeholder="Notes">' + esc(notes) + '</textarea></div>';
+    entry.querySelector('.smb-remove-row').addEventListener('click', function() { entry.remove(); });
+    smbSharesContainer.appendChild(entry);
+  }
+
+  function resetForm() {
+    smbEditId.value = '';
+    smbHostInput.value = '';
+    smbHostInput.readOnly = false;
+    smbHostInput.disabled = false;
+    smbSharesContainer.innerHTML = '';
+    rowCounter = 0;
+    addShareRow('', 'NO_ACCESS', '');
+    smbPanelTitle.textContent = 'Add SMB Shares';
+    smbSubmitBtn.textContent = 'Add Entries';
+    smbAddRowBtn.style.display = '';
+    document.getElementById('smbFormMsg').textContent = '';
+    document.getElementById('smbPasteCard').style.display = '';
+  }
+
+  function showPanel() {
+    smbOverlay.classList.remove('hidden');
+    smbPanel.classList.add('active');
+    smbPanel.setAttribute('aria-hidden', 'false');
+  }
+
+  function hidePanel() {
+    smbOverlay.classList.add('hidden');
+    smbPanel.classList.remove('active');
+    smbPanel.setAttribute('aria-hidden', 'true');
+    resetForm();
+  }
+
+  addShareBtn.addEventListener('click', function() { resetForm(); showPanel(); });
+  smbAddRowBtn.addEventListener('click', function() { addShareRow('', 'NO_ACCESS', ''); });
+  smbPanelClose.addEventListener('click', hidePanel);
+  smbOverlay.addEventListener('click', hidePanel);
+
+  document.querySelectorAll('.smb-share-edit').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      smbEditId.value = btn.getAttribute('data-edit');
+      smbHostInput.value = btn.getAttribute('data-host');
+      smbHostInput.readOnly = true;
+      smbHostInput.disabled = true;
+      smbSharesContainer.innerHTML = '';
+      rowCounter = 0;
+      addShareRow(btn.getAttribute('data-share'), btn.getAttribute('data-access'), btn.getAttribute('data-notes'));
+      smbSharesContainer.firstElementChild.setAttribute('data-edit-share-id', smbEditId.value);
+      smbPanelTitle.textContent = 'Edit SMB Share';
+      smbSubmitBtn.textContent = 'Save Changes';
+      smbAddRowBtn.style.display = 'none';
+      document.getElementById('smbFormMsg').textContent = '';
+      document.getElementById('smbPasteCard').style.display = 'none';
+      showPanel();
+    });
+  });
+
+  document.getElementById('smbForm').addEventListener('submit', function(ev) {
+    ev.preventDefault();
+    var msg = document.getElementById('smbFormMsg');
+    if (smbEditId.value !== '') {
+      msg.textContent = 'Saving...';
+      var editRow = smbSharesContainer.querySelector('.smb-share-entry[data-edit-share-id="' + smbEditId.value + '"]');
+      if (!editRow) { msg.textContent = 'Edit row not found'; return; }
+      var fd = new FormData();
+      fd.append('share_id', smbEditId.value);
+      fd.append('host', smbHostInput.value.trim());
+      fd.append('share', editRow.querySelector('.smb-share-field').value.trim());
+      fd.append('access', editRow.querySelector('.smb-access-field').value);
+      fd.append('notes', editRow.querySelector('.smb-notes-field').value.trim());
+      fetch('/api/smb-shares/update', {method:'POST', body:fd})
+        .then(function(r) { return r.json(); })
+        .then(function(j) {
+          if (j.ok) { msg.textContent = 'Updated! Reloading...'; setTimeout(function(){ location.reload(); }, 400); }
+          else { msg.textContent = j.error || 'Error'; }
+        })['catch'](function() { msg.textContent = 'Network error'; });
+      return;
+    }
+    var host = smbHostInput.value.trim();
+    if (!host) { msg.textContent = 'Host is required'; return; }
+    var lines = [];
+    var hasValid = false;
+    smbSharesContainer.querySelectorAll('.smb-share-entry').forEach(function(entry) {
+      var sn = entry.querySelector('.smb-share-field').value.trim();
+      var ac = entry.querySelector('.smb-access-field').value;
+      var nt = entry.querySelector('.smb-notes-field').value.trim();
+      if (sn) {
+        lines.push(sn + ',' + ac + (nt ? ',' + nt : ''));
+        hasValid = true;
+      }
+    });
+    if (!hasValid) { msg.textContent = 'Add at least one share name'; return; }
+    msg.textContent = 'Adding...';
+    var fd = new FormData();
+    fd.append('host', host);
+    fd.append('shares', lines.join('\n'));
+    fetch('/api/smb-shares/create', {method:'POST', body:fd})
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        if (j.ok) {
+          var detail = (j.added||0) + ' added';
+          if (j.skipped) detail += ', ' + j.skipped + ' skipped';
+          if (j.errors && j.errors.length) detail += ', ' + j.errors.length + ' errors';
+          msg.textContent = detail + '. Reloading...';
+          setTimeout(function(){location.reload();}, 600);
+        } else { msg.textContent = j.error || 'Error'; }
+      })['catch'](function() { msg.textContent = 'Network error'; });
+  });
+
+  document.querySelectorAll('.smb-share-del').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      if (!confirm('Delete this share entry?')) return;
+      var fd = new FormData();
+      fd.append('share_id', btn.getAttribute('data-del'));
+      fetch('/api/smb-shares/delete', {method:'POST', body:fd});
+      location.reload();
+    });
+  });
+
+  document.getElementById('smbPasteBtn').addEventListener('click', function() {
+    var text = document.getElementById('smbPasteArea').value.trim();
+    if (!text) return;
+    var ta = document.querySelector('#pasteForm textarea[name="raw_text"]');
+    var sel = document.querySelector('#pasteForm select[name="kind"]');
+    if (ta && sel) { ta.value = text; sel.value = 'smb_shares'; document.getElementById('pasteForm').submit(); }
+  });
+})();
+</script>
 {% endblock %}

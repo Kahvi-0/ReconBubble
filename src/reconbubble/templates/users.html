@@ -64,6 +64,201 @@
 .topo-badge.ad-user { background: #1e3a5f; color: #93c5fd; border: 1px solid #2563eb; }
 .topo-badge.has-password { background: #14532d; color: #86efac; border: 1px solid #16a34a; }
 .topo-badge.has-hash { background: #431407; color: #fdba74; border: 1px solid #ea580c; }
+
+.export-creds-panel {
+  position: fixed;
+  top: 0;
+  right: -420px;
+  width: 400px;
+  height: 100vh;
+  background: #111418;
+  border-left: 1px solid #2a3545;
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.5);
+  z-index: 1600;
+  transition: right 0.3s ease;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.export-creds-panel.active {
+  right: 0;
+}
+.export-creds-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #2a3545;
+  background: #0f1318;
+  font-weight: 600;
+  font-size: 18px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+.export-creds-body {
+  padding: 16px 20px;
+  flex: 1;
+  overflow-y: auto;
+}
+.export-section {
+  margin-bottom: 12px;
+}
+.export-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.export-section-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e8e8e8;
+}
+.export-section-desc {
+  font-size: 11px;
+  color: #7a8a9e;
+  margin: 0 0 8px 0;
+  line-height: 1.4;
+}
+.export-creds-panel .export-copy-btn {
+  font-size: 11px;
+  padding: 3px 12px !important;
+  line-height: 1;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.export-divider {
+  height: 1px;
+  background: #2a3545;
+  margin: 12px 0;
+}
+.export-hash-item {
+  display: flex;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid #1a1f26;
+}
+.export-hash-item:last-child {
+  border-bottom: none;
+}
+.export-hash-info {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+}
+.export-hash-label {
+  font-size: 13px;
+  color: #c9d1d9;
+}
+.export-hash-count {
+  font-size: 12px;
+  color: #555e66;
+  margin-left: 4px;
+}
+
+/* User detail cred rows - match export panel style */
+.name-cred-divider {
+  border-top: 1px solid #2a3545 !important;
+  margin: 12px 0 !important;
+}
+.name-view-fields .name-detail-row:not(.multi) {
+  display: block;
+  margin-bottom: 0;
+}
+.name-view-fields .name-detail-row:not(.multi) .name-detail-field {
+  display: flex;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid #1a1f26;
+  gap: 8px;
+  flex-direction: row;
+}
+.name-view-fields .name-detail-row:not(.multi) .name-detail-field:last-child {
+  border-bottom: none;
+}
+.name-view-fields .name-detail-row:not(.multi) .name-detail-field label {
+  font-size: 13px;
+  color: #c9d1d9;
+  flex-shrink: 0;
+  margin-bottom: 0;
+  min-width: 130px;
+}
+.name-view-fields .name-detail-row:not(.multi) .cred-display-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.name-view-fields .name-detail-row:not(.multi) .cred-display {
+  padding: 0 !important;
+  font-size: 12px !important;
+  flex: 1;
+}
+.name-view-fields .name-detail-row:not(.multi) .cred-copy-btn {
+  font-size: 11px !important;
+  padding: 3px 12px !important;
+  line-height: 1;
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.05) !important;
+  border: 1px solid rgba(255,255,255,0.15) !important;
+  border-radius: 4px;
+  color: #7a8a9e !important;
+  cursor: pointer;
+}
+.name-view-fields .name-detail-row:not(.multi) .cred-copy-btn:hover {
+  color: #e8e8e8 !important;
+  background: rgba(255,255,255,0.12) !important;
+}
+
+/* Edit form cred rows - match export panel style */
+#nameDetailForm .name-detail-row:not(.multi) {
+  display: block;
+  margin-bottom: 0;
+}
+#nameDetailForm .name-detail-row:not(.multi) .name-detail-field {
+  display: flex;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px solid #1a1f26;
+  gap: 8px;
+  flex-direction: row;
+}
+#nameDetailForm .name-detail-row:not(.multi) .name-detail-field:last-child {
+  border-bottom: none;
+}
+#nameDetailForm .name-detail-row:not(.multi) .name-detail-field label {
+  font-size: 13px;
+  color: #c9d1d9;
+  flex-shrink: 0;
+  margin-bottom: 0;
+  min-width: 130px;
+}
+#nameDetailForm .name-detail-row:not(.multi) .cred-display-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+#nameDetailForm .name-detail-row:not(.multi) .cred-copy-btn {
+  font-size: 11px !important;
+  padding: 3px 12px !important;
+  line-height: 1;
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.05) !important;
+  border: 1px solid rgba(255,255,255,0.15) !important;
+  border-radius: 4px;
+  color: #7a8a9e !important;
+  cursor: pointer;
+}
+#nameDetailForm .name-detail-row:not(.multi) .cred-copy-btn:hover {
+  color: #e8e8e8 !important;
+  background: rgba(255,255,255,0.12) !important;
+}
 </style>
 
 <div id="nameDetail" class="name-detail-panel">
@@ -195,6 +390,29 @@
 </div>
 
 <div id="domainCorrToast" class="domain-corr-toast" style="display:none;"></div>
+
+<div id="exportCredsPanel" class="export-creds-panel">
+  <div class="export-creds-header">
+    <span>Export Creds</span>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button class="cred-action-btn" id="closeExportCredsBtn" title="Close">&times;</button>
+    </div>
+  </div>
+  <div class="export-creds-body">
+    <div class="export-section">
+      <div class="export-section-header">
+        <span class="export-section-title">Compromised Users Table</span>
+        <button class="btn export-copy-btn" id="copyTableBtn" type="button">Copy</button>
+      </div>
+      <p class="export-section-desc">Copies the full compromised users table as formatted HTML (paste into Excel, Google Sheets, etc.).</p>
+    </div>
+    <div class="export-divider"></div>
+    <div class="export-section">
+      <div class="export-section-title">Hashes & Passwords</div>
+      <div id="exportHashList"></div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -574,7 +792,6 @@
   });
 
    async function exportCredsTable() {
-    const exportBtn = document.getElementById('exportCredsBtn');
     const rows = Array.from(document.querySelectorAll('.name-row'));
     const credRows = rows.filter(r => {
       const hasPassword = (r.getAttribute('data-password') || '').trim();
@@ -590,8 +807,6 @@
     });
 
     if (credRows.length === 0) {
-      exportBtn.textContent = 'No creds to export';
-      setTimeout(() => { exportBtn.textContent = 'Export Creds'; }, 1500);
       return;
     }
 
@@ -674,11 +889,7 @@
       const blobText = new Blob([html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim()], { type: 'text/plain' });
       const item = new ClipboardItem({ 'text/html': blobHtml, 'text/plain': blobText });
       navigator.clipboard.write([item]).then(() => {
-        exportBtn.textContent = `Copied ${uniqueUsers} user(s)!`;
-        setTimeout(() => { exportBtn.textContent = 'Export Creds'; }, 2000);
       }).catch(() => {
-        exportBtn.textContent = 'Copy failed';
-        setTimeout(() => { exportBtn.textContent = 'Export Creds'; }, 2000);
       });
     } else {
       const div = document.createElement('div');
@@ -693,13 +904,109 @@
       document.execCommand('copy');
       sel.removeAllRanges();
       div.remove();
-      exportBtn.textContent = `Copied ${uniqueUsers} user(s)!`;
-      setTimeout(() => { exportBtn.textContent = 'Export Creds'; }, 2000);
     }
-    setTimeout(() => { exportBtn.textContent = 'Export Creds'; }, 2000);
+    return uniqueUsers;
   }
 
-  document.getElementById('exportCredsBtn').addEventListener('click', exportCredsTable);
+  // Build hash/password options list for export panel
+  function buildExportHashList() {
+    const rows = Array.from(document.querySelectorAll('.name-row'));
+    const hashOptions = [
+      { label: 'Passwords', key: 'password' },
+      { label: 'NTLM Hash', key: 'ntlm-hash' },
+      { label: 'NTLMv1', key: 'ntlm-v1' },
+      { label: 'NTLMv2', key: 'ntlm-v2' },
+      { label: 'DCC2', key: 'dcc2' },
+      { label: 'Kerberos AS-REP', key: 'kerberos-asrep' },
+      { label: 'Kerberos TGS', key: 'kerberos-tgs' },
+      { label: 'Kerberos Key AES128', key: 'kerberos-key-aes128' },
+      { label: 'Kerberos Key AES256', key: 'kerberos-key-aes256' },
+    ];
+
+    const container = document.getElementById('exportHashList');
+    container.innerHTML = '';
+
+    hashOptions.forEach(opt => {
+      let count = 0;
+      const values = [];
+      rows.forEach(row => {
+        const val = (row.getAttribute('data-' + opt.key) || '').trim();
+        if (val) {
+          count++;
+          const adUser = (row.getAttribute('data-ad-username') || '').trim();
+          const domain = (row.getAttribute('data-domain') || '').trim();
+          const email = (row.getAttribute('data-email') || '').trim();
+          const account = adUser && domain ? `${domain}\\${adUser}` : (email || adUser || 'unknown');
+          values.push({ account, value: val });
+        }
+      });
+
+      if (count === 0) return;
+
+      const item = document.createElement('div');
+      item.className = 'export-hash-item';
+      item.innerHTML = `
+        <div class="export-hash-info"><span class="export-hash-label">${opt.label}</span><span class="export-hash-count">(${count})</span></div>
+        <button class="btn export-copy-btn" data-hash-key="${opt.key}" type="button">Copy</button>
+      `;
+      container.appendChild(item);
+
+      item.querySelector('.export-copy-btn').addEventListener('click', (e) => {
+        const lines = values.map(v => v.value);
+        navigator.clipboard.writeText(lines.join('\n')).then(() => {
+          const btn = e.target;
+          const orig = btn.textContent;
+          btn.textContent = '✓';
+          setTimeout(() => { btn.textContent = orig; }, 1200);
+        }).catch(() => {
+          const btn = e.target;
+          btn.textContent = '✗';
+          setTimeout(() => { btn.textContent = 'Copy'; }, 1500);
+        });
+      });
+    });
+  }
+
+  // Export Creds Panel
+  const exportCredsPanel = document.getElementById('exportCredsPanel');
+  const exportCredsBtn = document.getElementById('exportCredsBtn');
+  const closeExportCredsBtn = document.getElementById('closeExportCredsBtn');
+  const copyTableBtn = document.getElementById('copyTableBtn');
+
+  exportCredsBtn.addEventListener('click', () => {
+    buildExportHashList();
+    exportCredsPanel.classList.add('active');
+  });
+
+  closeExportCredsBtn.addEventListener('click', () => {
+    exportCredsPanel.classList.remove('active');
+  });
+
+  exportCredsPanel.addEventListener('click', (e) => {
+    e.stopPropagation();
+  });
+
+  copyTableBtn.addEventListener('click', () => {
+    const orig = copyTableBtn.textContent;
+    copyTableBtn.textContent = 'Copying...';
+    copyTableBtn.disabled = true;
+    (async () => {
+      const count = await exportCredsTable();
+      copyTableBtn.textContent = count ? `Copied ${count} user(s)!` : '✓';
+      setTimeout(() => {
+        copyTableBtn.textContent = orig;
+        copyTableBtn.disabled = false;
+      }, 1500);
+    })();
+  });
+
+  document.addEventListener('click', (e) => {
+    if (exportCredsPanel.classList.contains('active')) {
+      if (e.target !== exportCredsBtn && !exportCredsBtn.contains(e.target) && !exportCredsPanel.contains(e.target)) {
+        exportCredsPanel.classList.remove('active');
+      }
+    }
+  });
 
   document.querySelectorAll('[data-del]').forEach(btn => {
     btn.addEventListener('click', async () => {

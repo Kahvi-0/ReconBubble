@@ -407,3 +407,32 @@ class DomainCorrelation(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     primary_domain: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     aliases: Mapped[str] = mapped_column(Text, default="")
+
+
+class SmbShare(Base):
+    __tablename__ = "smb_shares"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    host: Mapped[str] = mapped_column(String(255), index=True)
+    share: Mapped[str] = mapped_column(String(255), index=True)
+    access: Mapped[str] = mapped_column(String(64), default="", index=True)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    source_file: Mapped[str] = mapped_column(String(260), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
+class UploadLog(Base):
+    __tablename__ = "upload_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True)
+    label: Mapped[str] = mapped_column(String(128), default="")
+    filename: Mapped[str] = mapped_column(String(260), default="")
+    added: Mapped[int] = mapped_column(Integer, default=0)
+    skipped: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
+    unmatched: Mapped[str] = mapped_column(Text, default="[]")
+    details: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )

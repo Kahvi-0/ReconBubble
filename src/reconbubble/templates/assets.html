@@ -32,11 +32,11 @@
     <label class="row-limit-label">Max assets shown</label>
     <span class="muted" style="font-size:11px;">Limit rows per subnet group.</span>
     <select id="rowLimit">
-      <option value="50">50</option>
-      <option value="100">100</option>
-      <option value="200">200</option>
-      <option value="500">500</option>
-      <option value="0">All</option>
+      <option value="50"{% if row_limit == 50 %} selected{% endif %}>50</option>
+      <option value="100"{% if row_limit == 100 %} selected{% endif %}>100</option>
+      <option value="200"{% if row_limit == 200 %} selected{% endif %}>200</option>
+      <option value="500"{% if row_limit == 500 %} selected{% endif %}>500</option>
+      <option value="0"{% if row_limit == 0 %} selected{% endif %}>All (paginated)</option>
     </select>
     <label class="tag-filter-label">Host Tag Filter</label>
     <select id="tagFilter">
@@ -48,17 +48,20 @@
     <h2>In-Scope Assets by Subnet</h2>
     <p class="muted">Total in-scope assets: <strong>{{ in_scope_total }}</strong></p>
     {% if subnet_stats %}
-      <table>
-        <thead><tr><th>Subnet</th><th>In-Scope Assets</th></tr></thead>
-        <tbody>
-          {% for s in subnet_stats %}
-            <tr>
-              <td><code>{{ s.subnet }}</code></td>
-              <td>{{ s.count }}</td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      <details class="subnet-stats-details"{% if subnet_stats|length <= 10 %} open{% endif %}>
+        {% if subnet_stats|length > 10 %}<summary>Subnet breakdown ({{ subnet_stats|length }} subnets)</summary>{% endif %}
+        <table>
+          <thead><tr><th>Subnet</th><th>In-Scope Assets</th></tr></thead>
+          <tbody>
+            {% for s in subnet_stats %}
+              <tr>
+                <td><code>{{ s.subnet }}</code></td>
+                <td>{{ s.count }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </details>
     {% else %}
       <p class="muted">No scoped subnet statistics yet.</p>
     {% endif %}
@@ -70,15 +73,17 @@
   <details class="asset-subnet-group" open>
     <summary><strong>{{ subnet }}</strong> <span class="muted">({{ rows|length }} assets)</span></summary>
     <table>
-      <thead><tr><th>Complete</th><th>In Progress</th><th>WAF</th><th>IP</th><th>Hostname</th><th># Services</th><th>Domains</th><th>Compromised</th><th>Tag</th></tr></thead>
+      <thead><tr><th>Complete</th><th>In Progress</th><th>WAF</th><th>IP</th><th>Hostname</th><th># Services</th><th>Domains</th><th>Compromised</th><th>Tag</th><th style="width:60px;padding-left:0px;"></th></tr></thead>
       <tbody>
         {% for r in rows %}
           <tr
-            class="{% if r.complete==1 %}row-complete{% elif r.inprogress==1 %}row-inprogress{% endif %}"
+            class="{% if r.complete==1 %}row-complete{% elif r.inprogress==1 %}row-inprogress{% endif %} asset-row"
             data-complete="{{ 1 if r.complete==1 else 0 }}"
             data-svc-count="{{ r.svc_count }}"
             data-in-scope="{{ 1 if r.in_scope else 0 }}"
             data-tag="{{ r.tag or '' }}"
+            data-id="{{ r.id }}"
+            data-topo-node-id="{{ topology_asset_node_ids.get(r.id|string, '') }}"
           >
             <td><input type="checkbox" class="completeHost" data-host-id="{{ r.id }}" {% if r.complete==1 %}checked{% endif %} /></td>
             <td><input type="checkbox" class="inprogressHost" data-host-id="{{ r.id }}" {% if r.inprogress==1 %}checked{% endif %} {% if r.complete==1 %}disabled{% endif %} /></td>
@@ -111,6 +116,12 @@
             </td>
             <td>{% if r.id|string in compromised_asset_ids %}<span class="topo-badge compromised">Compromised</span>{% endif %}</td>
             <td>{{ r.tag or '' }}</td>
+            <td style="padding-left:0px;">
+              <div class="cred-actions">
+                <button class="cred-action-btn topo-btn" data-asset-id="{{ r.id }}" data-topo-node-id="{{ topology_asset_node_ids.get(r.id|string, '') }}" data-asset-ip="{{ r.ip }}" data-asset-hostname="{{ r.hostname or '' }}" title="Add to Topology">+</button>
+                <button class="cred-action-btn del" data-del="{{ r.id }}" title="Delete">&#10005;</button>
+              </div>
+            </td>
           </tr>
         {% endfor %}
       </tbody>
@@ -121,6 +132,30 @@
 
 {% if not grouped %}
 <div class="card"><p class="muted">No assets match current filters.</p></div>
+{% endif %}
+
+{% if total_hosts and page_size > 0 and total_hosts > page_size %}
+<div class="card" style="margin-top:16px;display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;">
+  <span class="muted" style="margin-right:8px;">{{ total_hosts }} total — page {{ page }} of {{ (total_hosts + page_size - 1) // page_size }}</span>
+  {% set totalPages = (total_hosts + page_size - 1) // page_size %}
+  {% set urlStr = request.url.__str__() %}
+  {% set baseUrl = urlStr.replace('page=' ~ page|string, '') ~ ('&page=' if '?' in urlStr else '?page=') %}
+  {% if page > 1 %}
+  <a href="{{ baseUrl }}{{ page - 1 }}" class="btn" style="padding:4px 12px;text-decoration:none;">&larr; Prev</a>
+  {% endif %}
+  {% for p in range(1, totalPages + 1) %}
+    {% if p >= page - 2 and p <= page + 2 %}
+      {% if p == page %}
+      <strong style="padding:4px 10px;">{{ p }}</strong>
+      {% else %}
+      <a href="{{ baseUrl }}{{ p }}" style="padding:4px 10px;text-decoration:none;">{{ p }}</a>
+      {% endif %}
+    {% endif %}
+  {% endfor %}
+  {% if page < totalPages %}
+  <a href="{{ baseUrl }}{{ page + 1 }}" class="btn" style="padding:4px 12px;text-decoration:none;">Next &rarr;</a>
+  {% endif %}
+</div>
 {% endif %}
 
 <div id="assetDetail" class="asset-detail-panel">
@@ -611,12 +646,13 @@ html { scrollbar-gutter: stable; }
     rowLimit && rowLimit.addEventListener("change", () => {
       const u = new URL(window.location.href);
       u.searchParams.set("row_limit", rowLimit.value);
+      u.searchParams.set("page", "1");
       savePrefs({ ...loadPrefs(), row_limit: rowLimit.value });
       window.location.href = u.toString();
     });
-    // Set default to "All" (0)
-    if (rowLimit && !url.searchParams.has("row_limit")) {
-      rowLimit.value = "0";
+    // Set dropdown to current value from URL
+    if (rowLimit) {
+      rowLimit.value = url.searchParams.get("row_limit") || "0";
     }
 
     const tagFilter = document.getElementById("tagFilter");
@@ -683,6 +719,81 @@ html { scrollbar-gutter: stable; }
       const inprogressCb = row.querySelector(".inprogressHost");
       applyRowState(row, completeCb, inprogressCb);
     });
+
+    // Row-level topology buttons
+    document.querySelectorAll(".asset-row .topo-btn").forEach(btn => {
+      const topoNodeId = btn.getAttribute("data-topo-node-id");
+      if (topoNodeId) {
+        btn.textContent = "\u2713";
+        btn.title = "Already in topology";
+        btn.disabled = true;
+        btn.classList.add("topo-in");
+        return;
+      }
+      btn.title = "Add to topology";
+      btn.classList.add("topo-topo");
+      btn.addEventListener("click", async () => {
+        const assetId = btn.getAttribute("data-asset-id");
+        const ip = btn.getAttribute("data-asset-ip") || "";
+        const hostname = btn.getAttribute("data-asset-hostname") || "";
+        btn.disabled = true;
+        btn.textContent = "...";
+        try {
+          const r = await fetch("/api/topology/add-node", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ asset_id: assetId, hostname, ip }),
+          });
+          const j = await r.json();
+          if (j.ok) {
+            btn.textContent = "\u2713";
+            btn.title = "Already in topology";
+            btn.classList.remove("topo-topo");
+            btn.classList.add("topo-in");
+            btn.setAttribute("data-topo-node-id", j.node.id);
+            const row = btn.closest("tr");
+            if (row) row.setAttribute("data-topo-node-id", j.node.id);
+          } else {
+            alert(j.error || "Failed to add to topology");
+            btn.textContent = "+";
+            btn.disabled = false;
+          }
+        } catch (e) {
+          alert("Error: " + e.message);
+          btn.textContent = "+";
+          btn.disabled = false;
+        }
+      });
+    });
+
+    // Row-level delete buttons
+    document.querySelectorAll(".asset-row .cred-action-btn.del").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const hostId = btn.getAttribute("data-del");
+        if (!confirm("Delete this asset and all its services?")) return;
+        const fd = new FormData();
+        fd.append("host_id", hostId);
+        btn.disabled = true;
+        btn.textContent = "...";
+        try {
+          const r = await fetch("/api/host/delete", { method: "POST", body: fd });
+          const j = await r.json();
+          if (j.ok) {
+            const row = btn.closest("tr");
+            if (row) row.style.display = "none";
+          } else {
+            alert(j.error || "Failed to delete");
+            btn.textContent = "\u2715";
+            btn.disabled = false;
+          }
+        } catch (e) {
+          alert("Error: " + e.message);
+          btn.textContent = "\u2715";
+          btn.disabled = false;
+        }
+      });
+    });
+
     populateTagFilter();
     applyClientFilters();
   });

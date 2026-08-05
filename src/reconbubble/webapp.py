@@ -34,10 +34,11 @@ from .models import (
     DomainInfo,
     PasswordSprayService,
     PasswordSprayAttempt,
-    AdCredential,
     ProfilingRow,
     RegistrarInfo,
     AppSettings,
+    UploadLog,
+    SmbShare,
 )
 from .parsers import (
     upsert_artifact,
@@ -59,6 +60,8 @@ from .parsers import (
     import_bbot,
     import_bbot_cloud,
     import_mixed_hashes,
+    import_smbmap,
+    resolve_ips_concurrent,
 )
 
 DOMAIN_RE = re.compile(
@@ -76,6 +79,19 @@ def create_app(
     SessionLocal = make_session(engine)
 
     app = FastAPI(title="ReconBubble", docs_url=None, redoc_url=None)
+
+    @app.middleware("http")
+    async def add_cache_headers(request: Request, call_next):
+        response = await call_next(request)
+        if request.method == "GET":
+            if request.url.path.startswith("/api/"):
+                response.headers["Cache-Control"] = "private, max-age=30, must-revalidate"
+            elif request.url.path.startswith("/static/"):
+                response.headers.setdefault("Cache-Control", "public, max-age=86400")
+            else:
+                response.headers["Cache-Control"] = "private, max-age=10, must-revalidate"
+        return response
+
     app.mount(
         "/static",
         StaticFiles(directory=Path(__file__).parent / "static"),
@@ -263,6 +279,20 @@ def create_app(
         ).fetchall()
         return [r[0] for r in rows]
 
+    def list_all_host_domains(s: Session) -> dict[int, list[str]]:
+        """Fetch all host-subdomain mappings in a single query."""
+        rows = s.execute(
+            text(
+                "SELECT host_subdomains.host_id, subdomains.fqdn FROM host_subdomains "
+                "JOIN subdomains ON subdomains.id = host_subdomains.subdomain_id "
+                "ORDER BY host_subdomains.host_id, subdomains.fqdn ASC"
+            )
+        ).fetchall()
+        result: dict[int, list[str]] = {}
+        for hid, fqdn in rows:
+            result.setdefault(hid, []).append(fqdn)
+        return result
+
     def _split_lines(txt: str) -> list[str]:
         return [l.strip() for l in (txt or "").splitlines() if l.strip()]
 
@@ -277,6 +307,21 @@ def create_app(
             {"fq": fqdn},
         ).fetchall()
         return [r[0] for r in rows]
+
+    def list_all_subdomain_ips(s: Session) -> dict[str, list[str]]:
+        """Fetch all subdomain-IP mappings in a single query."""
+        rows = s.execute(
+            text(
+                "SELECT subdomains.fqdn, hosts.ip FROM host_subdomains "
+                "JOIN subdomains ON subdomains.id = host_subdomains.subdomain_id "
+                "JOIN hosts ON hosts.id = host_subdomains.host_id "
+                "ORDER BY subdomains.fqdn, hosts.ip ASC"
+            )
+        ).fetchall()
+        result: dict[str, list[str]] = {}
+        for fqdn, ip in rows:
+            result.setdefault(fqdn, []).append(ip)
+        return result
 
     def list_subdomain_hosts(s: Session, fqdn: str) -> list[dict]:
         rows = s.execute(
@@ -308,25 +353,6 @@ def create_app(
             {"hid": host_id, "sid": sub.id, "ts": datetime.utcnow().isoformat()},
         )
         s.commit()
-
-    def resolve_ips(fqdn: str) -> list[str]:
-        fqdn = fqdn.strip().rstrip(".")
-        out = set()
-        try:
-            for fam in (socket.AF_INET, socket.AF_INET6):
-                try:
-                    infos = socket.getaddrinfo(
-                        fqdn, None, family=fam, type=socket.SOCK_STREAM
-                    )
-                except Exception:
-                    continue
-                for info in infos:
-                    ip = info[4][0]
-                    if ip:
-                        out.add(ip)
-        except Exception:
-            pass
-        return sorted(out)
 
     # ---- Pages ----
     @app.get("/", response_class=HTMLResponse)
@@ -599,7 +625,7 @@ def create_app(
     # Upload
     @app.get("/upload", response_class=HTMLResponse)
     def upload_page(request: Request):
-        return templates.TemplateResponse("upload.html", {"request": request})
+        return templates.TemplateResponse("upload.html", {"request": request, "workspace": ws})
 
     @app.post("/upload")
     async def upload(
@@ -626,7 +652,138 @@ def create_app(
             "smtp": "/users",
             "mixed_hashes": "/users",
             "bbot_cloud": "/cloud",
+            "smb_shares": "/smb-shares",
         }
+        def _import_file(s: Session, art: Artifact, stored_path: str, fname: str) -> dict:
+            """Run the appropriate parser and return normalized result dict."""
+            p = Path(stored_path)
+            try:
+                if kind == "nmap_xml":
+                    res = import_nmap_xml(s, art, p)
+                elif kind == "subdomains":
+                    count = import_subdomains(s, art, p)
+                    fqdn_list = s.execute(select(Subdomain.fqdn)).scalars().all()
+                    ip_map = resolve_ips_concurrent(list(fqdn_list))
+                    for fqdn, ips in ip_map.items():
+                        for ip in ips:
+                            try:
+                                h = upsert_host(s, ip, "", "")
+                                link_host_domain(s, h.id, fqdn)
+                            except Exception:
+                                continue
+                    res = {"added": count, "skipped": 0, "unmatched": []}
+                elif kind == "names_emails":
+                    res = {"added": import_names_emails(s, art, p), "skipped": 0, "unmatched": []}
+                elif kind == "doc":
+                    res = {"added": import_document(s, art, p), "skipped": 0, "unmatched": []}
+                    extract_doc_names(s)
+                    extract_doc_software(s)
+                elif kind == "ad_users":
+                    res = {"added": import_ad_users(s, art, p), "skipped": 0, "unmatched": []}
+                elif kind == "creds":
+                    res = {"added": import_credentials(s, art, p), "skipped": 0, "unmatched": []}
+                elif kind == "urls":
+                    res = {"added": import_web_urls(s, art, p), "skipped": 0, "unmatched": []}
+                elif kind == "names":
+                    res = {"added": import_names(s, art, p), "skipped": 0, "unmatched": []}
+                elif kind == "prowl_phase1":
+                    res = {"added": import_prowl_phase1(s, art, p), "skipped": 0, "unmatched": []}
+                elif kind == "zone_transfers":
+                    res = {"added": import_zone_transfers(s, art, p), "skipped": 0, "unmatched": []}
+                elif kind == "smtp":
+                    res = {"added": import_smtp(s, art, p), "skipped": 0, "unmatched": []}
+                elif kind == "bbot":
+                    res = import_bbot(s, art, p)
+                elif kind == "bbot_cloud":
+                    res = import_bbot_cloud(s, art, p)
+                elif kind == "mixed_hashes":
+                    res = import_mixed_hashes(s, art, p)
+                elif kind == "smb_shares":
+                    res = import_smbmap(s, art, p)
+                else:
+                    res = {"added": 0, "skipped": 0, "unmatched": [f"Unknown type: {kind}"]}
+            except Exception as e:
+                res = {"added": 0, "skipped": 0, "unmatched": [f"Error parsing {fname}: {e}"]}
+            return res
+
+        def _normalize_result(res: dict) -> dict:
+            """Normalize any parser result to {added, skipped, unmatched, details}."""
+            if isinstance(res, dict):
+                added = res.get("added", 0)
+                skipped = res.get("skipped", 0)
+                unmatched = res.get("unmatched", []) or []
+                details = res.get("details", {})
+                # Map known parser-specific keys
+                if kind == "nmap_xml":
+                    added = res.get("hosts_added", 0)
+                    details = {
+                        "hosts": res.get("hosts_added", 0),
+                        "services": res.get("services_added", 0),
+                        "evidence": res.get("evidence_added", 0),
+                    }
+                elif kind == "bbot":
+                    added = res.get("subdomains", 0) + res.get("hosts", 0)
+                    details = {
+                        "subdomains": res.get("subdomains", 0),
+                        "hosts": res.get("hosts", 0),
+                        "services": res.get("services", 0),
+                        "urls": res.get("urls", 0),
+                        "notes": res.get("notes", 0),
+                    }
+                elif kind == "bbot_cloud":
+                    added = res.get("subdomains", 0) + res.get("hosts", 0)
+                    details = {
+                        "subdomains": res.get("subdomains", 0),
+                        "hosts": res.get("hosts", 0),
+                        "cloud_items": res.get("cloud_items", 0),
+                        "notes": res.get("notes", 0),
+                    }
+                elif kind == "mixed_hashes":
+                    added = res.get("added", 0)
+                    skipped = res.get("skipped", 0)
+                    unmatched = res.get("unmatched", []) or []
+                return {
+                    "added": added,
+                    "skipped": skipped,
+                    "unmatched": unmatched,
+                    "details": details,
+                }
+            return {"added": res, "skipped": 0, "unmatched": [], "details": {}}
+
+        def _get_label(kind: str) -> str:
+            return {
+                "nmap_xml": "Nmap XML",
+                "subdomains": "Subdomains",
+                "names_emails": "Names & Emails",
+                "doc": "OSINT Document",
+                "ad_users": "AD Users",
+                "creds": "Credentials",
+                "urls": "Web URLs",
+                "names": "Names",
+                "mixed_hashes": "Mixed Hashes",
+                "bbot": "BBOT",
+                "bbot_cloud": "BBOT Cloud",
+                "prowl_phase1": "Prowler Phase 1",
+                "zone_transfers": "Prowler Phase 2",
+                "smtp": "Prowler Phase 3",
+                "smb_shares": "SMB Shares",
+            }.get(kind, kind)
+
+        def _log_upload(kind: str, label: str, filename: str, norm: dict):
+            """Persist upload result to DB."""
+            with db() as s:
+                s.add(UploadLog(
+                    kind=kind,
+                    label=label,
+                    filename=filename,
+                    added=norm["added"],
+                    skipped=norm["skipped"],
+                    failed=len(norm["unmatched"]),
+                    unmatched=json.dumps(norm["unmatched"])[:10000],
+                    details=json.dumps(norm.get("details", {}))[:5000],
+                ))
+                s.commit()
+
         try:
             if raw_text and raw_text.strip():
                 default = {
@@ -639,6 +796,7 @@ def create_app(
                     "urls": "pasted_urls.txt",
                     "names": "pasted_names.txt",
                     "mixed_hashes": "pasted_mixed_hashes.txt",
+                    "smb_shares": "pasted_smb_shares.txt",
                 }.get(kind, "pasted.txt")
                 fname = (
                     raw_filename.strip()
@@ -648,49 +806,34 @@ def create_app(
                 stored = ws.store_text(raw_text, fname, prefix=kind)
                 with db() as s:
                     art = upsert_artifact(s, kind, Path(stored))
-                    if kind == "nmap_xml":
-                        import_nmap_xml(s, art, Path(stored))
-                    elif kind == "subdomains":
-                        import_subdomains(s, art, Path(stored))
-                        fqdn_list = s.execute(select(Subdomain.fqdn)).scalars().all()
-                        for fqdn in fqdn_list:
-                            for ip in resolve_ips(fqdn):
-                                try:
-                                    h = upsert_host(s, ip, "", "")
-                                except Exception:
-                                    continue
-                                link_host_domain(s, h.id, fqdn)
-                    elif kind == "names_emails":
-                        import_names_emails(s, art, Path(stored))
-                    elif kind == "doc":
-                        import_document(s, art, Path(stored))
-                        extract_doc_names(s)
-                        extract_doc_software(s)
-                    elif kind == "ad_users":
-                        import_ad_users(s, art, Path(stored))
-                    elif kind == "creds":
-                        import_credentials(s, art, Path(stored))
-                    elif kind == "urls":
-                        import_web_urls(s, art, Path(stored))
-                    elif kind == "names":
-                        import_names(s, art, Path(stored))
-                    elif kind == "mixed_hashes":
-                        result = import_mixed_hashes(s, art, Path(stored))
-                if kind == "mixed_hashes":
-                    return templates.TemplateResponse(
-                        "upload.html",
-                        {
-                            "request": request,
-                            "workspace": ws,
-                            "mixed_result": result,
+                    raw_result = _import_file(s, art, stored, fname)
+                norm = _normalize_result(raw_result)
+                _log_upload(kind, _get_label(kind), fname, norm)
+                all_errors = list(norm["unmatched"])
+                upload_results = [{
+                    "type": kind,
+                    "added": norm["added"],
+                    "skipped": norm["skipped"],
+                    "unmatched": norm["unmatched"],
+                    "details": norm.get("details", {}),
+                }]
+                return templates.TemplateResponse(
+                    "upload.html",
+                    {
+                        "request": request,
+                        "workspace": ws,
+                        "upload_results": upload_results,
+                        "upload_results_summary": {
+                            "files": [fname],
+                            "redirect": redirect_map.get(kind, "/"),
+                            "errors": all_errors,
                         },
-                    )
-                return RedirectResponse(
-                    url=redirect_map.get(kind, "/"), status_code=303
+                    },
                 )
             elif file:
                 files = file if isinstance(file, list) else [file]
                 stored_files = []
+                fnames = []
                 for f in files:
                     if f and f.filename:
                         tmp = ws.uploads_dir / f"tmp_{f.filename}"
@@ -698,6 +841,7 @@ def create_app(
                         stored = ws.store_upload(tmp, prefix=kind)
                         tmp.unlink(missing_ok=True)
                         stored_files.append(stored)
+                        fnames.append(f.filename)
                 if not stored_files:
                     return templates.TemplateResponse(
                         "upload.html",
@@ -708,62 +852,35 @@ def create_app(
                         },
                         status_code=400,
                     )
+                upload_results = []
+                all_errors = []
                 with db() as s:
-                    for stored_path in stored_files:
+                    for i, stored_path in enumerate(stored_files):
+                        fname = fnames[i] if i < len(fnames) else "file"
                         art = upsert_artifact(s, kind, Path(stored_path))
-                        if kind == "nmap_xml":
-                            import_nmap_xml(s, art, Path(stored_path))
-                        elif kind == "subdomains":
-                            import_subdomains(s, art, Path(stored_path))
-                            fqdn_list = (
-                                s.execute(select(Subdomain.fqdn)).scalars().all()
-                            )
-                            for fqdn in fqdn_list:
-                                for ip in resolve_ips(fqdn):
-                                    try:
-                                        h = upsert_host(s, ip, "", "")
-                                    except Exception:
-                                        continue
-                                    link_host_domain(s, h.id, fqdn)
-                        elif kind == "names_emails":
-                            import_names_emails(s, art, Path(stored_path))
-                        elif kind == "doc":
-                            import_document(s, art, Path(stored_path))
-                            extract_doc_names(s)
-                            extract_doc_software(s)
-                        elif kind == "ad_users":
-                            import_ad_users(s, art, Path(stored_path))
-                        elif kind == "creds":
-                            import_credentials(s, art, Path(stored_path))
-                        elif kind == "urls":
-                            import_web_urls(s, art, Path(stored_path))
-                        elif kind == "names":
-                            import_names(s, art, Path(stored_path))
-                        elif kind == "prowl_phase1":
-                            import_prowl_phase1(s, art, Path(stored_path))
-                        elif kind == "zone_transfers":
-                            import_zone_transfers(s, art, Path(stored_path))
-                        elif kind == "smtp":
-                            import_smtp(s, art, Path(stored_path))
-                        elif kind == "bbot":
-                            result = import_bbot(s, art, Path(stored_path))
-                            print(f"[bbot] Import complete: {result}")
-                        elif kind == "bbot_cloud":
-                            result = import_bbot_cloud(s, art, Path(stored_path))
-                            print(f"[bbot_cloud] Import complete: {result}")
-                        elif kind == "mixed_hashes":
-                            result = import_mixed_hashes(s, art, Path(stored_path))
-                if kind == "mixed_hashes":
-                    return templates.TemplateResponse(
-                        "upload.html",
-                        {
-                            "request": request,
-                            "workspace": ws,
-                            "mixed_result": result,
+                        raw_result = _import_file(s, art, stored_path, fname)
+                        norm = _normalize_result(raw_result)
+                        _log_upload(kind, _get_label(kind), fname, norm)
+                        all_errors.extend(norm["unmatched"])
+                        upload_results.append({
+                            "type": kind,
+                            "added": norm["added"],
+                            "skipped": norm["skipped"],
+                            "unmatched": norm["unmatched"],
+                            "details": norm.get("details", {}),
+                        })
+                return templates.TemplateResponse(
+                    "upload.html",
+                    {
+                        "request": request,
+                        "workspace": ws,
+                        "upload_results": upload_results,
+                        "upload_results_summary": {
+                            "files": fnames,
+                            "redirect": redirect_map.get(kind, "/"),
+                            "errors": all_errors,
                         },
-                    )
-                return RedirectResponse(
-                    url=redirect_map.get(kind, "/"), status_code=303
+                    },
                 )
             else:
                 return templates.TemplateResponse(
@@ -789,6 +906,33 @@ def create_app(
                 status_code=500,
             )
 
+    @app.get("/api/upload-log")
+    def get_upload_log(request: Request):
+        with db() as s:
+            rows = s.execute(select(UploadLog).order_by(UploadLog.created_at.desc()).limit(50)).scalars().all()
+        return {
+            entry.id: {
+                "id": entry.id,
+                "kind": entry.kind,
+                "label": entry.label,
+                "filename": entry.filename,
+                "added": entry.added,
+                "skipped": entry.skipped,
+                "failed": entry.failed,
+                "unmatched": json.loads(entry.unmatched) if entry.unmatched else [],
+                "details": json.loads(entry.details) if entry.details else {},
+                "created_at": entry.created_at.isoformat() if entry.created_at else None,
+            }
+            for entry in rows
+        }
+
+    @app.post("/api/upload-log/clear")
+    def clear_upload_log(request: Request):
+        with db() as s:
+            s.execute(UploadLog.__table__.delete())
+            s.commit()
+        return {"ok": True}
+
     # Assets
     @app.get("/assets", response_class=HTMLResponse)
     def assets(request: Request):
@@ -801,6 +945,13 @@ def create_app(
         except ValueError:
             row_limit = 0
 
+        page_raw = (request.query_params.get("page", "1") or "1").strip()
+        try:
+            page = max(1, int(page_raw))
+        except ValueError:
+            page = 1
+        page_size = 200 if row_limit == 0 else 0
+
         def subnet_sort_key(net):
             return (net.version, int(net.network_address), net.prefixlen)
 
@@ -810,23 +961,30 @@ def create_app(
                 scope_sets(s, sensitive_only=True)
             )
             scope_is_empty = not bool(ips or subnets or domains)
-            rows = s.execute(
-                select(
-                    Host.id,
-                    Host.ip,
-                    Host.hostname,
-                    Host.done,
-                    Host.complete,
-                    Host.inprogress,
-                    Host.waf,
-                    Host.tag,
-                    func.count(Service.id).label("svc_count"),
-                )
-                .outerjoin(Service, Service.host_id == Host.id)
-                .group_by(Host.id)
-                .order_by(func.count(Service.id).desc(), Host.ip.asc())
-            ).all()
-            domains_by_host = {r.id: list_host_domains(s, r.id) for r in rows}
+            total_count = s.execute(
+                select(func.count(Host.id))
+            ).scalar()
+
+            offset = (page - 1) * page_size if page_size > 0 else 0
+            q = select(
+                Host.id,
+                Host.ip,
+                Host.hostname,
+                Host.done,
+                Host.complete,
+                Host.inprogress,
+                Host.waf,
+                Host.tag,
+                func.count(Service.id).label("svc_count"),
+            ).outerjoin(Service, Service.host_id == Host.id).group_by(Host.id).order_by(func.count(Service.id).desc(), Host.ip.asc())
+            if page_size > 0:
+                q = q.limit(page_size).offset(offset)
+            rows = s.execute(q).all()
+            all_host_domains = list_all_host_domains(s)
+            domains_by_host = {r.id: all_host_domains.get(r.id, []) for r in rows}
+            # Fetch all IPs for accurate subnet stats, independent of pagination/row_limit
+            all_rows = s.execute(select(Host.id, Host.ip)).all()
+            all_ips = {r.id: r.ip for r in all_rows}
         data = []
         for r in rows:
             ip_in = ip_in_scope(r.ip, ips, subnets, excluded)
@@ -880,6 +1038,28 @@ def create_app(
         compromised_ids = _topology_compromised_ids()
         compromised_asset_ids = compromised_ids.get("asset_ids", set()) if compromised_ids else set()
 
+        # Build asset_id -> topology_node_id mapping for row-level topo buttons
+        topology_asset_node_ids: dict[str, str] = {}
+        with db() as s:
+            topo_row = (
+                s.execute(
+                    select(Note)
+                    .where(Note.object_type == "topology_map", Note.object_id == 0)
+                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+            if topo_row and (topo_row.body or "").strip():
+                try:
+                    topo_data = json.loads(topo_row.body)
+                    for n in (topo_data.get("nodes") or []):
+                        aid = n.get("linked_asset_id")
+                        if aid:
+                            topology_asset_node_ids[str(aid)] = n.get("id", "")
+                except Exception:
+                    pass
+
         in_scope_data = [d for d in data if d.get("in_scope")]
         filtered_data = data if show_out == 1 else in_scope_data
         if hide_completed == 1:
@@ -911,8 +1091,13 @@ def create_app(
                 return f"{prefix_name}: {inferred}"
             return None
 
-        for row in in_scope_data:
-            label = classify_subnet_label(row.get("ip", ""), allow_infer=True)
+        # Build subnet stats from ALL hosts, not just the current page
+        all_in_scope_ips = []
+        for hid, hip in all_ips.items():
+            if ip_in_scope(hip, ips, subnets, excluded):
+                all_in_scope_ips.append(hip)
+        for ip_str in all_in_scope_ips:
+            label = classify_subnet_label(ip_str, allow_infer=True)
             if not label:
                 continue
             if label in subnet_stats:
@@ -982,9 +1167,13 @@ def create_app(
                 "shown_count": shown_count,
                 "total_count": total_before_limit,
                 "subnet_stats": subnet_stats_list,
-                "in_scope_total": len(in_scope_data),
+                "in_scope_total": len(all_in_scope_ips),
                 "scope_is_empty": scope_is_empty,
                 "compromised_asset_ids": compromised_asset_ids,
+                "topology_asset_node_ids": topology_asset_node_ids,
+                "page": page,
+                "page_size": page_size,
+                "total_hosts": total_count,
             },
         )
 
@@ -1571,7 +1760,8 @@ def create_app(
             s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip, s_excluded = (
                 scope_sets(s, sensitive_only=True)
             )
-            ips_found = list_subdomain_ips(s, fq)
+            all_ips = list_all_subdomain_ips(s)
+            ips_found = all_ips.get(fq, [])
             in_dom = domain_in_scope(
                 fq, domains, domain_all_subs, domain_subs_if_ip, ips_found, ips, subnets, excluded
             )
@@ -3275,33 +3465,134 @@ def create_app(
 
     @app.get("/smb-shares", response_class=HTMLResponse)
     def smb_shares_page(request: Request):
-        return templates.TemplateResponse("smb_shares.html", {"request": request})
+        with db() as s:
+            shares = s.execute(
+                select(SmbShare).order_by(SmbShare.host, SmbShare.share)
+            ).scalars().all()
+            hosts_map: dict[str, list[SmbShare]] = {}
+            for sh in shares:
+                hosts_map.setdefault(sh.host, []).append(sh)
+        return templates.TemplateResponse("smb_shares.html", {"request": request, "shares": shares, "hosts_map": hosts_map})
+
+    @app.post("/api/smb-shares/create", response_class=JSONResponse)
+    def smb_shares_create(host: str = Form(""), shares: str = Form("")):
+        host = host.strip()
+        if not host:
+            return {"ok": False, "error": "Host is required."}
+        lines = [l.strip() for l in shares.strip().split("\n") if l.strip()]
+        if not lines:
+            return {"ok": False, "error": "At least one share entry is required."}
+        added = 0
+        skipped = 0
+        errors = []
+        with db() as s:
+            for idx, line in enumerate(lines, 1):
+                parts = line.split(",")
+                if len(parts) < 1:
+                    errors.append(f"Row {idx}: empty line")
+                    continue
+                share_name = parts[0].strip()
+                access_val = parts[1].strip().upper() if len(parts) > 1 else "NO_ACCESS"
+                note_val = ", ".join(p.strip() for p in parts[2:]).strip() if len(parts) > 2 else ""
+                if not share_name:
+                    errors.append(f"Row {idx}: share name is empty")
+                    continue
+                existing = s.scalar(
+                    select(SmbShare).where(
+                        SmbShare.host == host,
+                        SmbShare.share == share_name,
+                    )
+                )
+                if existing:
+                    skipped += 1
+                    continue
+                s.add(SmbShare(host=host, share=share_name, access=access_val, notes=note_val))
+                added += 1
+            s.commit()
+        return {"ok": True, "added": added, "skipped": skipped, "errors": errors}
+
+    @app.post("/api/smb-shares/create-one", response_class=JSONResponse)
+    def smb_shares_create_one(host: str = Form(""), share: str = Form(""), access: str = Form(""), notes: str = Form("")):
+        host = host.strip()
+        share = share.strip()
+        access = access.strip().upper()
+        notes = notes.strip()
+        if not host or not share:
+            return {"ok": False, "error": "Host and share are required."}
+        with db() as s:
+            existing = s.scalar(
+                select(SmbShare).where(
+                    SmbShare.host == host,
+                    SmbShare.share == share,
+                )
+            )
+            if existing:
+                return {"ok": False, "error": "This share entry already exists."}
+            s.add(SmbShare(host=host, share=share, access=access, notes=notes))
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/smb-shares/update", response_class=JSONResponse)
+    def smb_shares_update(share_id: int = Form(0), host: str = Form(""), share: str = Form(""), access: str = Form(""), notes: str = Form("")):
+        if not share_id:
+            return {"ok": False, "error": "share_id is required."}
+        host = host.strip()
+        share = share.strip()
+        access = access.strip().upper()
+        notes = notes.strip()
+        if not host or not share:
+            return {"ok": False, "error": "Host and share are required."}
+        with db() as s:
+            target = s.get(SmbShare, share_id)
+            if not target:
+                return {"ok": False, "error": "Not found."}
+            existing = s.scalar(
+                select(SmbShare).where(
+                    SmbShare.host == host,
+                    SmbShare.share == share,
+                    SmbShare.id != share_id,
+                )
+            )
+            if existing:
+                return {"ok": False, "error": "Another share entry already exists with these values."}
+            target.host = host
+            target.share = share
+            target.access = access
+            target.notes = notes
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/smb-shares/delete", response_class=JSONResponse)
+    def smb_shares_delete(share_id: int = Form(0)):
+        if not share_id:
+            return {"ok": False, "error": "share_id is required."}
+        with db() as s:
+            target = s.get(SmbShare, share_id)
+            if not target:
+                return {"ok": False, "error": "Not found."}
+            s.delete(target)
+            s.commit()
+        return {"ok": True}
+
+    @app.get("/api/smb-shares/list", response_class=JSONResponse)
+    def smb_shares_list():
+        with db() as s:
+            shares = s.execute(
+                select(SmbShare).order_by(SmbShare.host, SmbShare.share)
+            ).scalars().all()
+            hosts_map: dict[str, list[dict]] = {}
+            for sh in shares:
+                hosts_map.setdefault(sh.host, []).append({
+                    "id": sh.id,
+                    "share": sh.share,
+                    "access": sh.access,
+                    "notes": sh.notes,
+                })
+        return {"hosts": hosts_map, "total": len(shares)}
 
     @app.get("/topology", response_class=HTMLResponse)
     def topology_page(request: Request):
-        with db() as s:
-            row = (
-                s.execute(
-                    select(Note)
-                    .where(Note.object_type == "topology_map", Note.object_id == 0)
-                    .order_by(Note.updated_at.desc(), Note.id.desc())
-                )
-                .scalars()
-                .first()
-            )
-        data = {"nodes": [], "edges": []}
-        if row and (row.body or "").strip():
-            try:
-                raw = json.loads(row.body)
-                if isinstance(raw.get("nodes"), list):
-                    data["nodes"] = raw.get("nodes")
-                if isinstance(raw.get("edges"), list):
-                    data["edges"] = raw.get("edges")
-            except Exception:
-                pass
-        return templates.TemplateResponse(
-            "topology.html", {"request": request, "topology_data": data}
-        )
+        return templates.TemplateResponse("topology.html", {"request": request})
 
     @app.get("/osint/registrars", response_class=HTMLResponse)
     def osint_registrars_page(request: Request):
@@ -4138,9 +4429,10 @@ def create_app(
                     "error": di.rdap_error or "",
                 }
             out = []
+            all_ips_map = list_all_subdomain_ips(s)
             root_domains = {}
             for x in rows:
-                ips_found = list_subdomain_ips(s, x.fqdn)
+                ips_found = all_ips_map.get(x.fqdn, [])
                 prowl_ips_list = (x.prowl_ips or "").split(",")
                 prowl_ips_cleaned = [ip.strip() for ip in prowl_ips_list if ip.strip()]
                 all_ips = list(set(ips_found) | set(prowl_ips_cleaned))
@@ -4869,7 +5161,8 @@ def create_app(
             subs = s.execute(select(Subdomain)).scalars().all()
             hosts = s.execute(select(Host)).scalars().all()
             svcs = s.execute(select(Service)).scalars().all()
-            host_domains = {h.id: list_host_domains(s, h.id) for h in hosts}
+            host_domains = list_all_host_domains(s)
+            subdomain_ips = list_all_subdomain_ips(s)
 
         def nid(prefix: str, key: str) -> str:
             return f"{prefix}:{key}"
@@ -4879,11 +5172,13 @@ def create_app(
                 return
             nodes.append(n)
 
+        host_dict = {h.id: h for h in hosts}
+
         domain_nodes = {}
         for sub in subs:
             rd = (sub.root_domain or "").strip(".").lower()
             fq = sub.fqdn
-            sub_ips = list_subdomain_ips(s, fq)
+            sub_ips = subdomain_ips.get(fq, [])
             sub_in = domain_in_scope(
                 fq, domains, domain_all_subs, domain_subs_if_ip, sub_ips, ips, subnets, excluded
             )
@@ -4952,12 +5247,14 @@ def create_app(
 
         host_ids = {}
         host_scope = {}
+        host_scope_sensitive = {}
         for h in hosts:
             hid = nid("host", h.ip)
             host_ids[h.id] = hid
             hin = ip_in_scope(h.ip, ips, subnets, excluded)
             hs = ip_in_scope(h.ip, s_ips, s_subnets, s_excluded)
             host_scope[h.id] = hin
+            host_scope_sensitive[h.id] = hs
             label = h.ip + (("\n" + h.hostname) if h.hostname else "")
             add_node(
                 {
@@ -4972,10 +5269,7 @@ def create_app(
 
         for svc in svcs:
             hin = host_scope.get(svc.host_id, False)
-            hs = False
-            host_obj = next((h for h in hosts if h.id == svc.host_id), None)
-            if host_obj:
-                hs = ip_in_scope(host_obj.ip, s_ips, s_subnets, s_excluded)
+            hs = host_scope_sensitive.get(svc.host_id, False)
             sid = nid("svc", f"{svc.host_id}:{svc.port}/{svc.proto}")
             add_node(
                 {
@@ -4999,7 +5293,7 @@ def create_app(
             for fqdn in fqdn_list:
                 sub_id = nid("sub", fqdn)
                 if sub_id not in existing:
-                    fqdn_ips = list_subdomain_ips(s, fqdn)
+                    fqdn_ips = subdomain_ips.get(fqdn, [])
                     sub_in = domain_in_scope(
                         fqdn,
                         domains,
@@ -5046,9 +5340,10 @@ def create_app(
         with db() as s:
             ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
             rows = s.execute(select(Subdomain)).scalars().all()
+            all_sub_ips = list_all_subdomain_ips(s)
             out = []
             for x in rows:
-                ips_found = list_subdomain_ips(s, x.fqdn)
+                ips_found = all_sub_ips.get(x.fqdn, [])
                 in_dom = domain_in_scope(
                     x.fqdn,
                     domains,
@@ -5156,6 +5451,16 @@ def create_app(
             if not h:
                 return JSONResponse({"ok": False}, status_code=404)
             h.tag = tag
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/host/delete")
+    def api_host_delete(host_id: int = Form(...)):
+        with db() as s:
+            h = s.scalar(select(Host).where(Host.id == host_id))
+            if not h:
+                return JSONResponse({"ok": False, "error": "Host not found"}, status_code=404)
+            s.delete(h)
             s.commit()
         return {"ok": True}
 
@@ -5286,88 +5591,6 @@ def create_app(
                 "attempted_at": row.attempted_at,
                 "notes": row.notes,
             }
-
-    @app.get("/ad-users", response_class=HTMLResponse)
-    def ad_users_page(request: Request):
-        types = ["cracked", "cleartext", "sam", "dpapi", "lsass", "lsa"]
-        with db() as s:
-            rows = (
-                s.execute(select(AdCredential).order_by(AdCredential.created_at.desc()))
-                .scalars()
-                .all()
-            )
-            cracked_clear_domains = [
-                d
-                for d in (
-                    s.execute(
-                        select(AdCredential.domain)
-                        .where(
-                            AdCredential.cred_type.in_(["cracked", "cleartext"]),
-                            AdCredential.domain != "",
-                        )
-                        .distinct()
-                        .order_by(AdCredential.domain.asc())
-                    )
-                    .scalars()
-                    .all()
-                )
-                if (d or "").strip()
-            ]
-        grouped = {t: [] for t in types}
-        for r in rows:
-            t = (r.cred_type or "").strip().lower()
-            if t in grouped:
-                grouped[t].append(r)
-        return templates.TemplateResponse(
-            "ad_users.html",
-            {
-                "request": request,
-                "grouped": grouped,
-                "cracked_clear_domains": cracked_clear_domains,
-            },
-        )
-
-    @app.post("/api/ad-credentials/create")
-    def api_ad_credential_create(
-        cred_type: str = Form(...),
-        domain: str = Form(""),
-        username: str = Form(""),
-        password: str = Form(""),
-        hostname: str = Form(""),
-        dump_text: str = Form(""),
-        notes: str = Form(""),
-    ):
-        t = (cred_type or "").strip().lower()
-        if t not in {"cracked", "cleartext", "sam", "dpapi", "lsass", "lsa"}:
-            return JSONResponse({"ok": False, "error": "Invalid credential type"}, status_code=400)
-
-        d = (domain or "").strip()
-        u = (username or "").strip()
-        p = (password or "").strip()
-        h = (hostname or "").strip()
-        dump = (dump_text or "").strip()
-        n = (notes or "").strip()
-
-        if t in {"cracked", "cleartext"}:
-            if not u or not p:
-                return JSONResponse({"ok": False, "error": "Username and password are required"}, status_code=400)
-        else:
-            if not h or not dump:
-                return JSONResponse({"ok": False, "error": "Hostname and hash dump are required"}, status_code=400)
-
-        with db() as s:
-            row = AdCredential(
-                cred_type=t,
-                domain=d[:255],
-                username=u[:255],
-                password=p[:255],
-                hostname=h[:255],
-                dump_text=dump,
-                notes=n,
-            )
-            s.add(row)
-            s.commit()
-            return {"ok": True, "id": row.id}
 
     @app.post("/api/users/create")
     def api_user_create(

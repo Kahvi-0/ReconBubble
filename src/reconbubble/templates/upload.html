@@ -27,6 +27,7 @@
     <option value="prowl_phase1">Prowler phase 1 (json)</option>
     <option value="zone_transfers">Prowler phase 2 - zone transfers (json)</option>
     <option value="smtp">Prowler phase 3 - SMTP (json)</option>
+    <option value="smb_shares">SMB Shares (smbmap format)</option>
     </select>
     <label>File(s) or Directory</label>
     <input type="file" name="file" id="fileInput" multiple />
@@ -50,6 +51,7 @@
     <option value="urls">Web URLs list</option>
     <option value="names">Names list</option>
     <option value="bbot">BBOT (json)</option>
+    <option value="smb_shares">SMB Shares (smbmap format)</option>
     </select>
     <label>Optional filename</label>
     <input name="raw_filename" placeholder="pasted_scan.xml" />
@@ -131,7 +133,21 @@ function clearMixedResults() {
 }
 
 var typeNamesMap = {
-  mixed_hashes: 'Mixed Hashes'
+  mixed_hashes: 'Mixed Hashes',
+  nmap_xml: 'Nmap XML',
+  subdomains: 'Subdomains',
+  names_emails: 'Names & Emails',
+  doc: 'OSINT Document',
+  ad_users: 'AD Users',
+  creds: 'Credentials',
+  urls: 'Web URLs',
+  names: 'Names',
+  bbot: 'BBOT',
+  bbot_cloud: 'BBOT Cloud',
+  prowl_phase1: 'Prowler Phase 1',
+  zone_transfers: 'Prowler Phase 2',
+  smtp: 'Prowler Phase 3',
+  smb_shares: 'SMB Shares'
 };
 
 function getUploadLog() {
@@ -152,11 +168,12 @@ function addUploadLogEntry(hashType, result) {
     timestamp: new Date().toISOString(),
     added: result.added || 0,
     skipped: result.skipped || 0,
-    unmatched: result.unmatched || []
+    unmatched: result.unmatched || [],
+    details: result.details || {}
   });
   if (log.length > 50) log = log.slice(0, 50);
-  saveUploadLog(log);
-  renderUploadLog();
+  try { saveUploadLog(log); } catch(e) {}
+  renderUploadLog(log);
 }
 
 function addMixedUploadLogEntry(result) {
@@ -167,10 +184,10 @@ function addMixedUploadLogEntry(result) {
   });
 }
 
-function renderUploadLog() {
+function renderUploadLog(logData) {
   var container = document.getElementById('upload-log-container');
   if (!container) return;
-  var log = getUploadLog();
+  var log = logData !== undefined ? logData : getUploadLog();
   var html = '';
   html += '<div class="card" id="upload-log-card" style="margin-top:20px;">';
   html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">';
@@ -201,15 +218,29 @@ function renderUploadLog() {
       html += '<td style="padding:6px 8px;text-align:right;color:#64748b;">' + (entry.skipped || 0) + '</td>';
       html += '<td style="padding:6px 8px;text-align:right;' + (hasFailed ? 'color:#b91c1c;font-weight:bold;' : '') + '">' + failedCount + '</td>';
       html += '<td style="padding:6px 8px;text-align:center;">';
+      var detailsObj = entry.details || {};
+      var hasDetails = detailsObj && Object.keys(detailsObj).length > 0;
       if (hasFailed) {
-        html += '<button style="background:none;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;padding:2px 8px;font-size:11px;" onclick="toggleFailedLines(' + idx + ')" id="toggle-btn-' + idx + '">Show</button>';
+        html += '<button style="background:none;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;padding:2px 8px;font-size:11px;" onclick="toggleFailedLines(' + idx + ')" id="toggle-btn-' + idx + '">Errors</button>';
+      }
+      if (hasDetails) {
+        html += '<button style="background:none;border:1px solid #cbd5e1;border-radius:4px;cursor:pointer;padding:2px 8px;font-size:11px;" onclick="toggleDetailLines(' + idx + ')" id="toggle-detail-btn-' + idx + '">Details</button>';
       }
       html += '</td>';
       html += '</tr>';
       if (hasFailed) {
+        var unmatchedArr = entry.unmatched || [];
         html += '<tr id="detail-row-' + idx + '" style="display:none;"><td colspan="6" style="padding:0;">';
-        html += '<div style="margin:0 16px 10px 16px;max-height:250px;overflow-y:auto;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:10px;font-family:monospace;font-size:12px;white-space:pre-wrap;">';
-        html += entry.unmatched.map(function(l){ return escapeHtml(l); }).join('\n');
+        html += '<div style="margin:0 16px 10px 16px;max-height:250px;overflow-y:auto;color:#000;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:10px;font-family:monospace;font-size:12px;white-space:pre-wrap;">';
+        html += unmatchedArr.map(function(l){ return escapeHtml(l); }).join('\n');
+        html += '</div></td></tr>';
+      }
+      if (hasDetails) {
+        html += '<tr id="detail-info-row-' + idx + '" style="display:none;"><td colspan="6" style="padding:0;">';
+        html += '<div style="margin:0 16px 10px 16px;color:#000;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:10px;font-family:monospace;font-size:12px;">';
+        Object.keys(detailsObj).forEach(function(k) {
+          html += '<div><strong>' + escapeHtml(k) + ':</strong> ' + (detailsObj[k] != null ? detailsObj[k] : 0) + '</div>';
+        });
         html += '</div></td></tr>';
       }
     });
@@ -228,13 +259,29 @@ function toggleFailedLines(idx) {
     btn.textContent = 'Hide';
   } else {
     row.style.display = 'none';
-    btn.textContent = 'Show';
+    btn.textContent = 'Errors';
+  }
+}
+
+function toggleDetailLines(idx) {
+  var row = document.getElementById('detail-info-row-' + idx);
+  var btn = document.getElementById('toggle-detail-btn-' + idx);
+  if (!row || !btn) return;
+  if (row.style.display === 'none') {
+    row.style.display = '';
+    btn.textContent = 'Hide';
+  } else {
+    row.style.display = 'none';
+    btn.textContent = 'Details';
   }
 }
 
 function clearUploadLog() {
-  localStorage.removeItem('hashUploadLog');
-  renderUploadLog();
+  fetch('/api/upload-log/clear', { method: 'POST' })
+    .then(function() {
+      localStorage.removeItem('hashUploadLog');
+      renderUploadLog();
+    });
 }
 
 window.addEventListener('DOMContentLoaded', function() {
@@ -242,17 +289,60 @@ window.addEventListener('DOMContentLoaded', function() {
   if (stored) {
     try { renderMixedResults(JSON.parse(stored)); } catch(e) { localStorage.removeItem('mixedHashResults'); }
   }
-  renderUploadLog();
+  fetch('/api/upload-log')
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      var log = Object.values(data).map(function(d) {
+        return {
+          type: d.kind,
+          label: d.label,
+          timestamp: d.created_at,
+          added: d.added,
+          skipped: d.skipped,
+          unmatched: d.unmatched || [],
+          details: d.details || {}
+        };
+      });
+      try { saveUploadLog(log); } catch(e) {}
+      renderUploadLog(log);
+    })
+    .catch(function() { renderUploadLog(); });
 });
 </script>
 
 <div id="upload-log-container"></div>
 <div id="upload-content-end"></div>
 
-{% if mixed_result is defined and mixed_result %}
+{% if upload_results is defined and upload_results %}
 <script>
-localStorage.setItem('mixedHashResults', {{ mixed_result | tojson }});
-renderMixedResults({{ mixed_result | tojson }});
+{% for file_result in upload_results %}
+addUploadLogEntry({{ file_result.type | tojson }}, {
+  added: {{ file_result.added | default(0) }},
+  skipped: {{ file_result.skipped | default(0) }},
+  unmatched: {{ file_result.unmatched | default('[]') }},
+  details: {{ file_result.details | default('{}') }}
+});
+{% endfor %}
+{% if upload_results_summary %}
+var summary = {{ upload_results_summary | tojson }};
+var el = document.getElementById('upload-content-end');
+var html = '<div class="card" id="upload-results-card" style="margin-top:20px;">';
+html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">';
+html += '<h2 style="margin:0;">Upload Results</h2>';
+html += '<button class="btn" style="padding:4px 12px;font-size:12px;" onclick="document.getElementById(\'upload-results-card\').remove()">Dismiss</button>';
+html += '</div>';
+if (summary.files.length > 0) {
+  html += '<p>Processed <strong>' + summary.files.length + '</strong> file(s). <a href="' + escapeHtml(summary.redirect) + '">Continue</a></p>';
+}
+if (summary.errors && summary.errors.length > 0) {
+  html += '<h3 style="color:#b91c1c;">Errors</h3>';
+  html += '<div style="color:#000;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:10px;font-family:monospace;font-size:12px;white-space:pre-wrap;">';
+  html += summary.errors.map(function(e){return escapeHtml(e);}).join('\n');
+  html += '</div>';
+}
+html += '</div>';
+el.insertAdjacentHTML('beforeend', html);
+{% endif %}
 </script>
 {% endif %}
 {% endblock %}

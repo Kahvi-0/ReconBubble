@@ -8,9 +8,34 @@ class Base(DeclarativeBase):
     pass
 
 
+def _set_sqlite_pragmas(dbapi_connection, connection_record):
+    """Apply performance pragmas to every new SQLite connection.
+
+    Note: the 'connect' event receives the raw DBAPI connection (sqlite3.Connection),
+    not a SQLAlchemy Connection wrapper, so we use .cursor() directly.
+    """
+    cursor = dbapi_connection.cursor()
+    # WAL mode: allows concurrent readers while writer is active
+    cursor.execute("PRAGMA journal_mode=WAL")
+    # Synchronous NORMAL: durability vs performance balance (vs FULL default)
+    cursor.execute("PRAGMA synchronous=NORMAL")
+    # Cache 4096 pages (~64 MB) to reduce disk I/O
+    cursor.execute("PRAGMA cache_size=-4096")
+    # Increase mmap size for better sequential read performance
+    cursor.execute("PRAGMA mmap_size=268435456")
+    # Enable foreign key enforcement
+    cursor.execute("PRAGMA foreign_keys=ON")
+    # Increase busy timeout for concurrent access
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
+
+
 def make_engine(db_path: Path):
+    from sqlalchemy import event
     url = f"sqlite:///{db_path.as_posix()}"
-    return create_engine(url, future=True, echo=False)
+    engine = create_engine(url, future=True, echo=False)
+    event.listen(engine, "connect", _set_sqlite_pragmas)
+    return engine
 
 
 def make_session(engine):

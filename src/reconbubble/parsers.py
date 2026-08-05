@@ -1,5 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import re, json, mimetypes, subprocess, socket
 from datetime import datetime
 from xml.etree import ElementTree as ET
@@ -20,18 +21,20 @@ from .models import (
     NameItem,
     DocExtractedName,
     DocExtractedSoftware,
+    SmbShare,
 )
 from .workspace import sha256_file
 
 
-def resolve_ips(fqdn: str) -> list[str]:
+def resolve_ips(fqdn: str, timeout: float = 5.0) -> list[str]:
     fqdn = fqdn.strip().rstrip(".")
     out = set()
     try:
         for fam in (socket.AF_INET, socket.AF_INET6):
             try:
                 infos = socket.getaddrinfo(
-                    fqdn, None, family=fam, type=socket.SOCK_STREAM
+                    fqdn, None, family=fam, type=socket.SOCK_STREAM,
+                    timeout=timeout,
                 )
             except Exception:
                 continue
@@ -42,6 +45,34 @@ def resolve_ips(fqdn: str) -> list[str]:
     except Exception:
         pass
     return sorted(out)
+
+
+def resolve_ips_concurrent(
+    fqdns: list[str], max_workers: int = 16, timeout: float = 5.0
+) -> dict[str, list[str]]:
+    """Resolve IPs for multiple FQDNs concurrently.
+
+    Returns dict mapping fqdn -> list of resolved IPs.
+    Failed resolutions map to an empty list.
+    """
+    unique = list({f.strip().rstrip(".") for f in fqdns if f.strip()})
+    results: dict[str, list[str]] = {}
+    if not unique:
+        return results
+
+    def _resolve(fqdn: str) -> tuple[str, list[str]]:
+        try:
+            ips = resolve_ips(fqdn, timeout=timeout)
+            return (fqdn, ips)
+        except Exception:
+            return (fqdn, [])
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_resolve, fqdn): fqdn for fqdn in unique}
+        for fut in as_completed(futures):
+            fqdn, ips = fut.result()
+            results[fqdn] = ips
+    return results
 
 
 def link_host_domain(session: Session, host_id: int, fqdn: str) -> None:
@@ -113,6 +144,7 @@ def upsert_host(
 
 def import_subdomains(session: Session, artifact: Artifact, path: Path) -> int:
     count = 0
+    new_subs: list[str] = []
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         s = line.strip()
         if not s or s.startswith("#"):
@@ -124,15 +156,21 @@ def import_subdomains(session: Session, artifact: Artifact, path: Path) -> int:
             continue
         sub_obj = Subdomain(fqdn=s, root_domain=root_domain_guess(s))
         session.add(sub_obj)
+        new_subs.append(s)
         count += 1
         session.commit()
         session.refresh(sub_obj)
-        for ip in resolve_ips(s):
-            try:
-                h = upsert_host(session, ip, "", "")
-                link_host_domain(session, h.id, s)
-            except Exception:
-                continue
+
+    # Concurrent DNS resolution for all new subdomains
+    if new_subs:
+        ip_map = resolve_ips_concurrent(new_subs)
+        for fqdn, ips in ip_map.items():
+            for ip in ips:
+                try:
+                    h = upsert_host(session, ip, "", "")
+                    link_host_domain(session, h.id, fqdn)
+                except Exception:
+                    continue
     session.commit()
     return count
 
@@ -408,6 +446,8 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
             "and upload the XML file (it should start with <nmaprun>)."
         ) from e
     host_count = service_count = evidence_count = 0
+    batch = 50
+    processed = 0
     for host in root.findall("host"):
         addr = host.find("address")
         if addr is None:
@@ -428,15 +468,13 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
         if not db_host:
             db_host = Host(ip=ip, hostname=hostname, os_guess=os_guess)
             session.add(db_host)
-            session.commit()
-            session.refresh(db_host)
+            session.flush()
             host_count += 1
         else:
             if hostname and not db_host.hostname:
                 db_host.hostname = hostname
             if os_guess and not db_host.os_guess:
                 db_host.os_guess = os_guess
-            session.commit()
 
         # Link host to subdomains based on exact hostname match
         if hostname:
@@ -458,7 +496,6 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
                             ),
                             {"hid": db_host.id, "sid": sub.id},
                         )
-                        session.commit()
             except Exception as e:
                 print(f"[Nmap] Error linking host {ip} to subdomains: {e}")
 
@@ -492,8 +529,7 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
                     extra_info=extrainfo,
                 )
                 session.add(db_svc)
-                session.commit()
-                session.refresh(db_svc)
+                session.flush()
                 service_count += 1
             else:
                 db_svc.state = state_s or db_svc.state
@@ -505,7 +541,6 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
                     db_svc.version = version
                 if extrainfo and not db_svc.extra_info:
                     db_svc.extra_info = extrainfo
-                session.commit()
 
             outputs = []
             for script in p.findall("script"):
@@ -522,8 +557,12 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
                         service_id=db_svc.id, artifact_id=artifact.id, raw_output=raw
                     )
                 )
-                session.commit()
                 evidence_count += 1
+
+        processed += 1
+        if processed % batch == 0:
+            session.commit()
+    session.commit()
     return {
         "hosts_added": host_count,
         "services_added": service_count,
@@ -761,6 +800,9 @@ def import_prowl_phase1(session: Session, artifact: Artifact, path: Path) -> int
     total = len(domains_data)
     print(f"[Prowler] Importing {total} domains...")
 
+    # Phase 1: Collect FQDNs and build subdomain records (no DNS yet)
+    fqdn_order: list[tuple[str, dict, Subdomain]] = []
+    fqdns_to_resolve: list[str] = []
     try:
         for i, (fqdn, info) in enumerate(domains_data.items()):
             if i > 0 and i % 50 == 0:
@@ -772,10 +814,7 @@ def import_prowl_phase1(session: Session, artifact: Artifact, path: Path) -> int
 
             # Extract root domain
             parts = fqdn.split(".")
-            if len(parts) > 1:
-                root_domain = ".".join(parts[-2:])
-            else:
-                root_domain = fqdn
+            root_domain = ".".join(parts[-2:]) if len(parts) > 1 else fqdn
 
             # Get Prowler info - deduplicate IPs
             prowl_ips_raw = info.get("ips", [])
@@ -798,7 +837,6 @@ def import_prowl_phase1(session: Session, artifact: Artifact, path: Path) -> int
                 sub.prowl_ips = prowl_ips
                 sub.prowl_registrar = prowl_registrar
                 sub.prowl_netblocks = prowl_netblocks
-                count += 1
             else:
                 sub = Subdomain(
                     fqdn=fqdn,
@@ -809,19 +847,25 @@ def import_prowl_phase1(session: Session, artifact: Artifact, path: Path) -> int
                 )
                 session.add(sub)
                 session.flush()
-                count += 1
+            count += 1
+            fqdn_order.append((fqdn, info, sub))
+            fqdns_to_resolve.append(fqdn)
 
-            # Add IPs as hosts and link to subdomain - deduplicate
+        session.commit()
+
+        # Phase 2: Concurrent DNS resolution for all FQDNs
+        if fqdns_to_resolve:
+            print(f"[Prowler] Resolving IPs for {len(fqdns_to_resolve)} FQDNs...")
+            ip_map = resolve_ips_concurrent(fqdns_to_resolve)
+            print(f"[Prowler] DNS resolution complete.")
+        else:
+            ip_map = {}
+
+        # Phase 3: Link hosts using resolved + Prowler IPs
+        for fqdn, info, sub in fqdn_order:
             all_ips = set(info.get("ips", []))
-
-            # Also resolve IPs via DNS
-            try:
-                resolved = resolve_ips(fqdn)
-                for ip in resolved:
-                    if ip:
-                        all_ips.add(ip)
-            except Exception as e:
-                print(f"[Prowler] DNS resolution error for {fqdn}: {e}")
+            resolved = ip_map.get(fqdn, [])
+            all_ips.update(ip for ip in resolved if ip)
 
             for ip in all_ips:
                 try:
@@ -831,7 +875,6 @@ def import_prowl_phase1(session: Session, artifact: Artifact, path: Path) -> int
                         session.add(host)
                         session.flush()
 
-                    # Link host to subdomain
                     exists = session.execute(
                         sql_text(
                             "SELECT 1 FROM host_subdomains WHERE host_id = :hid AND subdomain_id = :sid"
@@ -982,6 +1025,9 @@ def import_bbot(session: Session, artifact: Artifact, path: Path) -> dict:
     content = path.read_text(encoding="utf-8", errors="ignore")
     lines = content.splitlines()
 
+    # Collect unresolved OPEN_TCP_PORT events for batch DNS resolution
+    unresolved_ports: list[dict] = []
+
     for line in lines:
         line = line.strip()
         if not line:
@@ -1041,8 +1087,13 @@ def import_bbot(session: Session, artifact: Artifact, path: Path) -> dict:
             ip = resolved_hosts[0] if resolved_hosts else None
 
             if not ip:
-                resolved = resolve_ips(host)
-                ip = resolved[0] if resolved else host
+                unresolved_ports.append({
+                    "host": host,
+                    "port": port,
+                    "module": module,
+                    "scope_desc": scope_desc,
+                })
+                continue
 
             if ip:
                 db_host = session.scalar(select(Host).where(Host.ip == ip))
@@ -1130,6 +1181,65 @@ def import_bbot(session: Session, artifact: Artifact, path: Path) -> dict:
 
                 session.add(note)
                 note_count += 1
+
+    session.commit()
+
+    # Batch-resolve IPs for unresolved OPEN_TCP_PORT events
+    if unresolved_ports:
+        unique_hosts = list({e["host"] for e in unresolved_ports})
+        ip_map = resolve_ips_concurrent(unique_hosts)
+
+        for event in unresolved_ports:
+            host = event["host"]
+            port = event["port"]
+            module = event["module"]
+            scope_desc = event["scope_desc"]
+
+            resolved = ip_map.get(host, [])
+            ip = resolved[0] if resolved else host
+
+            if ip:
+                try:
+                    db_host = session.scalar(select(Host).where(Host.ip == ip))
+                    if not db_host:
+                        db_host = Host(ip=ip, hostname=host if host != ip else "")
+                        session.add(db_host)
+                        session.flush()
+                        host_count += 1
+
+                    if db_host.hostname == "" and host != ip:
+                        db_host.hostname = host
+                        session.commit()
+
+                    svc = session.scalar(
+                        select(Service).where(
+                            Service.host_id == db_host.id,
+                            Service.port == port,
+                            Service.proto == "tcp",
+                        )
+                    )
+                    if not svc:
+                        svc = Service(
+                            host_id=db_host.id,
+                            port=port,
+                            proto="tcp",
+                            state="open",
+                            service_name="",
+                        )
+                        session.add(svc)
+                        session.flush()
+                        service_count += 1
+
+                    source_info = f"[bbot:{module}] Scope: {scope_desc}"
+                    session.add(
+                        ServiceEvidence(
+                            service_id=svc.id,
+                            artifact_id=artifact.id,
+                            raw_output=source_info,
+                        )
+                    )
+                except Exception as e:
+                    print(f"[BBOT] Error processing port event for {host}:{port}: {e}")
 
     session.commit()
     return {
@@ -1305,7 +1415,7 @@ def import_bbot_cloud(session: Session, artifact: Artifact, path: Path) -> dict:
 
 _KERBEROAST_RE = re.compile(r"^\$krb5tgs\$(\d+)\$[*]?([^$]+)\$([^$]+)")
 _NTLMV1_RE = re.compile(r"^([^:]+)::([^:]+):([^:]+):([^:]+):([^:]+)$")
-_NTLMV2_RE = re.compile(r"^([^:]+)::([^:]+):(.+)$")
+_NTLMV2_RE = re.compile(r"^([^:]+)::([^:]*):(.+)$")
 _DCC2_RE = re.compile(r"^\$DCC2\$(\d+)#([^#]+)#(.+)$")
 _KRB5ASREP_RE = re.compile(r"^\$krb5asrep\$(\d+)\$([^@]+)@([^:]+):(.+)$")
 _NTLM_RE = re.compile(r"^(?:([^\\]+)\\)?([^:]+):([0-9a-fA-F]{32})$")
@@ -1438,7 +1548,7 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
             m_ntlm = _NTLMV2_RE.match(s)
             if m_ntlm:
                 parts = s.split(":")
-                if len(parts) >= 5 and len(parts[-1]) > 100:
+                if len(parts) >= 5 and len(s) > 100:
                     matched = True
                     raw_user = m_ntlm.group(1).strip()
                     domain = m_ntlm.group(2).strip()
@@ -1540,5 +1650,43 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
         "counts": counts,
         "unmatched": unmatched,
         "total": sum(counts.values()) - counts["skipped"] + counts["skipped"],
+    }
+
+
+def import_smbmap(session: Session, artifact: Artifact, path: Path) -> dict:
+    """Parse SMBMAP output in format: host:IP, share:NAME, privs:PERMS"""
+    added = 0
+    skipped = 0
+    unmatched: list[str] = []
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        host_match = re.search(r"host:[\s]*([\w.\-]+)", s)
+        share_match = re.search(r"share:[\s]*(.+?)(?:\s*,|$)", s)
+        privs_match = re.search(r"privs:[\s]*(\w+)", s)
+        if not (host_match and share_match and privs_match):
+            unmatched.append(s)
+            continue
+        host_ip = host_match.group(1).strip()
+        share_name = share_match.group(1).strip().rstrip(",")
+        access = privs_match.group(1).strip().upper()
+        existing = session.scalar(
+            select(SmbShare).where(
+                SmbShare.host == host_ip,
+                SmbShare.share == share_name,
+            )
+        )
+        if existing:
+            skipped += 1
+            continue
+        session.add(SmbShare(host=host_ip, share=share_name, access=access, source_file=artifact.filename))
+        added += 1
+    session.commit()
+    return {
+        "added": added,
+        "skipped": skipped,
+        "unmatched": unmatched,
+        "details": {"hosts": len(set(re.search(r"host:[\s]*([\w.\-]+)", l).group(1) for l in path.read_text(encoding="utf-8", errors="ignore").splitlines() if re.search(r"host:[\s]*([\w.\-]+)", l)))},
     }
 

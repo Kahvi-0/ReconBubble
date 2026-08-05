@@ -26,16 +26,17 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
 
 <div class="card">
   <h2>Add scope item(s)</h2>
-  <form action="/scope/add" method="post">
+  <form id="scopeAddForm" action="/scope/add" method="post">
     <label>Type</label>
     <select name="kind" id="scopeKind">
       <option value="ip_or_subnet">IP / Subnet (auto-detect)</option>
       <option value="domain">Domain</option>
       <option value="email_domain">Email domain</option>
+      <option value="exclusion">Exclusion (FQDN)</option>
     </select>
 
     <label>Paste a list (one per line)</label>
-    <textarea name="values_raw" rows="7" placeholder="Paste multiple items..."></textarea>
+    <textarea name="values_raw" id="scopeValues" rows="7" placeholder="Paste multiple items..."></textarea>
 
     <div id="domainWrap" class="toggle-row">
       <label class="toggle-switch">
@@ -53,7 +54,7 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
       <span class="filter-label">For domain scope: mark domain and subdomains in-scope only when they resolve to in-scope IPs</span>
     </div>
 
-    <div class="toggle-row">
+    <div class="toggle-row" id="sensitiveWrap">
       <label class="toggle-switch">
         <input type="checkbox" id="markSensitive" name="sensitive" value="1" />
         <span class="toggle-slider"></span>
@@ -62,9 +63,30 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
     </div>
 
     <label>Note (optional)</label>
-    <input name="note" placeholder="Prod scope, provided by client" />
+    <input name="note" id="scopeNote" placeholder="Prod scope, provided by client" />
     <button class="btn" type="submit">Add</button>
   </form>
+
+  <details id="exclusionsDetails">
+    <summary style="cursor:pointer; font-weight:600; margin-top:16px;">Existing exclusions <span class="muted">({{ exclusions|length }})</span></summary>
+    <table style="margin-top:8px;">
+      <thead><tr><th>FQDN</th><th>Added</th><th>Actions</th></tr></thead>
+      <tbody>
+        {% for ex in exclusions %}
+        <tr>
+          <td><code>{{ ex.fqdn }}</code></td>
+          <td class="muted">{{ ex.created_at }}</td>
+          <td>
+            <button class="btn btn-sm remove-excl" data-fqdn="{{ ex.fqdn }}">Remove</button>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not exclusions %}
+        <tr><td colspan="3" class="muted">No exclusions configured.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </details>
 </div>
 
 <div class="card" style="margin-bottom:12px; display:flex; gap:8px; align-items:center;">
@@ -175,49 +197,57 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
   </table>
 </div>
 
-<div class="card">
-  <h2>Scope Exclusions</h2>
-  <p class="muted" style="margin-bottom:12px;">FQDNs listed here are always out-of-scope, overriding parent domain rules.</p>
-  <form id="addExclusionForm" style="display:flex; gap:8px; margin-bottom:12px;" onsubmit="event.preventDefault(); addExclusion();">
-    <input id="exclusionInput" name="fqdn" placeholder="Enter FQDN to exclude" style="flex:1;" required />
-    <button class="btn" type="submit">Add Exclusion</button>
-  </form>
-  <table>
-    <thead><tr><th>FQDN</th><th>Added</th><th>Actions</th></tr></thead>
-    <tbody>
-      {% for ex in exclusions %}
-      <tr>
-        <td><code>{{ ex.fqdn }}</code></td>
-        <td class="muted">{{ ex.created_at }}</td>
-        <td>
-          <button class="btn btn-sm remove-excl" data-fqdn="{{ ex.fqdn }}">Remove</button>
-        </td>
-      </tr>
-      {% endfor %}
-      {% if not exclusions %}
-      <tr><td colspan="3" class="muted">No exclusions configured.</td></tr>
-      {% endif %}
-    </tbody>
-  </table>
-</div>
-
 <script>
   const kindSel = document.getElementById("scopeKind");
   const domainWrap = document.getElementById("domainWrap");
   const domainIpWrap = document.getElementById("domainIpWrap");
+  const sensitiveWrap = document.getElementById("sensitiveWrap");
+  const scopeNote = document.getElementById("scopeNote");
+  const scopeValues = document.getElementById("scopeValues");
   const allSubs = document.getElementById("applyAllSubs");
   const subsInScopeIp = document.getElementById("applySubsInScopeIp");
 
   function sync() {
     const k = kindSel.value;
     const isDomain = k === "domain";
+    const isExclusion = k === "exclusion";
     domainWrap.style.display = isDomain ? "flex" : "none";
     domainIpWrap.style.display = isDomain ? "flex" : "none";
+    sensitiveWrap.style.display = isExclusion ? "none" : "flex";
+    scopeNote.style.display = isExclusion ? "none" : "block";
+    if (isExclusion) {
+      scopeValues.placeholder = "Paste FQDNs to exclude (one per line)";
+    } else {
+      scopeValues.placeholder = "Paste multiple items...";
+    }
     if (!isDomain) allSubs.checked = false;
     if (!isDomain) subsInScopeIp.checked = false;
   }
   kindSel.addEventListener("change", sync);
   sync();
+
+  document.getElementById("scopeAddForm").addEventListener("submit", async (e) => {
+    const k = kindSel.value;
+    if (k !== "exclusion") return;
+    e.preventDefault();
+    const values = scopeValues.value.trim();
+    if (!values) return;
+    const fqdns = values.split("\n").map(v => v.trim().toLowerCase().replace(/\.$/, "")).filter(Boolean);
+    let failed = 0;
+    for (const fqdn of fqdns) {
+      try {
+        const fd = new FormData();
+        fd.append("fqdn", fqdn);
+        await fetch("/api/subdomain/scope-override", { method: "POST", body: fd });
+      } catch(err) {
+        failed++;
+      }
+    }
+    if (failed) {
+      alert(`${failed} exclusion(s) failed to add.`);
+    }
+    location.reload();
+  });
 
   const selectedBoxes = () => Array.from(document.querySelectorAll('.scope-select:checked'));
   const checkedCount = document.getElementById('checkedCount');
@@ -259,20 +289,6 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
     form.submit();
   });
   refreshCheckedCount();
-
-  async function addExclusion() {
-    const input = document.getElementById('exclusionInput');
-    const fqdn = input.value.trim().toLowerCase().replace(/\.$/, '');
-    if (!fqdn) return;
-    try {
-      const fd = new FormData();
-      fd.append('fqdn', fqdn);
-      await fetch('/api/subdomain/scope-override', { method: 'POST', body: fd });
-      location.reload();
-    } catch(e) {
-      alert('Failed to add exclusion: ' + e);
-    }
-  }
 
   document.querySelectorAll('.remove-excl').forEach(btn => {
     btn.addEventListener('click', async () => {
