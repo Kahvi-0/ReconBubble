@@ -5,11 +5,15 @@ Tool used to help organize pentest scope, scan results, OSINT information, asset
 
 https://github.com/user-attachments/assets/2dfe0dc7-563c-4753-810b-720e26ad51e6
 
-=== Supported Tool Injest  ===
-- https://github.com/waffl3ss/Prowler
-- nmap
-- bbot
-- subenum 
+=== Features  ===
+- Ingest and parse automatically such as [Prowler](https://github.com/waffl3ss/Prowler)
+  - nmap
+  - bbot
+  - subenum
+- Automatic marking and sorting of inscope domains and IPs
+- Track and organize OSINT, webapps, Internal attack paths
+- Parsing of users and hashes then sorting them to the designated user automatically
+- Add assets (users, domains, hosts) to the attack topology to better visualize collected information and attack paths
 
 === Run With UVX ===
 ```
