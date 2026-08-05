@@ -6,7 +6,8 @@ Tool used to help organize pentest scope, scan results, OSINT information, asset
 https://github.com/user-attachments/assets/2dfe0dc7-563c-4753-810b-720e26ad51e6
 
 === Features  ===
-- Ingest and parse automatically such as [Prowler](https://github.com/waffl3ss/Prowler)
+- Ingest and parse automatically such as:
+  - [Prowler](https://github.com/waffl3ss/Prowler)
   - nmap
   - bbot
   - subenum
