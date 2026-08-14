@@ -23,6 +23,7 @@ from .models import (
     ServiceEvidence,
     Document,
     Note,
+    GlobalNote,
     ScopeItem,
     ScopeExclusion,
     CloudItem,
@@ -39,6 +40,8 @@ from .models import (
     AppSettings,
     UploadLog,
     SmbShare,
+    TimelineDay,
+    TimelineEntry,
 )
 from .parsers import (
     upsert_artifact,
@@ -51,7 +54,7 @@ from .parsers import (
     upsert_host,
     import_ad_users,
     import_names_emails,
-    import_credentials,
+    import_creds_to_names,
     import_web_urls,
     import_names,
     import_prowl_phase1,
@@ -88,8 +91,10 @@ def create_app(
                 response.headers["Cache-Control"] = "private, max-age=30, must-revalidate"
             elif request.url.path.startswith("/static/"):
                 response.headers.setdefault("Cache-Control", "public, max-age=86400")
+            elif response.headers.get("content-type", "").startswith("text/html"):
+                response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
             else:
-                response.headers["Cache-Control"] = "private, max-age=10, must-revalidate"
+                response.headers["Cache-Control"] = "private, max-age=300, must-revalidate"
         return response
 
     app.mount(
@@ -643,7 +648,7 @@ def create_app(
             "names_emails": "/users",
             "doc": "/docs",
             "ad_users": "/users",
-            "creds": "/app-credentials",
+            "name_creds": "/users",
             "urls": "/assets",
             "names": "/users",
             "bbot": "/subdomains",
@@ -680,8 +685,8 @@ def create_app(
                     extract_doc_software(s)
                 elif kind == "ad_users":
                     res = {"added": import_ad_users(s, art, p), "skipped": 0, "unmatched": []}
-                elif kind == "creds":
-                    res = {"added": import_credentials(s, art, p), "skipped": 0, "unmatched": []}
+                elif kind == "name_creds":
+                    res = import_creds_to_names(s, art, p)
                 elif kind == "urls":
                     res = {"added": import_web_urls(s, art, p), "skipped": 0, "unmatched": []}
                 elif kind == "names":
@@ -742,6 +747,13 @@ def create_app(
                     added = res.get("added", 0)
                     skipped = res.get("skipped", 0)
                     unmatched = res.get("unmatched", []) or []
+                elif kind == "name_creds":
+                    added = res.get("added", 0)
+                    updated = res.get("updated", 0)
+                    skipped = res.get("skipped", 0)
+                    unmatched = res.get("unmatched", []) or []
+                    conflicts = res.get("conflicts", []) or []
+                    details = {"updated": updated, "conflicts": len(conflicts)}
                 return {
                     "added": added,
                     "skipped": skipped,
@@ -757,7 +769,7 @@ def create_app(
                 "names_emails": "Names & Emails",
                 "doc": "OSINT Document",
                 "ad_users": "AD Users",
-                "creds": "Credentials",
+                "name_creds": "Credentials → Users",
                 "urls": "Web URLs",
                 "names": "Names",
                 "mixed_hashes": "Mixed Hashes",
@@ -792,7 +804,7 @@ def create_app(
                     "names_emails": "pasted_names_emails.txt",
                     "doc": "pasted_document.bin",
                     "ad_users": "pasted_ad_users.txt",
-                    "creds": "pasted_creds.txt",
+                    "name_creds": "pasted_name_creds.txt",
                     "urls": "pasted_urls.txt",
                     "names": "pasted_names.txt",
                     "mixed_hashes": "pasted_mixed_hashes.txt",
@@ -817,6 +829,8 @@ def create_app(
                     "unmatched": norm["unmatched"],
                     "details": norm.get("details", {}),
                 }]
+                if kind == "name_creds":
+                    upload_results[0]["conflicts"] = raw_result.get("conflicts", [])
                 return templates.TemplateResponse(
                     "upload.html",
                     {
@@ -869,6 +883,8 @@ def create_app(
                             "unmatched": norm["unmatched"],
                             "details": norm.get("details", {}),
                         })
+                        if kind == "name_creds":
+                            upload_results[-1]["conflicts"] = raw_result.get("conflicts", [])
                 return templates.TemplateResponse(
                     "upload.html",
                     {
@@ -932,6 +948,41 @@ def create_app(
             s.execute(UploadLog.__table__.delete())
             s.commit()
         return {"ok": True}
+
+    @app.post("/api/creds-conflict/resolve")
+    async def resolve_creds_conflict(request: Request):
+        """Resolve a credential username conflict by merging password into existing user or creating new."""
+        data = await request.json()
+        username = data.get("username", "")
+        domain = data.get("domain", "")
+        password = data.get("password", "")
+        target_user_id = data.get("targetUserId")
+
+        if not username:
+            return {"ok": False, "error": "Missing username"}
+
+        with db() as s:
+            if target_user_id is not None:
+                existing = s.get(NameItem, target_user_id)
+                if existing:
+                    if not existing.password:
+                        existing.password = password
+                    if domain and not existing.domain:
+                        existing.domain = domain
+                    s.commit()
+                    return {"ok": True}
+                return {"ok": False, "error": "Target user not found"}
+            else:
+                s.add(NameItem(
+                    first_name="",
+                    middle_name="",
+                    last_name="",
+                    ad_username=username,
+                    domain=domain,
+                    password=password,
+                ))
+                s.commit()
+                return {"ok": True}
 
     # Assets
     @app.get("/assets", response_class=HTMLResponse)
@@ -1294,6 +1345,174 @@ def create_app(
                 )
                 s.add(row)
             s.commit()
+        return {"ok": True}
+
+    @app.get("/api/global-notes-table")
+    def api_global_notes_table_get():
+        with db() as s:
+            rows = (
+                s.execute(
+                    select(GlobalNote).order_by(GlobalNote.order_index.asc())
+                )
+                .scalars()
+                .all()
+            )
+        return {
+            "ok": True,
+            "rows": [
+                {
+                    "id": r.id,
+                    "title": r.title or "",
+                    "body": r.body or "",
+                    "order_index": r.order_index,
+                }
+                for r in rows
+            ],
+        }
+
+    @app.post("/api/global-notes-table")
+    def api_global_notes_table_create(
+        title: str = Form(""),
+        body: str = Form(""),
+    ):
+        with db() as s:
+            max_idx = (
+                s.execute(
+                    select(func.max(GlobalNote.order_index))
+                )
+                .scalar()
+                or -1
+            )
+            row = GlobalNote(
+                title=title,
+                body=body,
+                order_index=max_idx + 1,
+            )
+            s.add(row)
+            s.commit()
+            rid = row.id
+        return {"ok": True, "id": rid}
+
+    @app.patch("/api/global-notes-table/{note_id}")
+    def api_global_notes_table_update(
+        note_id: int,
+        title: str = Form(""),
+        body: str = Form(""),
+    ):
+        with db() as s:
+            row = s.scalar(select(GlobalNote).where(GlobalNote.id == note_id))
+            if row:
+                row.title = title
+                row.body = body
+                s.commit()
+        return {"ok": True}
+
+    @app.delete("/api/global-notes-table/{note_id}")
+    def api_global_notes_table_delete(note_id: int):
+        with db() as s:
+            row = s.scalar(select(GlobalNote).where(GlobalNote.id == note_id))
+            if row:
+                s.delete(row)
+                s.commit()
+        return {"ok": True}
+
+    @app.get("/api/timeline")
+    def api_timeline_get():
+        with db() as s:
+            days = (
+                s.execute(
+                    select(TimelineDay).order_by(TimelineDay.day_date.asc())
+                )
+                .scalars()
+                .all()
+            )
+            result = []
+            for day in days:
+                entries = (
+                    s.execute(
+                        select(TimelineEntry)
+                        .where(TimelineEntry.day_id == day.id)
+                        .order_by(TimelineEntry.order_index.asc())
+                    )
+                    .scalars()
+                    .all()
+                )
+                result.append({
+                    "id": day.id,
+                    "day_date": day.day_date,
+                    "entries": [
+                        {
+                            "id": e.id,
+                            "content": e.content,
+                            "order_index": e.order_index,
+                        }
+                        for e in entries
+                    ],
+                })
+        return {"days": result}
+
+    @app.post("/api/timeline/day")
+    def api_timeline_day_create(day_date: str = Form("")):
+        with db() as s:
+            max_idx = s.scalar(select(func.max(TimelineDay.id))) or 0
+            day = TimelineDay(day_date=day_date[:10] if day_date else "")
+            s.add(day)
+            s.commit()
+            day_id = day.id
+        return {"ok": True, "id": day_id}
+
+    @app.patch("/api/timeline/day/{day_id}")
+    def api_timeline_day_update(day_id: int, day_date: str = Form("")):
+        with db() as s:
+            day = s.scalar(select(TimelineDay).where(TimelineDay.id == day_id))
+            if day:
+                day.day_date = day_date[:10] if day_date else ""
+                s.commit()
+        return {"ok": True}
+
+    @app.delete("/api/timeline/day/{day_id}")
+    def api_timeline_day_delete(day_id: int):
+        with db() as s:
+            day = s.scalar(select(TimelineDay).where(TimelineDay.id == day_id))
+            if day:
+                s.delete(day)
+                s.commit()
+        return {"ok": True}
+
+    @app.post("/api/timeline/entry")
+    def api_timeline_entry_create(
+        day_id: str = Form(""),
+        content: str = Form(""),
+    ):
+        with db() as s:
+            did = int(day_id) if day_id else 0
+            max_idx = s.scalar(
+                select(func.max(TimelineEntry.order_index)).where(TimelineEntry.day_id == did)
+            )
+            idx = (max_idx or -1) + 1
+            entry = TimelineEntry(day_id=did, content=content[:10000], order_index=idx)
+            s.add(entry)
+            s.commit()
+            entry_id = entry.id
+            return {"ok": True, "id": entry_id, "order_index": idx, "content": entry.content}
+        return {"ok": False}
+
+    @app.patch("/api/timeline/entry/{entry_id}")
+    def api_timeline_entry_update(entry_id: int, content: str = Form("")):
+        with db() as s:
+            entry = s.scalar(select(TimelineEntry).where(TimelineEntry.id == entry_id))
+            if entry:
+                entry.content = content[:10000] if content else ""
+                s.commit()
+        return {"ok": True}
+
+    @app.delete("/api/timeline/entry/{entry_id}")
+    def api_timeline_entry_delete(entry_id: int):
+        with db() as s:
+            entry = s.scalar(select(TimelineEntry).where(TimelineEntry.id == entry_id))
+            if entry:
+                s.delete(entry)
+                s.commit()
         return {"ok": True}
 
     @app.get("/api/host/{host_id}")
@@ -4189,15 +4408,8 @@ def create_app(
                 except Exception:
                     pass
 
-            existing = [n for n in data["nodes"] if n.get("label") == label and n.get("type") == "user"]
-            if existing:
-                return {"ok": False, "error": f"User node \"{label}\" already exists in topology"}
-
-            import time
-            node_id = f"n_user_{label.replace(' ', '_')}_{int(time.time())}"
-
             # Resolve name_id: use provided id, or auto-match by first/last name
-            resolved_name_id = name_id
+            resolved_name_id = str(name_id) if name_id else ""
             if not resolved_name_id:
                 parts = label.strip().split()
                 if len(parts) >= 2:
@@ -4224,6 +4436,15 @@ def create_app(
                     ).scalars().first()
                     if candidate:
                         resolved_name_id = str(candidate.id)
+
+            # Check existing node by linked_name_id (avoids duplicate name conflicts)
+            if resolved_name_id:
+                existing = [n for n in data["nodes"] if str(n.get("linked_name_id")) == resolved_name_id and n.get("type") == "user"]
+                if existing:
+                    return {"ok": True, "node": existing[0]}
+
+            import time
+            node_id = f"n_user_{label.replace(' ', '_')}_{int(time.time())}"
 
             new_node = {
                 "id": node_id,
@@ -4430,6 +4651,32 @@ def create_app(
                 }
             out = []
             all_ips_map = list_all_subdomain_ips(s)
+            
+            # Collect all IPs across subdomains for bulk service query
+            all_sub_ips = set()
+            for x in rows:
+                ips_found = all_ips_map.get(x.fqdn, [])
+                prowl_ips_list = (x.prowl_ips or "").split(",")
+                prowl_ips_cleaned = [ip.strip() for ip in prowl_ips_list if ip.strip()]
+                for ip in ips_found:
+                    all_sub_ips.add(ip)
+                for ip in prowl_ips_cleaned:
+                    all_sub_ips.add(ip)
+
+            # Query HTTP/HTTPS services for all collected IPs
+            http_ports_set = {80, 443, 8080, 8443, 8000, 8888}
+            ip_ports_map: dict[str, list[int]] = {}
+            if all_sub_ips:
+                svc_rows = s.execute(
+                    select(Host.ip, Service.port).join(Host).where(
+                        Host.ip.in_(all_sub_ips),
+                        Service.port.in_(http_ports_set),
+                        Service.state == "open"
+                    )
+                ).fetchall()
+                for ip, port in svc_rows:
+                    ip_ports_map.setdefault(ip, []).append(port)
+
             root_domains = {}
             for x in rows:
                 ips_found = all_ips_map.get(x.fqdn, [])
@@ -4446,8 +4693,7 @@ def create_app(
                     subnets,
                     excluded,
                 )
-                in_ip = any(ip_in_scope(ip, ips, subnets, excluded) for ip in all_ips)
-                in_scope = bool(in_dom or in_ip)
+                in_scope = bool(in_dom)
                 sensitive_dom = domain_in_scope(
                     x.fqdn,
                     s_domains,
@@ -4461,6 +4707,9 @@ def create_app(
                 sensitive_ip_set = {
                     ip for ip in all_ips if ip_in_scope(ip, s_ips, s_subnets, s_excluded)
                 }
+                in_scope_ip_set = {
+                    ip for ip in all_ips if ip_in_scope(ip, ips, subnets, excluded)
+                }
                 sensitive = bool(sensitive_dom or bool(sensitive_ip_set))
                 # Get RDAP info for root domain
                 rdap = rdap_info.get(x.root_domain, {}) if x.root_domain else {}
@@ -4472,6 +4721,12 @@ def create_app(
                         "registrar": x.prowl_registrar,
                         "netblocks": x.prowl_netblocks,
                     }
+                # Build ports map for this subdomain's IPs
+                sub_ports: dict[str, list[int]] = {}
+                for ip in all_ips:
+                    if ip in ip_ports_map:
+                        sub_ports[ip] = sorted(set(ip_ports_map[ip]))
+
                 out.append(
                     {
                         "fqdn": x.fqdn,
@@ -4480,13 +4735,81 @@ def create_app(
                         "in_scope": in_scope,
                         "sensitive": sensitive,
                         "sensitive_ips": sensitive_ip_set,
+                        "in_scope_ips": in_scope_ip_set,
                         "rdap": rdap,
                         "prowl": prowl,
                         "scope_override": None,
+                        "ports": sub_ports,
+                        "complete": getattr(x, "complete", 0),
+                        "inprogress": getattr(x, "inprogress", 0),
+                        "waf": getattr(x, "waf", 0),
                     }
                 )
                 if x.root_domain and x.root_domain not in root_domains:
                     root_domains[x.root_domain] = rdap
+
+            # Standalone hosts: hosts with HTTP/HTTPS services NOT linked to any subdomain
+            all_linked_ips = set(all_ips_map.keys())
+            # Track which IPs are already displayed under in-scope subdomains
+            ips_covered_by_inscope_subs: set[str] = set()
+            for r in out:
+                if r.get("in_scope"):
+                    # Covered by in-scope IPs for this subdomain
+                    for ip in r.get("in_scope_ips", set()):
+                        ips_covered_by_inscope_subs.add(ip)
+                    # Also cover all resolved+prowl IPs (in or out of scope) since they're displayed under this row
+                    for ip in r.get("ips", []):
+                        ips_covered_by_inscope_subs.add(ip)
+                    prowl = r.get("prowl", {})
+                    if prowl and prowl.get("ips"):
+                        for ip in prowl["ips"].split(","):
+                            ip = ip.strip()
+                            if ip:
+                                ips_covered_by_inscope_subs.add(ip)
+
+            # Find ALL hosts with HTTP/HTTPS open services (linked or unlinked)
+            all_web_svc_rows = s.execute(
+                select(Host.id, Host.ip, Service.port).join(Host).where(
+                    Service.state == "open",
+                    (
+                        Service.port.in_([80, 443, 8080, 8443, 8000, 8888])
+                        | Service.service_name.ilike("%http%")
+                    ),
+                )
+            ).fetchall()
+
+            # Group by IP: all IPs with web ports
+            all_web_ips_ports: dict[str, list[int]] = {}
+            for _, ip, port in all_web_svc_rows:
+                all_web_ips_ports.setdefault(ip, []).append(port)
+
+            # All in-scope IPs with HTTP/HTTPS ports
+            standalone_seen: set[str] = set()
+            for ip, ports in all_web_ips_ports.items():
+                if ip in standalone_seen:
+                    continue
+                if not ip_in_scope(ip, ips, subnets, excluded):
+                    continue
+                standalone_seen.add(ip)
+                is_sensitive_ip = ip_in_scope(ip, s_ips, s_subnets, s_excluded)
+                out.append(
+                    {
+                        "fqdn": ip,
+                        "root_domain": "_standalone_ips",
+                        "ips": [],
+                        "in_scope": True,
+                        "sensitive": is_sensitive_ip,
+                        "sensitive_ips": {ip} if is_sensitive_ip else set(),
+                        "rdap": {},
+                        "prowl": {},
+                        "scope_override": None,
+                        "ports": {ip: sorted(set(ports))},
+                        "standalone_host": True,
+                        "complete": 0,
+                        "inprogress": 0,
+                        "waf": 0,
+                    }
+                )
 
             # Query all WebUrl records
             url_rows = (
@@ -4529,6 +4852,10 @@ def create_app(
             r["urls"] = url_by_host.get(r["fqdn"], [])
             grouped[rd]["subs"].append(r)
 
+        # Ensure standalone IPs group exists and is sorted
+        if "_standalone_ips" in grouped:
+            grouped["_standalone_ips"]["subs"].sort(key=lambda x: x["fqdn"])
+
         out = out if show_out == 1 else [r for r in out if r.get("in_scope")]
         grouped_filtered = {}
         for rd, data in grouped.items():
@@ -4538,6 +4865,19 @@ def create_app(
                 else [s for s in data["subs"] if s.get("in_scope")]
             )
             if filtered:
+                filtered.sort(key=lambda x: (0 if x["fqdn"] == rd else 1, x["fqdn"]))
+                if rd != "_standalone_ips" and not any(s["fqdn"] == rd for s in filtered):
+                    root_sub = s.scalar(select(Subdomain).where(Subdomain.fqdn == rd))
+                    filtered.insert(0, {
+                        "fqdn": rd, "root_domain": rd, "ips": [],
+                        "in_scope": True, "sensitive": False,
+                        "sensitive_ips": set(), "in_scope_ips": set(),
+                        "rdap": {}, "prowl": {}, "scope_override": None,
+                        "ports": {}, "urls": [],
+                        "complete": root_sub.complete if root_sub else 0,
+                        "inprogress": root_sub.inprogress if root_sub else 0,
+                        "waf": root_sub.waf if root_sub else 0,
+                    })
                 grouped_filtered[rd] = {"subs": filtered, "rdap": data["rdap"]}
 
         return templates.TemplateResponse(
@@ -5357,6 +5697,27 @@ def create_app(
                 in_ip = any(ip_in_scope(ip, ips, subnets, excluded) for ip in ips_found)
                 if in_dom or in_ip:
                     out.append(x.fqdn)
+                    if x.root_domain and x.root_domain not in out:
+                        out.append(x.root_domain)
+
+            # Include standalone IPs with HTTP/HTTPS ports
+            all_web_svc_rows = s.execute(
+                select(Host.id, Host.ip, Service.port).join(Host).where(
+                    Service.state == "open",
+                    (
+                        Service.port.in_([80, 443, 8080, 8443, 8000, 8888])
+                        | Service.service_name.ilike("%http%")
+                    ),
+                )
+            ).fetchall()
+            all_web_ips_ports: dict[str, list[int]] = {}
+            for _, ip, port in all_web_svc_rows:
+                all_web_ips_ports.setdefault(ip, []).append(port)
+            for ip in all_web_ips_ports:
+                if ip_in_scope(ip, ips, subnets, excluded):
+                    for p in sorted(set(all_web_ips_ports[ip])):
+                        out.append(f"{ip}:{p}")
+
         txt = "\n".join(sorted(set(out)))
         return Response(
             content=txt,
@@ -5398,6 +5759,46 @@ def create_app(
                 s.delete(existing)
             else:
                 s.add(ScopeExclusion(fqdn=fq))
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/subdomain/complete")
+    def api_subdomain_complete(fqdn: str = Form(...), complete: int = Form(...)):
+        fq = fqdn.strip().lower().rstrip(".")
+        with db() as s:
+            sub = s.scalar(select(Subdomain).where(Subdomain.fqdn == fq))
+            if not sub:
+                sub = Subdomain(fqdn=fq, root_domain=fq)
+                s.add(sub)
+            sub.complete = 1 if int(complete) == 1 else 0
+            if sub.complete == 1:
+                sub.inprogress = 0
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/subdomain/inprogress")
+    def api_subdomain_inprogress(fqdn: str = Form(...), inprogress: int = Form(...)):
+        fq = fqdn.strip().lower().rstrip(".")
+        with db() as s:
+            sub = s.scalar(select(Subdomain).where(Subdomain.fqdn == fq))
+            if not sub:
+                sub = Subdomain(fqdn=fq, root_domain=fq)
+                s.add(sub)
+            sub.inprogress = 1 if int(inprogress) == 1 else 0
+            if sub.inprogress == 1:
+                sub.complete = 0
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/subdomain/waf")
+    def api_subdomain_waf(fqdn: str = Form(...), waf: int = Form(...)):
+        fq = fqdn.strip().lower().rstrip(".")
+        with db() as s:
+            sub = s.scalar(select(Subdomain).where(Subdomain.fqdn == fq))
+            if not sub:
+                sub = Subdomain(fqdn=fq, root_domain=fq)
+                s.add(sub)
+            sub.waf = 1 if int(waf) == 1 else 0
             s.commit()
         return {"ok": True}
 
@@ -5464,25 +5865,9 @@ def create_app(
             s.commit()
         return {"ok": True}
 
-    # Users & Credentials
-    @app.get("/app-credentials", response_class=HTMLResponse)
-    def app_credentials_page(request: Request):
-        with db() as s:
-            creds = (
-                s.execute(
-                    select(Credential).order_by(
-                        Credential.service.asc(), Credential.username.asc()
-                    )
-                )
-                .scalars()
-                .all()
-            )
-        return templates.TemplateResponse(
-            "app_credentials.html", {"request": request, "creds": creds}
-        )
 
-    @app.get("/password-spray", response_class=HTMLResponse)
-    def password_spray_page(request: Request):
+    @app.get("/api/password-spray/services")
+    def api_password_spray_services_list():
         with db() as s:
             services = (
                 s.execute(
@@ -5491,7 +5876,7 @@ def create_app(
                 .scalars()
                 .all()
             )
-            service_rows = []
+            result = []
             for svc in services:
                 attempts = (
                     s.execute(
@@ -5502,16 +5887,20 @@ def create_app(
                     .scalars()
                     .all()
                 )
-                service_rows.append(
-                    {
-                        "id": svc.id,
-                        "name": svc.name,
-                        "attempts": attempts,
-                    }
-                )
-        return templates.TemplateResponse(
-            "password_spray.html", {"request": request, "services": service_rows}
-        )
+                result.append({
+                    "id": svc.id,
+                    "name": svc.name,
+                    "attempts": [
+                        {
+                            "id": a.id,
+                            "password": a.password or "",
+                            "attempted_at": a.attempted_at or "",
+                            "notes": a.notes or "",
+                        }
+                        for a in attempts
+                    ],
+                })
+        return {"ok": True, "services": result}
 
     @app.post("/api/password-spray/service")
     def api_password_spray_service_create(name: str = Form("")):
@@ -5591,6 +5980,20 @@ def create_app(
                 "attempted_at": row.attempted_at,
                 "notes": row.notes,
             }
+
+    @app.delete("/api/password-spray/attempt/{attempt_id}")
+    def api_password_spray_attempt_delete(attempt_id: int):
+        with db() as s:
+            row = s.scalar(
+                select(PasswordSprayAttempt).where(PasswordSprayAttempt.id == attempt_id)
+            )
+            if not row:
+                return JSONResponse(
+                    {"ok": False, "error": "Attempt not found"}, status_code=404
+                )
+            s.delete(row)
+            s.commit()
+            return {"ok": True}
 
     @app.post("/api/users/create")
     def api_user_create(
@@ -5747,6 +6150,7 @@ def create_app(
         phone: str = Form(""),
         ad_username: str = Form(""),
         domain: str = Form(""),
+        application: str = Form(""),
         password: str = Form(""),
         ntlm_hash: str = Form(""),
         ntlm_v1: str = Form(""),
@@ -5768,6 +6172,7 @@ def create_app(
                     phone=phone.strip(),
                     ad_username=ad_username.strip(),
                     domain=domain.strip(),
+                    application=application.strip(),
                     password=password.strip(),
                     ntlm_hash=ntlm_hash.strip(),
                     ntlm_v1=ntlm_v1.strip(),
@@ -5793,6 +6198,7 @@ def create_app(
         phone: str = Form(""),
         ad_username: str = Form(""),
         domain: str = Form(""),
+        application: str = Form(""),
         password: str = Form(""),
         ntlm_hash: str = Form(""),
         ntlm_v1: str = Form(""),
@@ -5824,6 +6230,7 @@ def create_app(
             name.phone = phone.strip()
             name.ad_username = ad_username.strip()
             name.domain = domain.strip()
+            name.application = application.strip()
             name.password = password.strip()
             name.ntlm_hash = ntlm_hash.strip()
             name.ntlm_v1 = ntlm_v1.strip()
@@ -5890,33 +6297,6 @@ def create_app(
                 s.add(DomainCorrelation(primary_domain=primary, aliases=aliases))
             s.commit()
         return {"ok": True}
-
-    @app.get("/app-credentials/export/creds")
-    def export_creds():
-        with db() as s:
-            creds = (
-                s.execute(
-                    select(Credential).order_by(
-                        Credential.service.asc(), Credential.username.asc()
-                    )
-                )
-                .scalars()
-                .all()
-            )
-        lines = []
-        for c in creds:
-            if c.password:
-                lines.append(f"{c.username}:{c.password}")
-            else:
-                lines.append(f"{c.username}")
-        txt = "\n".join(lines)
-        return Response(
-            content=txt,
-            media_type="text/plain",
-            headers={
-                "Content-Disposition": "attachment; filename=reconbubble-creds.txt"
-            },
-        )
 
     # Social Media
     @app.get("/social", response_class=HTMLResponse)
@@ -6028,7 +6408,21 @@ def create_app(
     def export_urls():
         with db() as s:
             rows = s.execute(select(WebUrl).order_by(WebUrl.url.asc())).scalars().all()
-        lines = [x.url for x in rows]
+        domain_urls = []
+        ip_urls = []
+        ip_re = re.compile(r"^\d{1,3}(\.\d{1,3}){3}$")
+        for x in rows:
+            try:
+                h = (urlsplit(x.url).hostname or "").strip().lower()
+                if not h:
+                    h = (urlsplit("http://" + x.url).hostname or "").strip().lower()
+            except Exception:
+                h = ""
+            if h and ip_re.match(h):
+                ip_urls.append(x.url)
+            else:
+                domain_urls.append(x.url)
+        lines = sorted(domain_urls) + [""] + sorted(ip_urls)
         txt = "\n".join(lines)
         return Response(
             content=txt,

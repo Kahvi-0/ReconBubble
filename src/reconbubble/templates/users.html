@@ -10,11 +10,16 @@
   </div>
   <div style="width:1px; height:28px; background:#2a3a4a; margin:0 4px;"></div>
   <select id="filterDomain" class="toolbar-select" title="Filter by domain"><option value="">All Domains</option></select>
+  <select id="filterUserType" class="toolbar-select" title="Filter by user type">
+    <option value="all">All Users</option>
+    <option value="application">Application</option>
+    <option value="aduser">AD User</option>
+    <option value="adcomputer">AD Computer</option>
+  </select>
   <input type="text" id="filterSearch" class="toolbar-search" placeholder="Search..." />
   <div class="toggle-row"><label class="filter-label">No Domain</label><label class="toggle-switch"><input type="checkbox" id="filterNoDomain" /><span class="toggle-slider"></span></label></div>
   <div class="toggle-row"><label class="filter-label">Compromised Only</label><label class="toggle-switch"><input type="checkbox" id="filterCompromised" /><span class="toggle-slider"></span></label></div>
   <div class="toggle-row"><label class="filter-label">Passwords Only</label><label class="toggle-switch"><input type="checkbox" id="filterPasswords" /><span class="toggle-slider"></span></label></div>
-  <div class="toggle-row"><label class="filter-label">Hide Computers</label><label class="toggle-switch"><input type="checkbox" id="filterHideComputers" /><span class="toggle-slider"></span></label></div>
 </div>
 
 <div class="card">
@@ -35,7 +40,7 @@
     <thead><tr><th style="width:32px;"><input type="checkbox" id="selectAll" title="Select all" /></th><th>First</th><th>Middle</th><th>Last</th><th>Email</th><th>Phone</th><th>AD Username</th><th>Domain</th><th style="padding-right:0px;">Tags</th><th style="width:60px;padding-left:0px;"></th></tr></thead>
     <tbody>
       {% for n in names %}
-        <tr class="name-row" data-id="{{ n.id }}" data-first="{{ n.first_name }}" data-middle="{{ n.middle_name }}" data-last="{{ n.last_name }}" data-email="{{ n.email }}" data-phone="{{ n.phone }}" data-ad-username="{{ n.ad_username }}" data-domain="{{ n.domain }}" data-password="{{ n.password }}" data-password-plaintext="{{ n.password_plaintext }}" data-ntlm-hash="{{ n.ntlm_hash }}" data-ntlm-hash-cracked="{{ n.ntlm_hash_cracked }}" data-ntlm-v1="{{ n.ntlm_v1 }}" data-ntlm-v1-cracked="{{ n.ntlm_v1_cracked }}" data-ntlm-v2="{{ n.ntlm_v2 }}" data-ntlm-v2-cracked="{{ n.ntlm_v2_cracked }}" data-dcc2="{{ n.dcc2 }}" data-dcc2-cracked="{{ n.dcc2_cracked }}" data-kerberos-asrep="{{ n.kerberos_asrep }}" data-kerberos-asrep-cracked="{{ n.kerberos_asrep_cracked }}" data-kerberos-tgs="{{ n.kerberos_tgs }}" data-kerberos-tgs-cracked="{{ n.kerberos_tgs_cracked }}" data-kerberos-key-aes128="{{ n.kerberos_key_aes128 }}" data-kerberos-key-aes128-cracked="{{ n.kerberos_key_aes128_cracked }}" data-kerberos-key-aes256="{{ n.kerberos_key_aes256 }}" data-kerberos-key-aes256-cracked="{{ n.kerberos_key_aes256_cracked }}" data-tags="{{ n.tags }}" data-topology-node-id="{{ n.topology_node_id }}" data-topo-compromised="{{ 1 if n.id|string in compromised_name_ids else 0 }}" data-compromised="{{ 1 if n.id|string in compromised_name_ids or (n.password and n.password.strip()) or (n.ntlm_hash and n.ntlm_hash.strip()) else 0 }}">
+        <tr class="name-row" data-id="{{ n.id }}" data-first="{{ n.first_name }}" data-middle="{{ n.middle_name }}" data-last="{{ n.last_name }}" data-email="{{ n.email }}" data-phone="{{ n.phone }}" data-ad-username="{{ n.ad_username }}" data-domain="{{ n.domain }}" data-application="{{ n.application }}" data-password="{{ n.password }}" data-password-plaintext="{{ n.password_plaintext }}" data-ntlm-hash="{{ n.ntlm_hash }}" data-ntlm-hash-cracked="{{ n.ntlm_hash_cracked }}" data-ntlm-v1="{{ n.ntlm_v1 }}" data-ntlm-v1-cracked="{{ n.ntlm_v1_cracked }}" data-ntlm-v2="{{ n.ntlm_v2 }}" data-ntlm-v2-cracked="{{ n.ntlm_v2_cracked }}" data-dcc2="{{ n.dcc2 }}" data-dcc2-cracked="{{ n.dcc2_cracked }}" data-kerberos-asrep="{{ n.kerberos_asrep }}" data-kerberos-asrep-cracked="{{ n.kerberos_asrep_cracked }}" data-kerberos-tgs="{{ n.kerberos_tgs }}" data-kerberos-tgs-cracked="{{ n.kerberos_tgs_cracked }}" data-kerberos-key-aes128="{{ n.kerberos_key_aes128 }}" data-kerberos-key-aes128-cracked="{{ n.kerberos_key_aes128_cracked }}" data-kerberos-key-aes256="{{ n.kerberos_key_aes256 }}" data-kerberos-key-aes256-cracked="{{ n.kerberos_key_aes256_cracked }}" data-tags="{{ n.tags }}" data-topology-node-id="{{ n.topology_node_id }}" data-topo-compromised="{{ 1 if n.id|string in compromised_name_ids else 0 }}" data-compromised="{{ 1 if n.id|string in compromised_name_ids or (n.password and n.password.strip()) or (n.ntlm_hash and n.ntlm_hash.strip()) else 0 }}">
          <td class="checkbox-cell" style="text-align:center;"><input type="checkbox" class="row-checkbox" data-id="{{ n.id }}" /></td>
          <td>{{ n.first_name }}</td>
          <td>{{ n.middle_name }}</td>
@@ -44,7 +49,7 @@
          <td>{% if n.phone %}{{ n.phone }}{% else %}<span class="muted">—</span>{% endif %}</td>
          <td>{% if n.ad_username %}{{ n.ad_username }}{% else %}<span class="muted">—</span>{% endif %}</td>
          <td>{% if n.domain %}{{ n.domain }}{% else %}<span class="muted">—</span>{% endif %}</td>
-<td style="padding-right:0px;">{% set _has_hash = (n.ntlm_hash and n.ntlm_hash.strip()) or (n.ntlm_v1 and n.ntlm_v1.strip()) or (n.ntlm_v2 and n.ntlm_v2.strip()) or (n.dcc2 and n.dcc2.strip()) or (n.kerberos_asrep and n.kerberos_asrep.strip()) or (n.kerberos_tgs and n.kerberos_tgs.strip()) or (n.kerberos_key_aes128 and n.kerberos_key_aes128.strip()) or (n.kerberos_key_aes256 and n.kerberos_key_aes256.strip()) %}{% if n.id|string in compromised_name_ids or (n.password and n.password.strip()) or (n.ntlm_hash and n.ntlm_hash.strip()) %}<span class="topo-badge compromised">Compromised</span>{% endif %}{% if n.ad_username and n.ad_username.strip() %}<span class="topo-badge ad-user">{% if n.ad_username.strip().endswith('$') %}AD Computer{% else %}AD User{% endif %}</span>{% endif %}{% if n.password and n.password.strip() %}<span class="topo-badge has-password">Password</span>{% endif %}{% if _has_hash %}<span class="topo-badge has-hash">Hash</span>{% endif %}{% if n.tags %}<span class="user-tag">{{ n.tags }}</span>{% endif %}</td>
+<td style="padding-right:0px;">{% set _has_hash = (n.ntlm_hash and n.ntlm_hash.strip()) or (n.ntlm_v1 and n.ntlm_v1.strip()) or (n.ntlm_v2 and n.ntlm_v2.strip()) or (n.dcc2 and n.dcc2.strip()) or (n.kerberos_asrep and n.kerberos_asrep.strip()) or (n.kerberos_tgs and n.kerberos_tgs.strip()) or (n.kerberos_key_aes128 and n.kerberos_key_aes128.strip()) or (n.kerberos_key_aes256 and n.kerberos_key_aes256.strip()) %}{% if n.id|string in compromised_name_ids or (n.password and n.password.strip()) or (n.ntlm_hash and n.ntlm_hash.strip()) %}<span class="topo-badge compromised">Compromised</span>{% endif %}{% if n.application and n.application.strip() %}<span class="topo-badge ad-user">Application</span>{% elif n.ad_username and n.ad_username.strip() %}<span class="topo-badge ad-user">{% if n.ad_username.strip().endswith('$') %}AD Computer{% else %}AD User{% endif %}</span>{% endif %}{% if n.password and n.password.strip() %}<span class="topo-badge has-password">Password</span>{% endif %}{% if _has_hash %}<span class="topo-badge has-hash">Hash</span>{% endif %}{% if n.tags %}<span class="user-tag">{{ n.tags }}</span>{% endif %}</td>
           <td style="padding-left:0px;">
             <div class="cred-actions">
              <button class="cred-action-btn topo-btn" data-name-id="{{ n.id }}" data-topo-node-id="{{ n.topology_node_id }}" data-name-label="{% if n.ad_username and n.ad_username.strip() %}{{ n.ad_username }}{% elif n.email and n.email.strip() %}{{ n.email }}{% else %}{{ n.first_name }} {{ n.last_name }}{% endif %}" data-name-email="{{ n.email }}" data-name-phone="{{ n.phone }}" title="Add to Topology">+</button>
@@ -288,6 +293,9 @@
       <div class="name-detail-row">
         <div class="name-detail-field"><label>Domain</label><span id="viewDomain"></span></div>
       </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Application</label><span id="viewApplication"></span></div>
+      </div>
       <div class="name-cred-divider"></div>
       <div class="name-detail-row">
         <div class="name-detail-field"><label>Password</label><div class="cred-display-wrap"><span id="viewPassword" class="cred-display" data-raw-value=""><span class="cred-value"></span><span class="cred-status"></span></span><button type="button" class="cred-copy-btn cred-copy-view" data-copy-id="viewPassword" title="Copy">Copy</button></div></div>
@@ -334,6 +342,9 @@
       <div class="name-detail-row multi">
         <div class="name-detail-field"><label>AD Username</label><input name="ad_username" id="detailAdUsername" /></div>
         <div class="name-detail-field"><label>Domain</label><input name="domain" id="detailDomain" /></div>
+      </div>
+      <div class="name-detail-row">
+        <div class="name-detail-field"><label>Application</label><input name="application" id="detailApplication" placeholder="e.g. SharePoint, SQL Server, SSH, etc." /></div>
       </div>
       <div class="name-cred-divider"></div>
       <div class="name-detail-row">
@@ -546,6 +557,7 @@
     document.getElementById('viewPhone').textContent = data.phone || '—';
     document.getElementById('viewAdUsername').textContent = data.ad_username || '—';
     document.getElementById('viewDomain').textContent = data.domain || '—';
+    document.getElementById('viewApplication').textContent = data.application || '—';
     setCredView('viewPassword', data.password || '', data.password && data.password_plaintext === '1' ? '- Found in plain text' : '', data.password || '');
     setCredView('viewNtlmHash', data.ntlm_hash || '', data.ntlm_hash && data.ntlm_hash_cracked === '1' ? '- Cracked' : '', data.ntlm_hash || '');
     setCredView('viewNtlmV1', data.ntlm_v1 || '', data.ntlm_v1 && data.ntlm_v1_cracked === '1' ? '- Cracked' : '', data.ntlm_v1 || '');
@@ -565,6 +577,7 @@
     document.getElementById('detailPhone').value = data.phone || '';
     document.getElementById('detailAdUsername').value = data.ad_username || '';
     document.getElementById('detailDomain').value = data.domain || '';
+    document.getElementById('detailApplication').value = data.application || '';
     document.getElementById('detailPassword').value = data.password || '';
     document.getElementById('detailNtlmHash').value = data.ntlm_hash || '';
     document.getElementById('detailNtlmV1').value = data.ntlm_v1 || '';
@@ -590,6 +603,7 @@
       document.getElementById('nameSaveBtn').style.display = '';
       document.getElementById('nameSaveBtn').textContent = 'Add';
       document.getElementById('cancelEditBtn').style.display = 'none';
+      document.querySelectorAll('#nameDetailForm .cred-copy-btn').forEach(b => b.style.display = 'none');
     } else {
       document.getElementById('nameViewFields').style.display = '';
       document.getElementById('nameDetailForm').style.display = 'none';
@@ -597,6 +611,7 @@
       document.getElementById('nameSaveBtn').style.display = 'none';
       document.getElementById('nameSaveBtn').textContent = 'Save';
       document.getElementById('cancelEditBtn').style.display = 'none';
+      document.querySelectorAll('#nameDetailForm .cred-copy-btn').forEach(b => b.style.display = '');
     }
     nameDetail.classList.add('active');
   }
@@ -663,7 +678,7 @@
       noDomain: localStorage.getItem('userFilterNoDomain') === '1',
       compromised: localStorage.getItem('userFilterCompromised') === '1',
       passwords: localStorage.getItem('userFilterPasswords') === '1',
-      hideComputers: localStorage.getItem('userFilterHideComputers') === '1',
+      userType: localStorage.getItem('userFilterUserType') || 'all',
       search: localStorage.getItem('userFilterSearch') || '',
     };
   }
@@ -672,7 +687,7 @@
     localStorage.setItem('userFilterNoDomain', fs.noDomain ? '1' : '0');
     localStorage.setItem('userFilterCompromised', fs.compromised ? '1' : '0');
     localStorage.setItem('userFilterPasswords', fs.passwords ? '1' : '0');
-    localStorage.setItem('userFilterHideComputers', fs.hideComputers ? '1' : '0');
+     localStorage.setItem('userFilterUserType', fs.userType);
     localStorage.setItem('userFilterSearch', fs.search);
   }
   function applyRowFilters() {
@@ -681,7 +696,7 @@
     var noDomain = fs.noDomain;
     var compromised = fs.compromised;
     var passwords = fs.passwords;
-    var hideComputers = fs.hideComputers;
+    var userType = fs.userType;
     var search = fs.search;
     var resolver = window.resolveDomainPrimary || function(d) { return d; };
     document.querySelectorAll('.name-row').forEach(function(row) {
@@ -700,9 +715,15 @@
         var hasPassword = (row.getAttribute('data-password') || '').trim();
         if (!hasPassword) show = false;
       }
-      if (hideComputers) {
+      if (userType !== 'all') {
         var adUser = (row.getAttribute('data-ad-username') || '').trim();
-        if (adUser && adUser.endsWith('$')) show = false;
+        var app = (row.getAttribute('data-application') || '').trim();
+        var isApplication = app.length > 0;
+        var isComputer = adUser.length > 0 && adUser.endsWith('$');
+        var isAdUser = adUser.length > 0 && !isComputer;
+        if (userType === 'application' && !isApplication) show = false;
+        if (userType === 'aduser' && !isAdUser) show = false;
+        if (userType === 'adcomputer' && !isComputer) show = false;
       }
       if (show && search) {
         var text = [
@@ -751,7 +772,7 @@
     document.getElementById('filterNoDomain').checked = fs.noDomain;
     document.getElementById('filterCompromised').checked = fs.compromised;
     document.getElementById('filterPasswords').checked = fs.passwords;
-    document.getElementById('filterHideComputers').checked = fs.hideComputers;
+    document.getElementById('filterUserType').value = fs.userType;
     applyRowFilters();
   })();
   document.getElementById('filterDomain').addEventListener('change', function() {
@@ -784,9 +805,9 @@
     saveFilterState(fs);
     applyRowFilters();
   });
-  document.getElementById('filterHideComputers').addEventListener('change', function() {
+   document.getElementById('filterUserType').addEventListener('change', function() {
     var fs = loadFilterState();
-    fs.hideComputers = this.checked;
+    fs.userType = this.value;
     saveFilterState(fs);
     applyRowFilters();
   });
@@ -1078,6 +1099,7 @@
         phone: row.getAttribute('data-phone'),
         ad_username: row.getAttribute('data-ad-username'),
         domain: row.getAttribute('data-domain'),
+        application: row.getAttribute('data-application'),
         password: row.getAttribute('data-password'),
         ntlm_hash: row.getAttribute('data-ntlm-hash'),
         ntlm_v1: row.getAttribute('data-ntlm-v1'),
@@ -1127,6 +1149,7 @@
           phone: fd.get('phone'),
           ad_username: fd.get('ad_username'),
           domain: fd.get('domain'),
+          application: fd.get('application'),
           password: fd.get('password'),
           ntlm_hash: fd.get('ntlm_hash'),
           ntlm_v1: fd.get('ntlm_v1'),
@@ -1156,6 +1179,7 @@
           row.setAttribute('data-phone', updated.phone);
           row.setAttribute('data-ad-username', updated.ad_username);
           row.setAttribute('data-domain', updated.domain);
+          row.setAttribute('data-application', updated.application);
           row.setAttribute('data-password', updated.password);
           row.setAttribute('data-ntlm-hash', updated.ntlm_hash);
           row.setAttribute('data-ntlm-v1', updated.ntlm_v1);
@@ -1188,7 +1212,9 @@
           if (topoCompromised || hasCred) {
             tagsHtml += '<span class="topo-badge compromised">Compromised</span>';
           }
-          if (updated.ad_username && updated.ad_username.trim()) {
+          if (updated.application && updated.application.trim()) {
+            tagsHtml += '<span class="topo-badge ad-user">Application</span>';
+          } else if (updated.ad_username && updated.ad_username.trim()) {
             tagsHtml += '<span class="topo-badge ad-user">' + (updated.ad_username.trim().endsWith('$') ? 'AD Computer' : 'AD User') + '</span>';
           }
           if (updated.password && updated.password.trim()) {

@@ -723,23 +723,129 @@ def import_names_emails(session: Session, artifact: Artifact, path: Path) -> int
     return count
 
 
-def import_credentials(session: Session, artifact: Artifact, path: Path) -> int:
-    count = 0
+def import_creds_to_names(session: Session, artifact: Artifact, path: Path) -> dict:
+    """Parse username:password lines into NameItem records with conflict detection.
+
+    Formats: username:password, domain\\username:password, domain/username:password
+    Returns dict with added, updated, skipped, conflicts, unmatched.
+    """
+    added = 0
+    updated = 0
+    skipped = 0
+    unmatched: list[str] = []
+    conflicts: list[dict] = []
+
     for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
         s = line.strip()
         if not s or s.startswith("#"):
             continue
         if ":" not in s:
+            unmatched.append(s)
             continue
-        user, pass_ = s.split(":", 1)
-        user = user.strip()
+
+        raw_user, pass_ = s.rsplit(":", 1)
+        raw_user = raw_user.strip()
         pass_ = pass_.strip()
-        if not user:
+        if not raw_user:
+            unmatched.append(s)
             continue
-        session.add(Credential(username=user, password=pass_, service=""))
-        count += 1
+
+        domain = ""
+        username = raw_user
+        if "\\" in raw_user:
+            parts = raw_user.rsplit("\\", 1)
+            domain = parts[0].strip()
+            username = parts[1].strip()
+        elif "/" in raw_user:
+            parts = raw_user.rsplit("/", 1)
+            domain = parts[0].strip()
+            username = parts[1].strip()
+
+        if not username:
+            unmatched.append(s)
+            continue
+
+        if domain:
+            domain_match = session.scalar(
+                select(NameItem).where(
+                    NameItem.ad_username.ilike(username),
+                    NameItem.domain.ilike(domain),
+                )
+            )
+            if domain_match:
+                if not domain_match.password:
+                    domain_match.password = pass_
+                    updated += 1
+                else:
+                    conflicts.append({
+                        "line": s,
+                        "username": username,
+                        "domain": domain,
+                        "password": pass_,
+                        "existing": [
+                            {"id": domain_match.id, "ad_username": domain_match.ad_username, "domain": domain_match.domain or ""}
+                        ],
+                    })
+            else:
+                session.add(NameItem(
+                    first_name="",
+                    middle_name="",
+                    last_name="",
+                    ad_username=username,
+                    domain=domain,
+                    password=pass_,
+                ))
+                added += 1
+        else:
+            matched = session.scalars(
+                select(NameItem).where(NameItem.ad_username.ilike(username))
+            ).all()
+
+            if len(matched) == 1:
+                if not matched[0].password:
+                    matched[0].password = pass_
+                    updated += 1
+                else:
+                    conflicts.append({
+                        "line": s,
+                        "username": username,
+                        "domain": domain,
+                        "password": pass_,
+                        "existing": [
+                            {"id": m.id, "ad_username": m.ad_username, "domain": m.domain or ""}
+                            for m in matched
+                        ],
+                    })
+            elif matched:
+                conflicts.append({
+                    "line": s,
+                    "username": username,
+                    "domain": domain,
+                    "password": pass_,
+                    "existing": [
+                        {"id": m.id, "ad_username": m.ad_username, "domain": m.domain or ""}
+                        for m in matched
+                    ],
+                })
+            else:
+                session.add(NameItem(
+                    first_name="",
+                    middle_name="",
+                    last_name="",
+                    ad_username=username,
+                    domain=domain,
+                    password=pass_,
+                ))
+                added += 1
+
     session.commit()
-    return count
+    return {
+        "added": added,
+        "updated": updated,
+        "skipped": skipped,
+        "unmatched": unmatched,
+        "conflicts": conflicts,
+    }
 
 
 def import_web_urls(session: Session, artifact: Artifact, path: Path) -> int:

@@ -20,7 +20,7 @@
       <option value="doc">OSINT document</option>
     <option value="ad_users">Active Directory Users</option>
     <option value="mixed_hashes">AD - Mixed Hashes (auto-detect)</option>
-    <option value="creds">Credentials (user:pass)</option>
+    <option value="name_creds">Credentials → Users (merge/create)</option>
     <option value="urls">Web URLs list</option>
     <option value="names">Names list</option>
     <option value="bbot">BBOT - Subdomain Enum (JSON)</option>
@@ -47,7 +47,7 @@
       <option value="names_emails">Names - Email List</option>
     <option value="ad_users">Active Directory Users</option>
     <option value="mixed_hashes">AD - Mixed Hashes (auto-detect)</option>
-    <option value="creds">Credentials (user:pass)</option>
+    <option value="name_creds">Credentials → Users (merge/create)</option>
     <option value="urls">Web URLs list</option>
     <option value="names">Names list</option>
     <option value="bbot">BBOT (json)</option>
@@ -73,7 +73,7 @@ const rawPlaceholders = {
   names_emails: "Paste email addresses, one per line…",
   ad_users: "Paste AD usernames, one per line…",
   mixed_hashes: "Paste hash formats, one per line (auto-detects Kerberoast, NTLMv1, NTLMv2, DCC2, AS-REP)…",
-  creds: "Paste credentials as user:pass, one per line…",
+  name_creds: "Paste credentials as user:pass, domain\\user:pass, or domain/user:pass (merges into Users)…",
   urls: "Paste URLs, one per line…",
   names: "Paste names as FirstName MiddleName LastName, one per line…",
   bbot: "Paste BBOT JSON output…"
@@ -85,6 +85,132 @@ if (rawSelect && rawArea) {
   rawSelect.addEventListener('change', function() {
     rawArea.placeholder = rawPlaceholders[this.value] || "Paste data…";
   });
+}
+
+window.addEventListener('beforeunload', function(e) {
+  if (window._credsUnresolved && window._credsUnresolved > 0) {
+    e.preventDefault();
+    e.returnValue = 'You have unresolved credential conflicts. Leaving will discard them.';
+    return e.returnValue;
+  }
+});
+
+function renderCredsResults(data) {
+  const existing = document.getElementById('creds-results-card');
+  if (existing) existing.remove();
+
+  const conflicts = data.conflicts || [];
+  const added = data.added || 0;
+  const updated = (data.details || {}).updated || 0;
+  const skipped = data.skipped || 0;
+
+  let html = '<div class="card" id="creds-results-card" style="margin-top:20px;color:#000;">';
+  html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">';
+  html += '<h2 style="margin:0;">Credentials → Users Import Results</h2>';
+  html += '<button class="btn" style="padding:4px 12px;font-size:12px;" onclick="window._credsUnresolved=0;document.getElementById(\'creds-results-card\').remove()">Dismiss</button>';
+  html += '</div>';
+  html += '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px;">';
+  html += '<span><strong>Created:</strong> ' + added + '</span>';
+  html += '<span><strong>Updated:</strong> ' + updated + '</span>';
+  html += '<span class="muted" style="color:#000;"><strong>Skipped:</strong> ' + skipped + '</span>';
+  html += '</div>';
+
+  window._credsUnresolved = conflicts.length;
+  if (conflicts.length > 0) {
+    html += '<div class="card" id="creds-conflicts-card" style="margin:20px 0 0;text-align:left;">';
+    html += '<div style="background:#3b82f6;color:#fff;padding:10px 16px;border-radius:6px 6px 0 0;display:flex;justify-content:space-between;align-items:center;text-align:left;">';
+    html += '<div style="display:flex;align-items:center;gap:10px;">';
+    html += '<h3 style="margin:0;">Username Conflicts (' + conflicts.length + ')</h3>';
+    html += '<p style="margin:4px 0 0;font-size:12px;opacity:0.9;">Select a target user to merge the password, or create a new user.</p>';
+    html += '<button style="background:rgba(255,255,255,0.2);border:none;color:#fff;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:12px;" onclick="this.parentElement.parentElement.parentElement.style.display=\'none\';window._credsUnresolved=0;">Dismiss Conflicts</button>';
+    html += '</div>';
+    html += '<button style="background:none;border:none;color:#fff;cursor:pointer;font-size:18px;" onclick="toggleConflictsBody()" id="conflicts-toggle-btn">&minus;</button>';
+    html += '</div>';
+    html += '<div id="conflicts-items-container" style="padding:14px;">';
+    conflicts.forEach(function(c, idx) {
+      html += '<div style="border:1px solid #fbbf24;background:#fffbeb;padding:14px;border-radius:6px;margin-bottom:12px;">';
+      html += '<div style="font-family:monospace;font-size:15px;font-weight:bold;color:#1e293b;margin-bottom:6px;">' + escapeHtml(c.line) + '</div>';
+      html += '<div style="display:flex;flex-direction:column;gap:4px;">';
+      c.existing.forEach(function(u, uidx) {
+        html += '<label style="display:flex;align-items:center;padding:4px 0;cursor:pointer;width:fit-content;white-space:nowrap;">';
+        html += '<input type="radio" name="conflict-' + idx + '" value="' + u.id + '" />';
+        html += '<span style="margin-left:6px;">' + escapeHtml(u.ad_username) +
+          (u.domain ? ' @ ' + escapeHtml(u.domain) : '') + '</span>';
+        html += '</label>';
+      });
+      html += '<label style="display:flex;align-items:center;padding:4px 0;cursor:pointer;width:fit-content;white-space:nowrap;">';
+      html += '<input type="radio" name="conflict-' + idx + '" value="new" />';
+      html += '<span style="margin-left:6px;">Create new user</span>';
+      html += '</label>';
+      html += '</div>';
+      html += '<button class="btn" style="margin-top:8px;padding:4px 12px;font-size:12px;" onclick="resolveCredsConflict(' + idx + ')">Resolve</button>';
+      html += '</div>';
+    });
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+  }
+
+  html += '<p class="muted" style="margin-top:10px;color:#000;"><a href="/users">View Users page</a></p>';
+  html += '</div>';
+
+  document.getElementById('upload-conflicts-container').innerHTML = html;
+  document.getElementById('creds-results-card').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function resolveCredsConflict(idx) {
+  var selected = document.querySelector('input[name="conflict-' + idx + '"]:checked');
+  if (!selected) {
+    alert('Please select a target user or "Create new user".');
+    return;
+  }
+  var btn = selected.closest('div[style]').parentElement.querySelector('button');
+  btn.disabled = true;
+  btn.textContent = 'Resolving…';
+
+  fetch('/api/creds-conflict/resolve', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      conflictIdx: idx,
+      targetUserId: selected.value === 'new' ? null : parseInt(selected.value),
+      line: window._credsConflicts[idx].line,
+      username: window._credsConflicts[idx].username,
+      domain: window._credsConflicts[idx].domain,
+      password: window._credsConflicts[idx].password
+    })
+  })
+  .then(function(r) { return r.json(); })
+  .then(function(data) {
+    if (data.ok) {
+      window._credsUnresolved--;
+      var container = selected.closest('div[style]');
+      container.style.borderColor = '#86efac';
+      container.style.background = '#f0fdf4';
+      btn.textContent = 'Done ✓';
+    } else {
+      btn.disabled = false;
+      btn.textContent = 'Resolve';
+      alert('Error: ' + (data.error || 'Unknown error'));
+    }
+  })
+  .catch(function(e) {
+    btn.disabled = false;
+    btn.textContent = 'Resolve';
+    alert('Request failed: ' + e.message);
+  });
+}
+
+function toggleConflictsBody() {
+  var items = document.getElementById('conflicts-items-container');
+  var btn = document.getElementById('conflicts-toggle-btn');
+  if (items && items.style.display === 'none') {
+    items.style.display = '';
+    btn.textContent = '\u2212';
+  } else {
+    if (items) items.style.display = 'none';
+    btn.textContent = '+';
+  }
 }
 
 function renderMixedResults(data) {
@@ -139,7 +265,7 @@ var typeNamesMap = {
   names_emails: 'Names & Emails',
   doc: 'OSINT Document',
   ad_users: 'AD Users',
-  creds: 'Credentials',
+  name_creds: 'Credentials → Users',
   urls: 'Web URLs',
   names: 'Names',
   bbot: 'BBOT',
@@ -310,6 +436,7 @@ window.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 
+<div id="upload-conflicts-container"></div>
 <div id="upload-log-container"></div>
 <div id="upload-content-end"></div>
 
@@ -320,8 +447,17 @@ addUploadLogEntry({{ file_result.type | tojson }}, {
   added: {{ file_result.added | default(0) }},
   skipped: {{ file_result.skipped | default(0) }},
   unmatched: {{ file_result.unmatched | default('[]') }},
-  details: {{ file_result.details | default('{}') }}
+  details: {{ file_result.details | default('{}') | tojson }}
 });
+{% if file_result.type == 'name_creds' %}
+window._credsConflicts = {{ file_result.conflicts | default('[]') | tojson }};
+renderCredsResults({
+  added: {{ file_result.added | default(0) }},
+  skipped: {{ file_result.skipped | default(0) }},
+  conflicts: {{ file_result.conflicts | default('[]') | tojson }},
+  details: {{ file_result.details | default('{}') | tojson }}
+});
+{% endif %}
 {% endfor %}
 {% if upload_results_summary %}
 var summary = {{ upload_results_summary | tojson }};

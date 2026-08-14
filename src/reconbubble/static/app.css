@@ -215,7 +215,7 @@ input[type="checkbox"]:checked {
   position: fixed;
   top: 72px;
   right: 0;
-  width: min(360px, 90vw);
+  width: min(420px, 90vw);
   height: calc(100vh - 72px);
   background: #0f141b;
   border-left: 1px solid #273245;
@@ -243,6 +243,35 @@ input[type="checkbox"]:checked {
   cursor: pointer;
   user-select: none;
 }
+.notes-lock-wrapper {
+  display: inline-block;
+  padding: 6px 4px;
+  cursor: pointer;
+  writing-mode: horizontal-tb;
+}
+.notes-lock {
+  display: inline-block;
+  transform: rotate(-180deg);
+  font-size: 20px;
+  writing-mode: horizontal-tb;
+  transition: color 0.2s;
+}
+.notes-lock.unlocked {
+  color: #fbbf24;
+  text-shadow: 0 0 6px rgba(251, 191, 36, 0.6);
+}
+.notes-lock.locked {
+  color: #94a3b8;
+}
+.notes-lock.bounce {
+  animation: lockBounce 0.3s ease;
+}
+@keyframes lockBounce {
+  0%   { transform: rotate(-180deg) scale(1); }
+  30%  { transform: rotate(-180deg) scale(1.4); }
+  60%  { transform: rotate(-180deg) scale(0.9); }
+  100% { transform: rotate(-180deg) scale(1); }
+}
 .global-notes-content {
   flex: 1;
   display: flex;
@@ -267,6 +296,111 @@ input[type="checkbox"]:checked {
 }
 #globalNotesStatus {
   padding: 0 10px 10px;
+}
+
+.notes-tabs {
+  display: flex;
+  gap: 0;
+}
+
+.notes-tab {
+  padding: 3px 14px;
+  background: transparent;
+  border: 1px solid #243041;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  color: #7a8a9e;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: color 0.15s ease, background 0.15s ease;
+}
+
+.notes-tab:hover {
+  color: #e8e8e8;
+  background: #1a1d23;
+}
+
+.notes-tab.active {
+  color: #e8e8e8;
+  background: #1a1d23;
+  border-color: #3a6da8;
+}
+
+.notes-tab-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.notes-tab-panel textarea {
+  flex: 1;
+  margin: 10px;
+  min-height: 0;
+  resize: none;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  line-height: 1.35;
+}
+
+#globalNotesTable {
+  width: 100%;
+  margin: 0;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  table-layout: fixed;
+}
+
+#globalNotesTable thead th {
+  padding: 6px 8px;
+  font-size: 11px;
+  background: #0f141b;
+  border-bottom: 1px solid #243041;
+}
+
+#globalNotesTable tbody {
+  display: block;
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
+}
+
+#globalNotesTable tbody tr {
+  display: table;
+  width: 100%;
+  table-layout: fixed;
+}
+
+#globalNotesTable td {
+  padding: 4px 6px;
+  border-bottom: 1px solid #1e2630;
+  background: transparent;
+  vertical-align: middle;
+}
+
+#globalNotesTable td input {
+  width: 100%;
+  padding: 5px 8px;
+  margin: 0;
+  background: #0f141b;
+  border: 1px solid #243041;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #e8e8e8;
+  font-family: inherit;
+}
+
+#globalNotesTable td input:focus {
+  outline: none;
+  border-color: #3a6da8;
+}
+
+#globalNotesTable .note-del {
+  width: 26px;
+  height: 26px;
+  font-size: 12px;
+  padding: 0;
 }
 
 /* Row action buttons (hover reveal) */
@@ -887,3 +1021,21 @@ input[type="checkbox"]:checked {
 .toggle-switch input:focus-visible + .toggle-slider { box-shadow: 0 0 0 2px #58a6ff44; }
 .toggle-row { display: inline-flex; align-items: center; gap: 8px; margin: 0; }
 .toggle-row .filter-label { font-size: 12px; color: #aab; margin: 0; white-space: nowrap; }
+
+/* Timeline day reorder animation */
+@keyframes timelineDaySlide {
+  from { opacity: 0; transform: translateY(-12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.timeline-day-wrapper {
+  animation: timelineDaySlide 0.3s ease-out;
+}
+.timeline-entry-del {
+  width: 16px;
+  height: 16px;
+  font-size: 10px;
+  line-height: 1;
+  border-width: 1px;
+  border-radius: 4px;
+  padding: 0;
+}

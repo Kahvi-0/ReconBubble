@@ -80,8 +80,8 @@ function bindTagHandlers() {
 }
 
   function bindNoteHandlers() {
-    const noteForm = document.getElementById("noteAddForm");
-    const noteMsg = document.getElementById("noteAddMsg");
+    const noteForm = document.getElementById("sidebarNoteAddForm");
+    const noteMsg = document.getElementById("sidebarNoteAddMsg");
     if (noteForm) {
       noteForm.addEventListener("submit", async (ev) => {
         ev.preventDefault();
@@ -157,7 +157,7 @@ function bindTagHandlers() {
   }
 
   async function openHost(hostId) {
-    const resp = await fetch(`/api/host/${hostId}`);
+    const resp = await fetch(`/api/host/${hostId}`, { cache: "no-store" });
     if (!resp.ok) return;
     const data = await resp.json();
 
@@ -174,7 +174,7 @@ function bindTagHandlers() {
     body.innerHTML = `
       <div class="card">
         <h2>Edit asset</h2>
-        <form id="hostUpdateForm">
+        <form id="sidebarHostUpdateForm">
           <input type="hidden" name="host_id" value="${data.host.id}"/>
           <label>IP</label>
           <input name="ip" value="${esc(data.host.ip)}" required />
@@ -187,13 +187,13 @@ function bindTagHandlers() {
           <label>Associate domains/subdomains (one per line)</label>
           <textarea name="domains_raw" rows="6" placeholder="app.example.com">${esc((data.domains||[]).join("\n"))}</textarea>
           <button class="btn" type="submit">Save</button>
-          <div id="hostUpdateMsg" class="muted" style="margin-top:8px;"></div>
+          <div id="sidebarHostUpdateMsg" class="muted" style="margin-top:8px;"></div>
         </form>
       </div>
 
 <div class="card">
   <h2>Notes</h2>
-  <form id="noteAddForm" method="post" action="/api/note/add">
+  <form id="sidebarNoteAddForm" method="post" action="/api/note/add">
     <input type="hidden" name="object_type" value="host"/>
     <input type="hidden" name="object_id" value="${data.host.id}"/>
     <label>Severity</label>
@@ -208,7 +208,7 @@ function bindTagHandlers() {
     <label style="margin-top:8px;">Note</label>
     <textarea name="body" rows="5" required></textarea>
     <button class="btn" type="submit" style="margin-top:10px;">Save note</button>
-    <div id="noteAddMsg" class="muted" style="margin-top:8px;"></div>
+    <div id="sidebarNoteAddMsg" class="muted" style="margin-top:8px;"></div>
   </form>
 
   <div style="margin-top:14px;">
@@ -224,7 +224,7 @@ function bindTagHandlers() {
 
       <div class="card">
         <h2>Services</h2>
-        <button class="btn" id="createServiceBtn" type="button" style="margin-bottom:10px;">Add service</button>
+        <button class="btn" id="sidebarCreateServiceBtn" type="button" style="margin-bottom:10px;">Add service</button>
         ${ (data.services||[]).length ? `
           <table>
             <thead><tr><th>Port</th><th>Proto</th><th>State</th><th>Service</th></tr></thead>
@@ -251,7 +251,7 @@ function bindTagHandlers() {
       const h = data.host;
       const alreadyInTopology = async () => {
         try {
-          const r = await fetch("/api/topology");
+          const r = await fetch("/api/topology", { cache: "no-store" });
           if (!r.ok) return false;
           const j = await r.json();
           if (!j.ok) return false;
@@ -304,8 +304,8 @@ function bindTagHandlers() {
       }
     }
 
-    const form = document.getElementById("hostUpdateForm");
-    const msg = document.getElementById("hostUpdateMsg");
+    const form = document.getElementById("sidebarHostUpdateForm");
+    const msg = document.getElementById("sidebarHostUpdateMsg");
     form && form.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       msg.textContent = "Saving...";
@@ -314,15 +314,30 @@ function bindTagHandlers() {
       const r = await fetch("/api/host/update", { method: "POST", body: fd });
       const j = await r.json().catch(()=>({ok:false}));
       if (j.ok) {
-        msg.textContent = "Saved. Refreshing…";
-        setTimeout(() => location.reload(), 450);
+        msg.textContent = "Saved.";
+        const savedHostId = data.host.id;
+        openHost(savedHostId);
+        refreshAssetServicesInline(savedHostId);
+        const detailHostIdEl = document.getElementById("detailHostId");
+        if (detailHostIdEl && parseInt(detailHostIdEl.value, 10) === savedHostId) {
+          const ipInput = document.getElementById("detailIp");
+          if (ipInput) ipInput.value = fd.get("ip");
+          const hostnameInput = document.getElementById("detailHostname");
+          if (hostnameInput) hostnameInput.value = fd.get("hostname");
+          const tagInput = document.getElementById("detailTag");
+          if (tagInput) tagInput.value = fd.get("tag");
+          const osInput = document.getElementById("detailOsGuess");
+          if (osInput) osInput.value = fd.get("os_guess");
+          const titleEl = document.querySelector(".asset-detail-name");
+          if (titleEl) titleEl.textContent = (fd.get("ip") || "").toString();
+        }
       } else {
         msg.textContent = j.error || "Update failed.";
         msg.style.color = "#f87171";
       }
     });
 
-    const createBtn = document.getElementById("createServiceBtn");
+    const createBtn = document.getElementById("sidebarCreateServiceBtn");
     createBtn && createBtn.addEventListener("click", () => {
       openServiceCreatePopup(data.host.id);
     });
@@ -336,7 +351,7 @@ function bindTagHandlers() {
   }
 
   async function openService(serviceId) {
-    const resp = await fetch(`/api/service/${serviceId}`);
+    const resp = await fetch(`/api/service/${serviceId}`, { cache: "no-store" });
     if (!resp.ok) return;
     const data = await resp.json();
     if (!data.ok) return;
@@ -377,19 +392,12 @@ function bindTagHandlers() {
       backBtn.style.marginRight = "8px";
       header.insertBefore(backBtn, header.lastElementChild);
     }
-    if (data.host) {
-      backBtn.href = "#";
-      backBtn.textContent = "Back to asset";
-      backBtn.style.display = "";
-      const hostId = data.host.id;
-      backBtn.onclick = (ev) => { ev.preventDefault(); openHost(hostId); };
-    } else {
-      backBtn.style.display = "none";
-    }
+    backBtn.style.display = "none";
   }
 
   function openServiceEditPopup(serviceData) {
     const svc = serviceData.service || {};
+    const hostId = (serviceData.host || {}).id;
     const modal = document.createElement("div");
     modal.style.position = "fixed";
     modal.style.inset = "0";
@@ -458,6 +466,7 @@ function bindTagHandlers() {
         msg.textContent = "Saved.";
         closePopup();
         openService(svc.id);
+        if (hostId) refreshAssetServicesInline(hostId);
       } else {
         msg.textContent = j.error || "Update failed.";
       }
@@ -529,15 +538,37 @@ function bindTagHandlers() {
       if (j.ok) {
         msg.textContent = "Saved.";
         closePopup();
-        openHost(hostId);
+        refreshAssetServicesInline(hostId);
       } else {
         msg.textContent = j.error || "Create failed.";
       }
     });
   }
 
+  function refreshAssetServicesInline(hostId) {
+    fetch("/api/host/" + hostId, { cache: "no-store" })
+      .then(function(resp) { return resp.json(); })
+      .then(function(data) {
+        if (!data.ok || !data.services) return;
+        var servicesList = document.getElementById("assetServicesList");
+        if (!servicesList) return;
+        if (data.services.length) {
+          var escFn = function(t) { return (t||"").replace(/</g, "&lt;"); };
+          var rows = data.services.map(function(s) {
+            return "<tr><td><a href='#' data-open-service='" + s.id + "'>" + s.port + "</a></td><td>" + escFn(s.proto) + "</td><td>" + escFn(s.state) + "</td><td>" + escFn(s.service_name) + "</td></tr>";
+          }).join("");
+          servicesList.innerHTML = "<table><thead><tr><th>Port</th><th>Proto</th><th>State</th><th>Service</th></tr></thead><tbody>" + rows + "</tbody></table>";
+        } else {
+          servicesList.innerHTML = "<div class='muted'>No services stored.</div>";
+        }
+        if (typeof window._bindAssetServiceLinks === "function") window._bindAssetServiceLinks();
+        var svcCountTd = document.querySelector(".asset-row[data-id='" + hostId + "'] td:nth-child(6)");
+        if (svcCountTd) svcCountTd.textContent = data.services.length;
+      }).catch(function() {});
+  }
+
   async function openSubdomain(fqdn) {
-    const resp = await fetch(`/api/subdomain?fqdn=${encodeURIComponent(fqdn)}`);
+    const resp = await fetch(`/api/subdomain?fqdn=${encodeURIComponent(fqdn)}`, { cache: "no-store" });
     if (!resp.ok) return;
     const data = await resp.json();
     if (!data.ok) return;
@@ -674,7 +705,7 @@ async function openCloudCreate() {
 }
 
 async function openCloud(id) {
-  const resp = await fetch("/api/cloud/" + id);
+  const resp = await fetch("/api/cloud/" + id, { cache: "no-store" });
   if (!resp.ok) return;
   const data = await resp.json();
   const backBtnCloud = document.getElementById("sidebarBack");
@@ -794,7 +825,7 @@ async function openCloud(id) {
 }
 
 async function openRegistrarEdit(rootDomain) {
-  const resp = await fetch(`/api/registrar?domain=${encodeURIComponent(rootDomain)}`);
+    const resp = await fetch(`/api/registrar?domain=${encodeURIComponent(rootDomain)}`, { cache: "no-store" });
   if (!resp.ok) return;
   const data = await resp.json();
   const item = data.item || {};
@@ -907,6 +938,6 @@ async function openRegistrarCreate() {
   document.getElementById("registrarCancelBtn").addEventListener("click", hide);
 }
 
-window.ReconSidebar = { openHost, openService, openSubdomain, openHostCreate, openCloud, openCloudCreate, openRegistrarEdit, openRegistrarCreate, hide };
+window.ReconSidebar = { openHost, openService, openSubdomain, openHostCreate, openCloud, openCloudCreate, openRegistrarEdit, openRegistrarCreate, openServiceCreatePopup, hide };
 
 })();

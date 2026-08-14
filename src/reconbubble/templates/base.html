@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>ReconBubble</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg"/>
-  <link rel="stylesheet" href="/static/app.css?v=5"/>
+  <link rel="stylesheet" href="/static/app.css?v=13"/>
 </head>
 <body>
   <header class="topbar">
@@ -86,14 +86,8 @@
           </div>
         </div>
         <a href="/topology" {{ 'class=current' if request.url.path == '/topology' }}>Attack Topology</a>
-          <div class="nav-dropdown" id="credentialsDropdown">
-          <a href="#" class="nav-dropbtn">Credentials ▾</a>
-          <div class="nav-dropdown-content">
-             <a href="/users" {{ 'class=current' if request.url.path == '/users' }}>Users</a>
-             <a href="/password-spray" {{ 'class=current' if request.url.path == '/password-spray' }}>Password Spray</a>
-              <a href="/app-credentials" {{ 'class=current' if request.url.path == '/app-credentials' }}>App Credentials</a>
-           </div>
-        </div>
+        <a href="/users" {{ 'class=current' if request.url.path == '/users' }}>Users</a>
+
       <a class="btn" href="/upload">Upload</a>
     </nav>
     <img class="firegif firegif-right" src="/static/fire.gif" alt="retro fire"/>
@@ -103,14 +97,43 @@
   </main>
 
   <aside id="globalNotesPanel" class="global-notes-panel" aria-hidden="true">
-    <div id="globalNotesHandle" class="global-notes-handle">Notes</div>
+    <div id="globalNotesHandle" class="global-notes-handle">Notes <span class="notes-lock-wrapper"><span id="globalNotesToggle" class="notes-lock" title="Pin/Unpin">🔓</span></span></div>
     <div class="global-notes-content">
       <div class="global-notes-header">
-        <strong>Quick Notes</strong>
-        <button id="globalNotesToggle" class="btn" type="button">Pin</button>
+        <div class="notes-tabs">
+          <button class="notes-tab active" data-notes-tab="quick" type="button">Quick Notes</button>
+          <button class="notes-tab" data-notes-tab="table" type="button">Notes</button>
+          <button class="notes-tab" data-notes-tab="spray" type="button">Spray</button>
+          <button class="notes-tab" data-notes-tab="timeline" type="button">Timeline</button>
+        </div>
       </div>
-      <textarea id="globalNotesText" placeholder="Take notes here..."></textarea>
-      <div id="globalNotesStatus" class="muted" style="opacity:0;"></div>
+      <div id="notesQuickTab" class="notes-tab-panel">
+        <textarea id="globalNotesText" placeholder="Take notes here..."></textarea>
+        <div id="globalNotesStatus" class="muted" style="opacity:0;"></div>
+      </div>
+      <div id="notesTableTab" class="notes-tab-panel" style="display:none;">
+        <table id="globalNotesTable">
+          <thead>
+            <tr><th>Title</th><th>Notes</th><th style="width:36px;"></th></tr>
+          </thead>
+          <tbody id="globalNotesTableBody"></tbody>
+        </table>
+        <button class="btn" id="globalNotesAddRow" type="button" style="margin:10px;">+ Add Row</button>
+      </div>
+      <div id="notesSprayTab" class="notes-tab-panel" style="display:none;">
+        <div id="sprayServiceList" style="display:flex; gap:6px; margin:8px 10px 4px; flex-wrap:wrap;"></div>
+        <div id="sprayActions" style="display:flex; gap:6px; margin:4px 10px 4px;">
+          <button class="btn" id="sprayAddService" type="button" style="font-size:11px; padding:4px 8px;">+ Service</button>
+          <button class="btn" id="sprayCopyToWord" type="button" style="font-size:11px; padding:4px 8px; background:#166534; border-color:#22c55e;">Copy</button>
+        </div>
+        <div id="sprayContent" style="overflow-y:auto; flex:1; padding:6px 10px;"></div>
+      </div>
+      <div id="notesTimelineTab" class="notes-tab-panel" style="display:none;">
+        <div style="display:flex; gap:6px; margin:4px 10px 4px; padding-top:6px;">
+          <button class="btn" id="timelineAddDay" type="button" style="font-size:11px; padding:4px 8px;">+Day</button>
+        </div>
+        <div id="timelineContent" style="overflow-y:auto; flex:1; padding:6px 10px;"></div>
+      </div>
     </div>
   </aside>
 
@@ -126,7 +149,7 @@
 
   {% block scripts %}{% endblock %}
   <script src="/static/sidebar.js?v=9"></script>
-  <script src="/static/global_notes_panel.js?v=3"></script>
+  <script src="/static/global_notes_panel.js?v=28"></script>
   <script>
     const allDropdowns = [
       document.getElementById("perimeterDropdown"),

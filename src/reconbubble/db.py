@@ -689,4 +689,72 @@ def migrate_sqlite(engine) -> None:
                         )
         except Exception:
             pass
+
+        # name_items: add application column if missing
+        try:
+            if conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='name_items'"
+                )
+            ).fetchone():
+                if not _has_column(conn, "name_items", "application"):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE name_items ADD COLUMN application VARCHAR(255) DEFAULT ''"
+                        )
+                    )
+        except Exception:
+            pass
+
+        # global_notes: create table if missing
+        try:
+            if not conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='global_notes'"
+                )
+            ).fetchone():
+                conn.execute(
+                    text(
+                        """CREATE TABLE global_notes (
+                            id INTEGER PRIMARY KEY,
+                            title VARCHAR(255) DEFAULT '',
+                            body TEXT DEFAULT '',
+                            order_index INTEGER DEFAULT 0,
+                            created_at DATETIME,
+                            updated_at DATETIME
+                        )"""
+                    )
+                )
+        except Exception:
+            pass
+
+        # timeline_days table
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS timeline_days (
+          id INTEGER PRIMARY KEY,
+          day_date VARCHAR(10) DEFAULT '',
+          created_at DATETIME
+        )
+        """)
+        )
+
+        # timeline_entries table
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS timeline_entries (
+          id INTEGER PRIMARY KEY,
+          day_id INTEGER NOT NULL,
+          content TEXT DEFAULT '',
+          order_index INTEGER DEFAULT 0,
+          created_at DATETIME
+        )
+        """)
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_timeline_entries_day_id ON timeline_entries(day_id)"
+            )
+        )
+
     conn.commit()

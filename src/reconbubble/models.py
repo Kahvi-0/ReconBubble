@@ -52,6 +52,9 @@ class Subdomain(Base):
     prowl_ips: Mapped[str] = mapped_column(Text, default="")
     prowl_registrar: Mapped[str] = mapped_column(String(255), default="")
     prowl_netblocks: Mapped[str] = mapped_column(Text, default="")
+    complete: Mapped[int] = mapped_column(Integer, default=0)
+    inprogress: Mapped[int] = mapped_column(Integer, default=0)
+    waf: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
     )
@@ -153,6 +156,20 @@ class Note(Base):
     )
 
 
+class GlobalNote(Base):
+    __tablename__ = "global_notes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(255), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    order_index: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow
+    )
+
+
 class CloudItem(Base):
     __tablename__ = "cloud_items"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -203,6 +220,7 @@ class NameItem(Base):
     phone: Mapped[str] = mapped_column(String(64), default="")
     ad_username: Mapped[str] = mapped_column(String(255), default="")
     domain: Mapped[str] = mapped_column(String(255), default="")
+    application: Mapped[str] = mapped_column(String(255), default="")
     password: Mapped[str] = mapped_column(String(255), default="")
     ntlm_hash: Mapped[str] = mapped_column(String(255), default="")
     ntlm_v1: Mapped[str] = mapped_column(String(255), default="")
@@ -407,6 +425,30 @@ class DomainCorrelation(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     primary_domain: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     aliases: Mapped[str] = mapped_column(Text, default="")
+
+
+class TimelineDay(Base):
+    __tablename__ = "timeline_days"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    day_date: Mapped[str] = mapped_column(String(10), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+    entries: Mapped[list["TimelineEntry"]] = relationship(
+        back_populates="day", cascade="all, delete-orphan"
+    )
+
+
+class TimelineEntry(Base):
+    __tablename__ = "timeline_entries"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    day_id: Mapped[int] = mapped_column(ForeignKey("timeline_days.id"), index=True)
+    content: Mapped[str] = mapped_column(Text, default="")
+    order_index: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+    day: Mapped["TimelineDay"] = relationship(back_populates="entries")
 
 
 class SmbShare(Base):

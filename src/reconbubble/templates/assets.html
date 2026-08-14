@@ -476,14 +476,43 @@ html { scrollbar-gutter: stable; }
     hostUpdateForm && hostUpdateForm.addEventListener("submit", async (ev) => {
       ev.preventDefault();
       const fd = new FormData(hostUpdateForm);
+      const hostId = detailHostId.value;
+      const endpoint = hostId && parseInt(hostId, 10) > 0 ? "/api/host/update" : "/api/host/create";
+      if (!hostId || parseInt(hostId, 10) <= 0) {
+        fd.delete("host_id");
+      }
       hostUpdateMsg.textContent = "Saving...";
-      const r = await fetch("/api/host/update", { method: "POST", body: fd });
+      const r = await fetch(endpoint, { method: "POST", body: fd });
       const j = await r.json().catch(() => ({ ok: false, error: "Error" }));
       if (j.ok) {
-        hostUpdateMsg.textContent = "Saved. Refreshing…";
-        setTimeout(() => location.reload(), 450);
+        const isNew = !hostId || parseInt(hostId, 10) <= 0;
+        if (isNew) {
+          hostUpdateMsg.textContent = "Saved. Refreshing…";
+          setTimeout(() => location.reload(), 300);
+        } else {
+          hostUpdateMsg.textContent = "Saved.";
+          const savedIp = fd.get("ip");
+          const savedHostname = fd.get("hostname");
+          const savedTag = fd.get("tag");
+          const savedOsGuess = fd.get("os_guess");
+          detailIp.value = savedIp;
+          detailHostname.value = savedHostname;
+          detailTag.value = savedTag;
+          detailOsGuess.value = savedOsGuess;
+          document.querySelector(".asset-detail-name").textContent = savedIp;
+          var row = document.querySelector('.asset-row[data-id="' + parseInt(hostId, 10) + '"]');
+          if (row) {
+            var ipA = row.querySelector("td:nth-child(4) a");
+            if (ipA) ipA.textContent = savedIp;
+            var hTd = row.querySelector("td:nth-child(5)");
+            if (hTd) hTd.textContent = savedHostname;
+            var tTd = row.querySelector("td:nth-child(9)");
+            if (tTd) tTd.textContent = savedTag;
+            row.setAttribute("data-tag", savedTag || "");
+          }
+        }
       } else {
-        hostUpdateMsg.textContent = j.error || "Update failed.";
+        hostUpdateMsg.textContent = j.error || "Save failed.";
         hostUpdateMsg.style.color = "#f87171";
       }
     });
@@ -495,8 +524,17 @@ html { scrollbar-gutter: stable; }
       const r = await fetch("/api/note/add", { method: "POST", body: fd });
       const j = await r.json().catch(() => ({ ok: false, error: "Error" }));
       if (j.ok) {
-        noteAddMsg.textContent = "Note saved. Refreshing…";
-        setTimeout(() => location.reload(), 450);
+        noteAddMsg.textContent = "Note saved.";
+        noteAddForm.reset();
+        noteObjectId.value = detailHostId.value;
+        const newNote = document.createElement("div");
+        newNote.className = "card";
+        newNote.style.margin = "10px 0";
+        newNote.innerHTML = '<div class="muted">just now · <b>' + esc(fd.get("severity")) + '</b> · ' + esc(fd.get("tags")||"") + '</div><pre class="note">' + esc(fd.get("body")) + '</pre><button class="btn btn-small" data-note-del="' + j.id + '" type="button" style="margin-top:8px;">Delete</button>';
+        var noNotes = assetNotesList.querySelector('p.muted');
+        if (noNotes) assetNotesList.removeChild(noNotes);
+        assetNotesList.insertBefore(newNote, assetNotesList.firstChild);
+        bindNoteDeleteHandlers();
       } else {
         noteAddMsg.textContent = j.error || "Failed";
         noteAddMsg.style.color = "#f87171";
@@ -528,7 +566,7 @@ html { scrollbar-gutter: stable; }
       const h = hostData.host;
       const alreadyInTopology = async () => {
         try {
-          const r = await fetch("/api/topology");
+          const r = await fetch("/api/topology", { cache: "no-store" });
           if (!r.ok) return false;
           const j = await r.json();
           if (!j.ok) return false;
@@ -591,13 +629,14 @@ html { scrollbar-gutter: stable; }
         });
       });
     }
+    window._bindAssetServiceLinks = bindServiceLinks;
 
     document.querySelectorAll("[data-open-host]").forEach(a => {
       a.addEventListener("click", async (ev) => {
         ev.preventDefault();
         const hostId = parseInt(a.getAttribute("data-open-host"), 10);
         try {
-          const r = await fetch(`/api/host/${hostId}`);
+          const r = await fetch(`/api/host/${hostId}`, { cache: "no-store" });
           const j = await r.json();
           if (j.ok) {
             populateAssetForm(j);
