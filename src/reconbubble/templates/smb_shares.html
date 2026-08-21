@@ -1,10 +1,37 @@
 {% extends "base.html" %}
+{% macro access_pill(access) %}
+  {% if access in ('READ', 'READ_LIST', 'READ_DATA') %}
+  <span class="pill-access-read">{{ access }}</span>
+  {% elif access in ('WRITE', 'WRITE_DATA', 'CHANGE') %}
+  <span class="pill-access-write">{{ access }}</span>
+  {% elif access in ('FULL', 'FULL_CONTROL', 'FULL_ACCESS') %}
+  <span class="pill-access-full">{{ access }}</span>
+  {% else %}
+  <span class="pill-access-none">{{ access or 'UNKNOWN' }}</span>
+  {% endif %}
+{% endmacro %}
+{% macro access_cell(row) %}
+  {% if row %}
+  <div class="smb-cell-top">
+    {{ access_pill(row.access) }}
+    <span class="smb-cell-actions">
+      <button class="smb-share-edit" data-edit="{{ row.id }}" data-host="{{ row.host }}" data-share="{{ row.share }}" data-access="{{ row.access }}" data-notes="{{ row.notes }}" data-user="{{ row.user_id or 0 }}" title="Edit">&#9998;</button>
+      <button class="smb-share-del" data-del="{{ row.id }}" title="Delete">&#10005;</button>
+    </span>
+  </div>
+  {% if row.notes %}
+  <div class="smb-cell-notes muted" style="font-size:11px; white-space:pre-wrap;">{{ row.notes }}</div>
+  {% endif %}
+  {% else %}
+  <span class="muted">-</span>
+  {% endif %}
+{% endmacro %}
 {% block content %}
 <h1>SMB Shares</h1>
 
 <div class="card" style="margin-bottom:20px; display:flex; justify-content:space-between; align-items:center; gap:12px;">
   <button class="btn" id="addShareBtn" type="button">Add share entries</button>
-  <span class="muted">{{ shares|length }} share{{ 's' if shares|length != 1 else '' }} across {{ hosts_map|length }} host{{ 's' if hosts_map|length != 1 else '' }}</span>
+  <span class="muted">{{ shares|length }} access entries across {{ hosts_list|length }} host{{ 's' if hosts_list|length != 1 else '' }}</span>
 </div>
 
 <style>
@@ -27,15 +54,30 @@
   font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: space-between;
 }
 .smb-host-header code { color: #7dd3fc; background: #1e3a5f; padding: 2px 8px; border-radius: 3px; font-size: 13px; }
-.smb-share-row { padding: 8px 14px; border-bottom: 1px solid #1a2332; }
-.smb-share-row:hover { background: #0f141b; }
-.smb-share-row:last-child { border-bottom: none; }
-.smb-share-top { display: flex; align-items: center; gap: 8px; }
-.smb-share-name { font-family: 'Courier New', monospace; font-size: 13px; color: #e8e8e8; white-space: nowrap; }
-.smb-share-spacer { flex: 1; }
-.smb-share-access-inline { flex-shrink: 0; }
-.smb-share-actions { flex-shrink: 0; display: flex; gap: 4px; }
-.smb-share-bottom { margin-top: 4px; }
+.smb-host-table-wrap { overflow-x: auto; }
+.smb-access-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.smb-access-table th, .smb-access-table td {
+  border-bottom: 1px solid #1a2332;
+  padding: 8px 12px;
+  vertical-align: top;
+  text-align: left;
+  min-width: 140px;
+}
+.smb-access-table th {
+  background: #0f1318;
+  font-size: 12px;
+  font-weight: 600;
+  color: #cbd5e1;
+  white-space: nowrap;
+}
+.smb-access-table tr:last-child td { border-bottom: none; }
+.smb-access-table td:first-child {
+  font-family: 'Courier New', monospace;
+  color: #e8e8e8;
+  white-space: nowrap;
+}
+.smb-cell-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.smb-cell-actions { display: inline-flex; gap: 2px; }
 .smb-share-edit, .smb-share-del {
   opacity: 0.4; transition: opacity 0.2s; cursor: pointer;
   background: none; border: none; font-size: 14px; padding: 2px 6px;
@@ -72,7 +114,17 @@
     <div class="card" style="margin-bottom:0;">
       <form id="smbForm">
         <input type="hidden" id="smbEditId" value="" />
-        <label>Host *</label>
+        <label>User *</label>
+        <select id="smbUserId" required>
+          <option value="">Select user…</option>
+          {% for u in all_users %}
+          <option value="{{ u.id }}">{{ user_label(u) }}</option>
+          {% endfor %}
+        </select>
+        {% if not all_users %}
+        <p class="muted" style="font-size:12px;">No users found. <a href="/users">Add a user first</a>.</p>
+        {% endif %}
+        <label style="margin-top:12px;">Host *</label>
         <input id="smbHostInput" placeholder="192.168.1.10 or HOSTNAME" required />
         <div id="smbSharesContainer" style="margin-top:12px;"></div>
         <button type="button" class="btn muted smb-add-row-btn" id="smbAddRowBtn">+ Add another share</button>
@@ -80,52 +132,51 @@
         <div id="smbFormMsg" class="muted" style="margin-top:8px;"></div>
       </form>
     </div>
-    <div class="card" style="margin-top:12px;" id="smbPasteCard">
-      <h3 style="margin-top:0; font-size:13px;">Paste SMBMAP data</h3>
-      <p class="muted" style="font-size:11px; margin-bottom:8px;">Format: <code>host:IP, share:NAME, privs:PERMS</code></p>
-      <textarea id="smbPasteArea" rows="5" placeholder="host:192.168.4.169, share:ADMIN$, privs:NO_ACCESS"></textarea>
-      <button class="btn" id="smbPasteBtn" type="button" style="margin-top:8px;">Parse & Paste</button>
+    <div class="card" style="margin-top:12px;" id="smbUploadCard">
+      <h3 style="margin-top:0; font-size:13px;">Upload SMBMAP data</h3>
+      <p class="muted" style="font-size:12px; margin-bottom:8px;">Import SMBMAP output and assign it to a user from the upload page.</p>
+      <a class="btn" href="/upload">Open Upload</a>
     </div>
   </div>
 </div>
 
-{% if hosts_map %}
+{% if hosts_list %}
 <div class="card">
   <h2>Discovered Shares</h2>
-  {% for host, host_shares in hosts_map.items() %}
+  {% for item in hosts_list %}
   <div class="smb-host-card">
     <div class="smb-host-header">
-      <code>{{ host }}</code>
-      <span class="muted" style="font-size:12px; font-weight:400;">{{ host_shares|length }} share{{ 's' if host_shares|length != 1 else '' }}</span>
+      <code>{{ item.host }}</code>
+      <span class="muted" style="font-size:12px; font-weight:400;">{{ item.share_count }} share{{ 's' if item.share_count != 1 else '' }}</span>
     </div>
-    {% for sh in host_shares %}
-    <div class="smb-share-row">
-      <div class="smb-share-top">
-        <span class="smb-share-name">{{ sh.share }}</span>
-        <span class="smb-share-spacer"></span>
-        <span class="smb-share-access-inline">
-          {% if sh.access in ('READ', 'READ_LIST', 'READ_DATA') %}
-          <span class="pill-access-read">{{ sh.access }}</span>
-          {% elif sh.access in ('WRITE', 'WRITE_DATA', 'CHANGE') %}
-          <span class="pill-access-write">{{ sh.access }}</span>
-          {% elif sh.access in ('FULL', 'FULL_CONTROL', 'FULL_ACCESS') %}
-          <span class="pill-access-full">{{ sh.access }}</span>
-          {% else %}
-          <span class="pill-access-none">{{ sh.access or 'UNKNOWN' }}</span>
-          {% endif %}
-        </span>
-        <span class="smb-share-actions">
-          <button class="smb-share-edit" data-edit="{{ sh.id }}" data-host="{{ sh.host }}" data-share="{{ sh.share }}" data-access="{{ sh.access }}" data-notes="{{ sh.notes }}" title="Edit">&#9998;</button>
-          <button class="smb-share-del" data-del="{{ sh.id }}" title="Delete">&#10005;</button>
-        </span>
-      </div>
-      {% if sh.notes %}
-      <div class="smb-share-bottom">
-        <span class="muted smb-share-notes" style="font-size:11px; white-space:pre-wrap;">{{ sh.notes }}</span>
-      </div>
-      {% endif %}
+    <div class="smb-host-table-wrap">
+      <table class="smb-access-table">
+        <thead>
+          <tr>
+            <th>Share</th>
+            {% for u in column_users %}
+            <th>{{ user_label(u) }}</th>
+            {% endfor %}
+            {% if has_unassigned %}
+            <th>No user</th>
+            {% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for group in item.groups %}
+          <tr>
+            <td>{{ group.share }}</td>
+            {% for u in column_users %}
+            <td>{{ access_cell(group.by_user.get(u.id)) }}</td>
+            {% endfor %}
+            {% if has_unassigned %}
+            <td>{{ access_cell(group.unassigned) }}</td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
     </div>
-    {% endfor %}
   </div>
   {% endfor %}
 </div>
@@ -145,6 +196,7 @@
   var smbPanelClose = document.getElementById('smbPanelClose');
   var addShareBtn = document.getElementById('addShareBtn');
   var smbPanelTitle = document.getElementById('smbPanelTitle');
+  var smbUserId = document.getElementById('smbUserId');
   var smbHostInput = document.getElementById('smbHostInput');
   var smbSharesContainer = document.getElementById('smbSharesContainer');
   var smbAddRowBtn = document.getElementById('smbAddRowBtn');
@@ -174,6 +226,7 @@
 
   function resetForm() {
     smbEditId.value = '';
+    smbUserId.value = '';
     smbHostInput.value = '';
     smbHostInput.readOnly = false;
     smbHostInput.disabled = false;
@@ -184,7 +237,6 @@
     smbSubmitBtn.textContent = 'Add Entries';
     smbAddRowBtn.style.display = '';
     document.getElementById('smbFormMsg').textContent = '';
-    document.getElementById('smbPasteCard').style.display = '';
   }
 
   function showPanel() {
@@ -208,6 +260,8 @@
   document.querySelectorAll('.smb-share-edit').forEach(function(btn) {
     btn.addEventListener('click', function() {
       smbEditId.value = btn.getAttribute('data-edit');
+      var dataUser = btn.getAttribute('data-user') || '0';
+      smbUserId.value = dataUser === '0' ? '' : dataUser;
       smbHostInput.value = btn.getAttribute('data-host');
       smbHostInput.readOnly = true;
       smbHostInput.disabled = true;
@@ -219,7 +273,6 @@
       smbSubmitBtn.textContent = 'Save Changes';
       smbAddRowBtn.style.display = 'none';
       document.getElementById('smbFormMsg').textContent = '';
-      document.getElementById('smbPasteCard').style.display = 'none';
       showPanel();
     });
   });
@@ -237,6 +290,7 @@
       fd.append('share', editRow.querySelector('.smb-share-field').value.trim());
       fd.append('access', editRow.querySelector('.smb-access-field').value);
       fd.append('notes', editRow.querySelector('.smb-notes-field').value.trim());
+      fd.append('user_id', smbUserId.value ? parseInt(smbUserId.value, 10) : 0);
       fetch('/api/smb-shares/update', {method:'POST', body:fd})
         .then(function(r) { return r.json(); })
         .then(function(j) {
@@ -247,6 +301,8 @@
     }
     var host = smbHostInput.value.trim();
     if (!host) { msg.textContent = 'Host is required'; return; }
+    var selectedUserId = smbUserId.value ? parseInt(smbUserId.value, 10) : 0;
+    if (!selectedUserId) { msg.textContent = 'Select a user'; return; }
     var lines = [];
     var hasValid = false;
     smbSharesContainer.querySelectorAll('.smb-share-entry').forEach(function(entry) {
@@ -262,6 +318,7 @@
     msg.textContent = 'Adding...';
     var fd = new FormData();
     fd.append('host', host);
+    fd.append('user_id', selectedUserId);
     fd.append('shares', lines.join('\n'));
     fetch('/api/smb-shares/create', {method:'POST', body:fd})
       .then(function(r) { return r.json(); })
@@ -284,14 +341,6 @@
       fetch('/api/smb-shares/delete', {method:'POST', body:fd});
       location.reload();
     });
-  });
-
-  document.getElementById('smbPasteBtn').addEventListener('click', function() {
-    var text = document.getElementById('smbPasteArea').value.trim();
-    if (!text) return;
-    var ta = document.querySelector('#pasteForm textarea[name="raw_text"]');
-    var sel = document.querySelector('#pasteForm select[name="kind"]');
-    if (ta && sel) { ta.value = text; sel.value = 'smb_shares'; document.getElementById('pasteForm').submit(); }
   });
 })();
 </script>

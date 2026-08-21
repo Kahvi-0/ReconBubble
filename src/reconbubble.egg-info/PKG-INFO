@@ -11,3 +11,4 @@ Requires-Dist: python-multipart>=0.0.6
 Requires-Dist: python-docx>=1.1.0
 Requires-Dist: typer>=0.9
 Requires-Dist: rich>=13.0
+Requires-Dist: playwright>=1.40

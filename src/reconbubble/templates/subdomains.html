@@ -10,7 +10,18 @@
   </label>
   <p class="muted">Default hides out-of-scope.</p>
   <a class="btn" href="/subdomains/export">Export in-scope</a>
+  <button class="btn" id="btnCaptureScreenshots" style="margin-left:8px;">📸 Capture Screenshots</button>
 </div>
+<div id="screenshotProgress" class="hidden">
+  <div class="progress-bar-container">
+    <div id="screenshotProgressBar" class="progress-bar-fill" style="width:0%"></div>
+  </div>
+  <p id="screenshotProgressText" class="muted">Preparing...</p>
+</div>
+<details id="screenshotErrorLog" class="hidden" style="margin:12px 0;">
+  <summary><span style="color:#ff6666;">⚠ Screenshot Errors</span> <span id="screenshotErrorCount" class="muted"></span></summary>
+  <ul id="screenshotErrorList" class="screenshot-error-list"></ul>
+</details>
 
 <div class="card">
   <h2>Subdomains by Domain</h2>
@@ -33,9 +44,10 @@
     <table style="margin-top:8px;">
       <thead><tr><th style="width:30px;"></th><th style="width:60px;font-size:11px;">Complete</th><th style="width:70px;font-size:11px;">In Progress</th><th style="width:45px;font-size:11px;">WAF</th><th>Subdomain</th><th>Prowler IPs</th><th>Resolved IPs</th><th>HTTP/HTTPS Ports</th><th>URLs</th></tr></thead>
       <tbody>
-         {% for s in subs %}
-         {% set has_urls = s.urls|length > 0 %}
-         {% set url_id = 'urls-' ~ loop.index0 ~ '-' ~ s.fqdn|replace('.', '-') %}
+          {% for s in subs %}
+          {% set url_count = s.url_count | default(0) %}
+          {% set has_urls = url_count > 0 %}
+          {% set url_id = 'urls-' ~ loop.index0 ~ '-' ~ s.fqdn|replace('.', '-') %}
          <tr class="sub-row" data-fqdn="{{ s.fqdn }}" data-complete="{{ s.complete }}" data-inprogress="{{ s.inprogress }}" data-waf="{{ s.waf }}">
            <td>
              <span class="scope-dot {% if s.in_scope %}in{% else %}out{% endif %}">●</span>
@@ -43,8 +55,8 @@
            <td><input type="checkbox" class="sub-complete" data-fqdn="{{ s.fqdn }}" {% if s.complete==1 %}checked{% endif %} /></td>
            <td><input type="checkbox" class="sub-inprogress" data-fqdn="{{ s.fqdn }}" {% if s.inprogress==1 %}checked{% endif %} {% if s.complete==1 %}disabled{% endif %} /></td>
            <td><input type="checkbox" class="sub-waf" data-fqdn="{{ s.fqdn }}" {% if s.waf==1 %}checked{% endif %} /></td>
-           {% if s.standalone_host %}
-            <td><span class="standalone-ip-row"><code class="ip-chip standalone-ip">{{ s.fqdn }}</code>{% if s.sensitive %}<span class="sensitive-banner">Sensitive</span>{% endif %}</span></td>
+            {% if s.standalone_host %}
+             <td><span class="standalone-ip-row"><a href="#" class="sub-link" data-fqdn="{{ s.fqdn }}" data-prowl='{{ s.prowl | tojson }}'><code class="ip-chip standalone-ip">{{ s.fqdn }}</code></a>{% if s.sensitive %}<span class="sensitive-banner">Sensitive</span>{% endif %}</span></td>
            <td><span class="muted">-</span></td>
            <td><span class="muted">-</span></td>
            {% else %}
@@ -56,39 +68,35 @@
               {% if s.ports %}
                 {% for ip, ports in s.ports.items() %}
                   {% for port in ports %}
-                    <code class="port-chip">{{ ip }}:{{ port }}</code><br/>
+                     <code class="port-chip" data-ip="{{ ip }}" data-port="{{ port }}" data-in-scope="{{ '1' if ip in s.in_scope_ips else '0' }}">{{ ip }}:{{ port }}</code><br/>
                   {% endfor %}
                 {% endfor %}
               {% else %}
                 <span class="muted">-</span>
               {% endif %}
             </td>
-           {% if has_urls %}
-          <td style="white-space:nowrap;">
-            <button class="btn btn-sm url-toggle" onclick="toggleDetails('{{ url_id }}')">URLs ({{ s.urls|length }})</button>
-          </td>
-          {% else %}
-          <td></td>
-          {% endif %}
-        </tr>
-        {% if has_urls %}
-        <tr class="url-row" style="display:none;">
-          <td colspan="9">
-            <details class="url-details" id="{{ url_id }}" open>
-              <summary><strong>🌐 URLs ({{ s.urls|length }})</strong></summary>
-              <ul class="url-list">
-                {% for u in s.urls %}
-                <li>
-                  <a href="{{ u.url }}" target="_blank" class="url-link">{{ u.url }}</a>
-                  {% if u.title %} <span class="muted">— {{ u.title }}</span>{% endif %}
-                  {% if u.status_code %} <span class="status-pill {% if u.status_code >= 400 %}err{% else %}ok{% endif %}">{{ u.status_code }}</span>{% endif %}
-                </li>
-                {% endfor %}
-              </ul>
-            </details>
-          </td>
-        </tr>
-        {% endif %}
+            {% if has_urls %}
+           <td style="white-space:nowrap;">
+             <button class="btn btn-sm url-toggle" data-fqdn="{{ s.fqdn }}" data-count="{{ url_count }}" data-target="{{ url_id }}" onclick="toggleUrls(this)">URLs ({{ url_count }})</button>
+           </td>
+           {% else %}
+           <td></td>
+           {% endif %}
+         </tr>
+         {% if has_urls %}
+         <tr class="url-row" id="{{ url_id }}-row" style="display:none;">
+           <td colspan="9">
+             <details class="url-details" id="{{ url_id }}">
+               <summary><strong>🌐 URLs ({{ url_count }})</strong></summary>
+               <div class="url-status muted" id="{{ url_id }}-status">Loading URLs...</div>
+               <ul class="url-list"></ul>
+               <div class="url-more">
+                 <button class="btn btn-sm hidden" id="{{ url_id }}-more" onclick="loadMoreUrls('{{ url_id }}')">Load more</button>
+               </div>
+             </details>
+           </td>
+         </tr>
+         {% endif %}
         {% endfor %}
       </tbody>
     </table>
@@ -122,6 +130,8 @@
 .url-details[open] summary::before { content: "▼ "; }
 .url-list { list-style: none; margin: 8px 0 4px 0; padding: 0; }
 .url-list li { margin: 3px 0; font-size: 13px; line-height: 1.6; }
+.url-status { margin: 6px 0; font-size: 12px; }
+.url-more { margin-top: 8px; }
 .url-link { color: #4a9eff; text-decoration: none; word-break: break-all; }
 .url-link:hover { text-decoration: underline; }
 .status-pill { font-size: 11px; padding: 1px 6px; border-radius: 3px; }
@@ -207,43 +217,358 @@
       });
     });
 
-    // Subdomain click - show Prowler info
+    // Subdomain click - open sidebar with Prowler + Screenshots
     document.querySelectorAll(".sub-link").forEach(link => {
       link.addEventListener("click", (ev) => {
         ev.preventDefault();
         const fqdn = link.getAttribute("data-fqdn");
-        const prowl = JSON.parse(link.getAttribute("data-prowl") || "{}");
-        const modal = document.getElementById("rdapModal");
-        const content = document.getElementById("rdapContent");
-        
-        let html = `<p><strong>Subdomain:</strong> ${fqdn}</p>`;
-        html += `<h3 style="margin:12px 0 8px 0; color:#4a9eff;">Prowler Data</h3>`;
-        
-        if (prowl && (prowl.ips || prowl.registrar || prowl.netblocks)) {
-          if (prowl.ips) html += `<p><strong>IPs:</strong> ${prowl.ips}</p>`;
-          if (prowl.registrar) html += `<p><strong>Registrar:</strong> ${prowl.registrar}</p>`;
-          if (prowl.netblocks) html += `<p><strong>Netblocks:</strong><br/>${String(prowl.netblocks).replace(/,/g, "<br/>")}</p>`;
-        } else {
-          html += `<p class="muted">No Prowler data for this subdomain.</p>`;
-        }
-        
-        content.innerHTML = html;
-        modal.classList.remove("hidden");
+        window.ReconSidebar && window.ReconSidebar.openSubdomain(fqdn);
       });
     });
+
+    // Screenshot capture
+    const btnCapture = document.getElementById("btnCaptureScreenshots");
+    const progressContainer = document.getElementById("screenshotProgress");
+    const progressBar = document.getElementById("screenshotProgressBar");
+    const progressText = document.getElementById("screenshotProgressText");
+
+    const errorLog = document.getElementById("screenshotErrorLog");
+    const errorList = document.getElementById("screenshotErrorList");
+    const errorCount = document.getElementById("screenshotErrorCount");
+
+    let screenshotPollTimer = null;
+    let screenshotPollInFlight = false;
+    let screenshotRestoreInFlight = false;
+    const captureButtonLabel = btnCapture ? btnCapture.textContent : "📸 Capture Screenshots";
+
+    const screenshotTargetLabel = (r) => r.mode === "forced" && r.ip
+      ? `${r.fqdn}:${r.port} [forced ${r.ip}]`
+      : `${r.fqdn}:${r.port} [dns]`;
+
+    const setCaptureButtonBusy = (busy, status = "running") => {
+      if (!btnCapture) return;
+      btnCapture.disabled = busy;
+      btnCapture.textContent = busy
+        ? (status === "pending" ? "📸 Queued..." : "📸 Capturing...")
+        : captureButtonLabel;
+    };
+
+    const screenshotQueueSuffix = (job) => {
+      return job && job.queued_count > 0 ? ` — ${job.queued_count} queued` : "";
+    };
+
+    const renderScreenshotErrors = (results) => {
+      if (!errorLog || !errorList || !errorCount) return;
+      const errors = (results || []).filter(r => !r.ok);
+      if (errors.length === 0) {
+        errorLog.classList.add("hidden");
+        errorList.innerHTML = "";
+        errorCount.textContent = "";
+        return;
+      }
+      errorList.innerHTML = errors.map(r => `<li><code>${screenshotTargetLabel(r)}</code> <span class="muted">${r.error || "capture failed"}</span></li>`).join("");
+      errorCount.textContent = `(${errors.length})`;
+      errorLog.classList.remove("hidden");
+    };
+
+    const updateScreenshotProgressFromJob = (job) => {
+      if (!progressContainer || !progressBar || !progressText) return;
+      progressContainer.classList.remove("hidden");
+      const pct = job.total > 0 ? Math.round((job.completed / job.total) * 100) : 0;
+      progressBar.style.width = `${pct}%`;
+      if (job.status === "pending") {
+        const suffix = screenshotQueueSuffix(job);
+        progressText.textContent = `Queued #${job.queue_position || 1} — ${job.current_label || "waiting"}${suffix}`;
+      } else if (job.status === "running") {
+        const suffix = screenshotQueueSuffix(job);
+        progressText.textContent = job.current_label
+          ? `Capturing ${job.completed}/${job.total} — ${job.current_label}${suffix}`
+          : `Capturing ${job.completed}/${job.total}...${suffix}`;
+      } else if (job.status === "completed") {
+        progressText.textContent = `Done! ${job.ok_count}/${job.total} succeeded.`;
+      } else if (job.status === "failed") {
+        progressText.textContent = `Error: ${job.error || "Screenshot job failed"}`;
+      }
+      renderScreenshotErrors(job.results);
+    };
+
+    const stopScreenshotPolling = () => {
+      if (screenshotPollTimer) {
+        clearTimeout(screenshotPollTimer);
+        screenshotPollTimer = null;
+      }
+    };
+
+    const pollScreenshotJob = async (jobId) => {
+      if (screenshotPollInFlight) return;
+      screenshotPollInFlight = true;
+      try {
+        const resp = await fetch(`/api/screenshot/jobs/${encodeURIComponent(jobId)}`);
+        const data = await resp.json();
+        if (!data.ok || !data.job) {
+          throw new Error(data.error || "Screenshot job not found");
+        }
+        updateScreenshotProgressFromJob(data.job);
+        if (data.job.status === "pending" || data.job.status === "running") {
+          stopScreenshotPolling();
+          setCaptureButtonBusy(true, data.job.status);
+          screenshotPollTimer = setTimeout(() => pollScreenshotJob(jobId), 700);
+        } else {
+          stopScreenshotPolling();
+          let nextJob = null;
+          try {
+            const activeResp = await fetch("/api/screenshot/jobs/active", { cache: "no-store" });
+            const activeData = await activeResp.json();
+            nextJob = activeData.ok ? activeData.active_job : null;
+          } catch {
+            nextJob = null;
+          }
+          if (nextJob) {
+            startScreenshotJobPolling(nextJob);
+            return;
+          }
+          setCaptureButtonBusy(false);
+          if (data.job.status === "completed") {
+            setTimeout(() => progressContainer.classList.add("hidden"), 4000);
+          }
+        }
+      } catch (e) {
+        stopScreenshotPolling();
+        setCaptureButtonBusy(false);
+        progressText.textContent = `Error: ${e.message}`;
+      } finally {
+        screenshotPollInFlight = false;
+      }
+    };
+
+    const startScreenshotJobPolling = (job) => {
+      if (!job || !job.id) return;
+      stopScreenshotPolling();
+      updateScreenshotProgressFromJob(job);
+      if (job.status === "pending" || job.status === "running") {
+        setCaptureButtonBusy(true, job.status);
+        screenshotPollTimer = setTimeout(() => pollScreenshotJob(job.id), 300);
+      }
+    };
+
+    const restoreScreenshotJob = async () => {
+      if (screenshotRestoreInFlight) return;
+      screenshotRestoreInFlight = true;
+      try {
+        const resp = await fetch("/api/screenshot/jobs/active", { cache: "no-store" });
+        const data = await resp.json();
+        if (!data.ok) return;
+        if (data.active_job) {
+          startScreenshotJobPolling(data.active_job);
+          return;
+        }
+        if (data.last_job) {
+          setCaptureButtonBusy(false);
+          updateScreenshotProgressFromJob(data.last_job);
+          if (data.last_job.status === "completed") {
+            setTimeout(() => progressContainer.classList.add("hidden"), 4000);
+          }
+        }
+      } catch {
+        // Restore is best-effort.
+      } finally {
+        screenshotRestoreInFlight = false;
+      }
+    };
+
+    restoreScreenshotJob();
+    window.addEventListener("visibilitychange", () => {
+      if (!document.hidden) restoreScreenshotJob();
+    });
+    window.addEventListener("focus", () => restoreScreenshotJob());
+    window.addEventListener("pageshow", (event) => {
+      if (!event.persisted) restoreScreenshotJob();
+    });
+
+    if (btnCapture) {
+      btnCapture.addEventListener("click", async () => {
+        const portChips = document.querySelectorAll(".port-chip");
+        if (portChips.length === 0) {
+          alert("No ports found to capture screenshots for.");
+          return;
+        }
+
+        const autoTargets = [];
+        const autoSeen = new Set();
+        const forcedTargets = [];
+        const forcedSeen = new Set();
+
+        portChips.forEach(chip => {
+          const row = chip.closest(".sub-row");
+          const fqdn = row ? row.getAttribute("data-fqdn") : "";
+          if (!fqdn) return;
+
+          let ip = chip.getAttribute("data-ip") || "";
+          let portRaw = chip.getAttribute("data-port") || "";
+          if (!ip || !portRaw) {
+            const parts = chip.textContent.trim().split(":");
+            if (parts.length === 2) {
+              ip = parts[0];
+              portRaw = parts[1];
+            }
+          }
+
+          const port = parseInt(portRaw, 10);
+          if (!ip || !Number.isFinite(port)) return;
+
+          const autoKey = `${fqdn}:${port}`;
+          if (!autoSeen.has(autoKey)) {
+            autoSeen.add(autoKey);
+            autoTargets.push({ fqdn, port });
+          }
+
+          if (chip.getAttribute("data-in-scope") === "1") {
+            const forcedKey = `${fqdn}:${port}:${ip}`;
+            if (!forcedSeen.has(forcedKey)) {
+              forcedSeen.add(forcedKey);
+              forcedTargets.push({ fqdn, port, ip });
+            }
+          }
+        });
+
+        const targets = [...autoTargets, ...forcedTargets];
+        if (targets.length === 0) {
+          alert("No valid targets found.");
+          return;
+        }
+
+        setCaptureButtonBusy(true, "pending");
+        progressContainer.classList.remove("hidden");
+        progressBar.style.width = "0%";
+        progressText.textContent = `Queuing capture for ${targets.length} targets...`;
+        renderScreenshotErrors([]);
+
+        try {
+          const resp = await fetch("/api/screenshot/jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ targets }),
+          });
+          const data = await resp.json();
+
+          if (resp.status === 409 && data.active_job) {
+            startScreenshotJobPolling(data.active_job);
+            return;
+          }
+          if (!data.ok || !data.job) {
+            throw new Error(data.error || "Could not queue screenshot job");
+          }
+          startScreenshotJobPolling(data.job);
+        } catch (e) {
+          setCaptureButtonBusy(false);
+          progressText.textContent = `Error: ${e.message}`;
+        }
+      });
+    }
   });
 
-   window.toggleDetails = function(id) {
-    const el = document.getElementById(id);
-    if (el) {
-      const row = el.closest(".url-row");
-      if (row) {
-        if (row.style.display === "none") {
-          row.style.display = "";
-        } else {
-          row.style.display = "none";
-        }
+  const urlState = new Map();
+
+  const renderUrlItem = (u) => {
+    const li = document.createElement("li");
+    const a = document.createElement("a");
+    a.href = u.url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.className = "url-link";
+    a.textContent = u.url;
+    li.appendChild(a);
+    if (u.title) {
+      const title = document.createElement("span");
+      title.className = "muted";
+      title.textContent = ` — ${u.title}`;
+      li.appendChild(title);
+    }
+    if (u.status_code) {
+      const pill = document.createElement("span");
+      pill.className = `status-pill ${u.status_code >= 400 ? "err" : "ok"}`;
+      pill.textContent = String(u.status_code);
+      li.appendChild(pill);
+    }
+    return li;
+  };
+
+  const updateUrlPanel = (id, state) => {
+    const statusEl = document.getElementById(`${id}-status`);
+    const moreBtn = document.getElementById(`${id}-more`);
+    if (statusEl) {
+      statusEl.textContent = state.error
+        ? `Error loading URLs: ${state.error}`
+        : `Showing ${state.loaded} of ${state.total} URLs`;
+      statusEl.style.color = state.error ? "#ff6666" : "";
+    }
+    if (moreBtn) {
+      moreBtn.classList.toggle("hidden", !state.hasMore || !!state.error);
+      moreBtn.disabled = !!state.loading;
+    }
+  };
+
+  window.loadMoreUrls = async function(id) {
+    const state = urlState.get(id);
+    if (!state || state.loading) return;
+    state.loading = true;
+    updateUrlPanel(id, state);
+    try {
+      const resp = await fetch(
+        `/api/subdomains/${encodeURIComponent(state.fqdn)}/urls?limit=${state.limit}&offset=${state.offset}`,
+        { cache: "no-store" }
+      );
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "Could not load URLs");
+      const detailsEl = document.getElementById(id);
+      const listEl = detailsEl ? detailsEl.querySelector(".url-list") : null;
+      if (listEl) {
+        const frag = document.createDocumentFragment();
+        for (const u of data.urls) frag.appendChild(renderUrlItem(u));
+        listEl.appendChild(frag);
       }
+      state.offset += data.urls.length;
+      state.loaded += data.urls.length;
+      state.total = data.total;
+      state.hasMore = data.has_more;
+      state.error = null;
+    } catch (e) {
+      state.error = e.message;
+    } finally {
+      state.loading = false;
+      updateUrlPanel(id, state);
+    }
+  };
+
+  window.toggleUrls = function(btn) {
+    const id = btn.getAttribute("data-target");
+    if (!id) return;
+    const row = document.getElementById(`${id}-row`);
+    const details = document.getElementById(id);
+    if (!row) return;
+
+    const isOpen = row.style.display !== "none";
+    if (isOpen) {
+      row.style.display = "none";
+      if (details) details.open = false;
+      return;
+    }
+
+    row.style.display = "";
+    if (details) details.open = true;
+
+    if (!urlState.has(id)) {
+      urlState.set(id, {
+        fqdn: btn.getAttribute("data-fqdn") || "",
+        total: parseInt(btn.getAttribute("data-count") || "0", 10),
+        offset: 0,
+        loaded: 0,
+        limit: 100,
+        loading: false,
+        hasMore: true,
+        error: null,
+      });
+      window.loadMoreUrls(id);
     }
   };
 

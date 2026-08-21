@@ -9,83 +9,199 @@
 {% endif %}
 
 <h1>Upload</h1>
+<style>
+  #kindSelect { max-width: 560px; }
+  .upload-mode-btn { min-width: 150px; background: #111820; border-color: #334155; color: #9aa6b2; }
+  .upload-mode-btn.active { background: #1e3a5f; border-color: #3a6da8; color: #fff; }
+  .upload-mode-btn:disabled { opacity: .45; cursor: not-allowed; }
+  .upload-source-panel { border: 1px dashed #334155; border-radius: 10px; padding: 12px; margin: 0 0 12px; background: rgba(255,255,255,.02); }
+  .upload-summary-card { position: sticky; top: 20px; }
+  .upload-summary-card th, .upload-summary-card td { padding: 8px; }
+</style>
+
 <div class="split">
-  <form class="card" action="/upload" method="post" enctype="multipart/form-data">
-    <h2>Upload a file</h2>
-    <label>Type</label>
-    <select name="kind">
-      <option value="nmap_xml">Nmap XML</option>
-      <option value="subdomains">Subdomains list</option>
-      <option value="names_emails">Names - Email List</option>
-      <option value="doc">OSINT document</option>
-    <option value="ad_users">Active Directory Users</option>
-    <option value="mixed_hashes">AD - Mixed Hashes (auto-detect)</option>
-    <option value="name_creds">Credentials → Users (merge/create)</option>
-    <option value="urls">Web URLs list</option>
-    <option value="names">Names list</option>
-    <option value="bbot">BBOT - Subdomain Enum (JSON)</option>
+<form id="uploadForm" class="card" action="/upload" method="post" enctype="multipart/form-data">
+  <h2 style="margin-top:0;">Import reconnaissance data</h2>
+
+  <label for="kindSelect">Type</label>
+  <select id="kindSelect" name="kind">
+    <option value="nmap_xml">Nmap XML</option>
+    <option value="doc">OSINT document</option>
     <option value="prowl_phase1">Prowler phase 1 (json)</option>
     <option value="zone_transfers">Prowler phase 2 - zone transfers (json)</option>
     <option value="smtp">Prowler phase 3 - SMTP (json)</option>
-    <option value="smb_shares">SMB Shares (smbmap format)</option>
-    </select>
-    <label>File(s) or Directory</label>
-    <input type="file" name="file" id="fileInput" multiple />
-    <label style="margin-top:10px;">
-      <input type="checkbox" id="dirInput" /> Include subdirectories
-    </label>
-    <p class="muted" style="font-size:12px;">Select one or more files, or a directory (enable "Include subdirectories" for folder uploads)</p>
-    <button class="btn" type="submit">Upload & Parse</button>
-  </form>
-
-  <form id="pasteForm" class="card" action="/upload" method="post">
-    <h2>Paste raw data</h2>
-    <label>Type</label>
-    <select name="kind">
-      <option value="nmap_xml">Nmap XML</option>
-      <option value="subdomains">Subdomains list</option>
-      <option value="names_emails">Names - Email List</option>
+    <option value="names_emails">Names - Email List</option>
+    <option value="names">Names list</option>
+    <option value="bbot">BBOT - Subdomain Enum (JSON)</option>
+    <option value="subdomains">Subdomains list</option>
+    <option value="urls">Web URLs list</option>
     <option value="ad_users">Active Directory Users</option>
     <option value="mixed_hashes">AD - Mixed Hashes (auto-detect)</option>
     <option value="name_creds">Credentials → Users (merge/create)</option>
-    <option value="urls">Web URLs list</option>
-    <option value="names">Names list</option>
-    <option value="bbot">BBOT (json)</option>
     <option value="smb_shares">SMB Shares (smbmap format)</option>
+  </select>
+
+  <div id="smbUserField" style="display:none; margin-top:10px;">
+    <label for="smbUserId">User *</label>
+    <select id="smbUserId" name="smb_user_id">
+      <option value="0">Select user…</option>
+      {% for u in users or [] %}
+      <option value="{{ u.id }}">{{ user_label(u) }}</option>
+      {% endfor %}
     </select>
-    <label>Optional filename</label>
-    <input name="raw_filename" placeholder="pasted_scan.xml" />
-    <label>Raw text</label>
-    <textarea name="raw_text" rows="14" id="rawTextArea" placeholder="Paste Nmap XML output…" required></textarea>
-    <button class="btn" type="submit">Save & Parse</button>
-    <p class="muted">Docs are file-upload only (to preserve original evidence).</p>
-  </form>
+    {% if not (users or []) %}
+    <p class="muted" style="font-size:12px;">No users found. <a href="/users">Add a user first</a>.</p>
+    {% endif %}
+  </div>
+
+  <div style="display:flex; gap:8px; margin:14px 0 10px; flex-wrap:wrap;">
+    <button type="button" id="fileModeBtn" class="btn upload-mode-btn active">Upload file</button>
+    <button type="button" id="rawModeBtn" class="btn upload-mode-btn">Paste raw data</button>
+  </div>
+
+  <div id="filePanel" class="upload-source-panel">
+    <label for="fileInput">File(s) or Directory</label>
+    <input type="file" id="fileInput" name="file" multiple />
+    <label style="margin-top:10px;">
+      <input type="checkbox" id="dirInput" /> Include subdirectories
+    </label>
+    <p class="muted" style="font-size:12px; margin-bottom:0;">Select one or more files, or a directory (enable "Include subdirectories" for folder uploads)</p>
+  </div>
+
+  <div id="rawPanel" class="upload-source-panel" style="display:none;">
+    <label for="rawFilename">Optional filename</label>
+    <input id="rawFilename" name="raw_filename" placeholder="pasted_scan.xml" />
+    <label for="rawTextArea">Raw text</label>
+    <textarea id="rawTextArea" name="raw_text" rows="14" placeholder="Paste Nmap XML output…"></textarea>
+    <p class="muted" style="margin-bottom:0;">Docs are file-upload only (to preserve original evidence).</p>
+  </div>
+
+  <button class="btn" type="submit">Upload &amp; Parse</button>
+</form>
+
+<aside class="card upload-summary-card">
+  <h2 style="margin-top:0;">Upload counts</h2>
+  <p class="muted">Files and raw batches imported by type.</p>
+  {% if type_counts %}
+  <table>
+    <thead>
+      <tr><th>Type</th><th>Uploads</th></tr>
+    </thead>
+    <tbody>
+      {% for entry in type_counts %}
+      <tr>
+        <td>{{ entry.label }}</td>
+        <td>{{ entry.count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+    <tfoot>
+      <tr><td>Total</td><td>{{ total_uploads }}</td></tr>
+    </tfoot>
+  </table>
+  {% else %}
+  <p class="muted">No uploads logged yet.</p>
+  {% endif %}
+</aside>
 </div>
 <script>
-document.getElementById('dirInput').addEventListener('change', function() {
-  document.getElementById('fileInput').webkitdirectory = this.checked;
-  document.getElementById('fileInput').multiple = true;
-});
+const kindSelect = document.getElementById('kindSelect');
+const uploadForm = document.getElementById('uploadForm');
+const fileModeBtn = document.getElementById('fileModeBtn');
+const rawModeBtn = document.getElementById('rawModeBtn');
+const filePanel = document.getElementById('filePanel');
+const rawPanel = document.getElementById('rawPanel');
+const fileInput = document.getElementById('fileInput');
+const dirInput = document.getElementById('dirInput');
+const rawFilename = document.getElementById('rawFilename');
+const rawTextArea = document.getElementById('rawTextArea');
+const smbUserField = document.getElementById('smbUserField');
+const smbUserId = document.getElementById('smbUserId');
+
+let uploadMode = 'file';
 
 const rawPlaceholders = {
   nmap_xml: "Paste Nmap XML output…",
-  subdomains: "Paste subdomains, one per line (e.g. example.com, www.example.com)…",
+  doc: "OSINT documents must be uploaded as files…",
+  prowl_phase1: "Paste Prowler phase 1 JSON…",
+  zone_transfers: "Paste Prowler phase 2 zone transfer JSON…",
+  smtp: "Paste Prowler phase 3 SMTP JSON…",
   names_emails: "Paste email addresses, one per line…",
+  names: "Paste names as FirstName MiddleName LastName, one per line…",
   ad_users: "Paste AD usernames, one per line…",
   mixed_hashes: "Paste hash formats, one per line (auto-detects Kerberoast, NTLMv1, NTLMv2, DCC2, AS-REP)…",
   name_creds: "Paste credentials as user:pass, domain\\user:pass, or domain/user:pass (merges into Users)…",
+  subdomains: "Paste subdomains, one per line (e.g. example.com, www.example.com)…",
+  bbot: "Paste BBOT JSON output…",
   urls: "Paste URLs, one per line…",
-  names: "Paste names as FirstName MiddleName LastName, one per line…",
-  bbot: "Paste BBOT JSON output…"
+  smb_shares: "Paste smbmap output (host:…, share:…, privs:…), one line per share…"
 };
 
-const rawSelect = document.querySelector('#pasteForm select[name="kind"]');
-const rawArea = document.getElementById('rawTextArea');
-if (rawSelect && rawArea) {
-  rawSelect.addEventListener('change', function() {
-    rawArea.placeholder = rawPlaceholders[this.value] || "Paste data…";
-  });
+function toggleSmbUserField() {
+  const show = kindSelect.value === 'smb_shares';
+  smbUserField.style.display = show ? '' : 'none';
+  smbUserId.required = show;
 }
+
+function setUploadMode(mode) {
+  if (mode !== 'file' && mode !== 'raw') mode = 'file';
+  if (kindSelect.value === 'doc' && mode === 'raw') mode = 'file';
+  uploadMode = mode;
+  fileModeBtn.classList.toggle('active', mode === 'file');
+  rawModeBtn.classList.toggle('active', mode === 'raw');
+  filePanel.style.display = mode === 'file' ? '' : 'none';
+  rawPanel.style.display = mode === 'raw' ? '' : 'none';
+  fileInput.disabled = mode !== 'file';
+  dirInput.disabled = mode !== 'file';
+  rawFilename.disabled = mode !== 'raw';
+  rawTextArea.disabled = mode !== 'raw';
+}
+
+function updateRawPlaceholder() {
+  rawTextArea.placeholder = rawPlaceholders[kindSelect.value] || "Paste data…";
+}
+
+dirInput.addEventListener('change', function() {
+  fileInput.webkitdirectory = this.checked;
+  fileInput.multiple = true;
+});
+
+kindSelect.addEventListener('change', function() {
+  toggleSmbUserField();
+  updateRawPlaceholder();
+  rawModeBtn.disabled = this.value === 'doc';
+  if (this.value === 'doc') setUploadMode('file');
+});
+
+fileModeBtn.addEventListener('click', function() {
+  setUploadMode('file');
+});
+
+rawModeBtn.addEventListener('click', function() {
+  if (kindSelect.value === 'doc') return;
+  setUploadMode('raw');
+});
+
+uploadForm.addEventListener('submit', function(e) {
+  if (kindSelect.value === 'smb_shares' && (!smbUserId.value || parseInt(smbUserId.value, 10) <= 0)) {
+    e.preventDefault();
+    alert('Select a user for SMB share imports.');
+    return;
+  }
+  if (uploadMode === 'file') {
+    if (!fileInput.files || fileInput.files.length === 0) {
+      e.preventDefault();
+      alert('Choose at least one file to upload.');
+    }
+  } else if (!rawTextArea.value.trim()) {
+    e.preventDefault();
+    alert('Paste raw data before uploading.');
+  }
+});
+
+toggleSmbUserField();
+updateRawPlaceholder();
+setUploadMode('file');
 
 window.addEventListener('beforeunload', function(e) {
   if (window._credsUnresolved && window._credsUnresolved > 0) {

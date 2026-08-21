@@ -57,6 +57,16 @@
   closeBtn && closeBtn.addEventListener("click", hide);
   window.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
 
+  const sidebarScreenshotPollers = new Set();
+  const refreshSidebarScreenshotPollers = () => {
+    if (document.hidden) return;
+    sidebarScreenshotPollers.forEach((fn) => fn());
+  };
+  window.addEventListener("visibilitychange", () => {
+    if (!document.hidden) refreshSidebarScreenshotPollers();
+  });
+  window.addEventListener("focus", refreshSidebarScreenshotPollers);
+
   function esc(s) { return (""+s).replace(/[&<>"']/g,c=>({ "&":"&amp;","<":"&gt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c])); }
 
   
@@ -588,6 +598,10 @@ function bindTagHandlers() {
             ${(data.hosts||[]).map(h=>`<li><a href="#" data-open-host="${h.id}">${esc(h.ip)}</a> <span class="muted">${esc(h.hostname||"")}</span></li>`).join("")}
           </ul>` : `<div class="muted">No linked assets yet.</div>`}
       </div>
+      <div class="card" id="sidebarScreenshotsCard">
+        <h2>Screenshots &amp; HTTP Info</h2>
+        <div class="muted">Loading...</div>
+      </div>
     `;
     show();
     body.querySelectorAll("[data-open-host]").forEach(a => {
@@ -596,6 +610,203 @@ function bindTagHandlers() {
         openHost(parseInt(a.getAttribute("data-open-host"), 10));
       });
     });
+
+    const subdomainPorts = data.ports || {};
+    const inScopeIps = new Set(data.in_scope_ips || []);
+    function getPortsList() {
+      const allPorts = [...new Set(Object.values(subdomainPorts).flat())];
+      return allPorts.filter(p => typeof p === "number");
+    }
+    function captureTargetsViaJob(targets, { setBusy, onDone }) {
+      let pollTimer = null;
+      let pollInFlight = false;
+      let pollJobId = null;
+
+      const stopPolling = () => {
+        if (pollTimer) {
+          clearTimeout(pollTimer);
+          pollTimer = null;
+        }
+      };
+
+      const pollNow = () => {
+        if (pollJobId) poll(pollJobId);
+      };
+
+      const registerPolling = (jobId) => {
+        pollJobId = jobId;
+        sidebarScreenshotPollers.add(pollNow);
+      };
+
+      const unregisterPolling = () => {
+        pollJobId = null;
+        sidebarScreenshotPollers.delete(pollNow);
+      };
+
+      const poll = async (jobId) => {
+        if (pollInFlight) return;
+        pollInFlight = true;
+        try {
+          const resp = await fetch(`/api/screenshot/jobs/${encodeURIComponent(jobId)}`, { cache: "no-store" });
+          const data = await resp.json();
+          if (!data.ok || !data.job) {
+            throw new Error(data.error || "Screenshot job not found");
+          }
+          if (data.job.status === "pending" || data.job.status === "running") {
+            stopPolling();
+            setBusy(true, data.job.status);
+            pollTimer = setTimeout(() => poll(jobId), 700);
+          } else {
+            stopPolling();
+            unregisterPolling();
+            setBusy(false);
+            onDone(data.job);
+          }
+        } catch (e) {
+          stopPolling();
+          unregisterPolling();
+          setBusy(false);
+          onDone({ status: "failed", error: e.message, results: [] });
+        } finally {
+          pollInFlight = false;
+        }
+      };
+
+      fetch("/api/screenshot/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ targets }),
+      })
+        .then(r => r.json().then(data => ({ status: r.status, data })))
+        .then(({ status, data }) => {
+          if (status === 409 && data.active_job) {
+            registerPolling(data.active_job.id);
+            poll(data.active_job.id);
+            return;
+          }
+          if (!data.ok || !data.job) {
+            throw new Error(data.error || "Could not queue screenshot job");
+          }
+          registerPolling(data.job.id);
+          poll(data.job.id);
+        })
+        .catch(e => {
+          stopPolling();
+          unregisterPolling();
+          setBusy(false);
+          onDone({ status: "failed", error: e.message, results: [] });
+        });
+    }
+
+    function captureForFqdn(fqdn, card, btn) {
+      const ports = getPortsList();
+      if (ports.length === 0) {
+        btn.textContent = "📸 Capture";
+        btn.disabled = false;
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = "Queued...";
+      const targets = ports.map(port => ({ fqdn, port }));
+      const forcedSeen = new Set();
+      Object.entries(subdomainPorts).forEach(([ip, ipPorts]) => {
+        if (!inScopeIps.has(ip)) return;
+        (ipPorts || []).forEach(port => {
+          if (typeof port !== "number") return;
+          const key = `${fqdn}:${port}:${ip}`;
+          if (forcedSeen.has(key)) return;
+          forcedSeen.add(key);
+          targets.push({ fqdn, port, ip });
+        });
+      });
+      captureTargetsViaJob(targets, {
+        setBusy: (busy, status) => {
+          btn.textContent = busy
+            ? (status === "pending" ? "Queued..." : "Capturing...")
+            : "📸 Capture";
+          btn.disabled = busy;
+        },
+        onDone: () => renderScreenshotGrid(fqdn, card),
+      });
+    }
+
+    function renderScreenshotGrid(fqdn, card) {
+      fetch(`/api/screenshot/by-fqdn/${encodeURIComponent(fqdn)}`, { cache: "no-store" })
+        .then(r => r.json())
+        .then(sdata => {
+          if (!card) return;
+          const screenshots = (sdata.screenshots || []).filter(s => s.screenshot_path);
+          const ports = getPortsList();
+          let html = `<div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+            <h2 style="margin:0;">Screenshots &amp; HTTP Info</h2>
+            <button class="btn btn-sm sidebar-capture-btn" id="sidebarCaptureBtn" ${!ports.length ? "disabled" : ""}>📸 Capture</button>
+          </div>`;
+
+          if (screenshots.length === 0) {
+            html += `<p class="muted">No screenshots captured yet.</p>`;
+          } else {
+            html += `<div class="screenshot-grid">`;
+            screenshots.forEach(s => {
+              const statusColor = s.http_status >= 400 ? "#ff3333" : "#00ff00";
+              const isForced = s.capture_mode === "forced" && s.target_ip;
+              const urlLabel = isForced
+                ? `${esc(s.scheme)}://${esc(fqdn)}:${s.port} → ${esc(s.target_ip)}`
+                : `${esc(s.scheme)}://${esc(fqdn)}:${s.port}`;
+              html += `
+                <div class="screenshot-item">
+                  <div class="screenshot-thumb-wrapper">
+                    <a href="/screenshots/${esc(s.screenshot_path)}" target="_blank"><img src="/screenshots/${esc(s.screenshot_path)}" alt="Screenshot" class="screenshot-thumb"/></a>
+                    <button class="screenshot-recapture" title="Re-capture this target" data-fqdn="${esc(fqdn)}" data-port="${s.port}" data-ip="${esc(s.target_ip || "")}" data-mode="${esc(s.capture_mode || "dns")}">↻</button>
+                  </div>
+                  <div class="screenshot-info">
+                    <span class="port-badge">${urlLabel}</span>
+                    ${isForced ? '<span class="status-pill" style="color:#00ccff;">forced IP</span>' : '<span class="status-pill" style="color:#888888;">dns</span>'}
+                    <span class="status-pill" style="color:${statusColor};">Status: ${s.http_status}</span>
+                    ${s.http_title ? `<div class="screenshot-title">${esc(s.http_title)}</div>` : ""}
+                    ${s.http_content_length > 0 ? `<span class="muted">${s.http_content_length} bytes</span>` : ""}
+                    <div class="muted" style="font-size:10px;">${s.created_at ? new Date(s.created_at).toLocaleString() : ""}</div>
+                  </div>
+                </div>
+              `;
+            });
+            html += `</div>`;
+          }
+          card.innerHTML = html;
+
+          const captureBtn = card.querySelector("#sidebarCaptureBtn");
+          if (captureBtn) {
+            captureBtn.addEventListener("click", () => captureForFqdn(fqdn, card, captureBtn));
+          }
+          card.querySelectorAll(".screenshot-recapture").forEach(btn => {
+            btn.addEventListener("click", (ev) => {
+              ev.preventDefault();
+              const sfqdn = btn.getAttribute("data-fqdn");
+              const sport = btn.getAttribute("data-port");
+              const sip = btn.getAttribute("data-ip") || "";
+              const smode = btn.getAttribute("data-mode") || "dns";
+              const recaptureTarget = { fqdn: sfqdn, port: parseInt(sport, 10) };
+              if (smode === "forced" && sip) {
+                recaptureTarget.ip = sip;
+              }
+              btn.textContent = "…";
+              btn.disabled = true;
+              captureTargetsViaJob([recaptureTarget], {
+                setBusy: (busy) => {
+                  btn.textContent = busy ? "…" : "↻";
+                  btn.disabled = busy;
+                },
+                onDone: () => renderScreenshotGrid(fqdn, card),
+              });
+            });
+          });
+        })
+        .catch(() => {
+          if (card) {
+            card.innerHTML = `<h2>Screenshots &amp; HTTP Info</h2><p class="muted" style="color:#ff3333;">Failed to load screenshots.</p>`;
+          }
+        });
+    }
+    renderScreenshotGrid(fqdn, body.querySelector("#sidebarScreenshotsCard"));
   }
 
 async function openCloudCreate() {

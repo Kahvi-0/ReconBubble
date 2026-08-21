@@ -459,6 +459,27 @@ class SmbShare(Base):
     access: Mapped[str] = mapped_column(String(64), default="", index=True)
     notes: Mapped[str] = mapped_column(Text, default="")
     source_file: Mapped[str] = mapped_column(String(260), default="")
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("name_items.id"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
+class WebScreenshot(Base):
+    __tablename__ = "web_screenshots"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fqdn: Mapped[str] = mapped_column(String(255), index=True)
+    port: Mapped[int] = mapped_column(Integer, index=True)
+    scheme: Mapped[str] = mapped_column(String(8), default="https")
+    screenshot_path: Mapped[str] = mapped_column(String(512), default="")
+    http_status: Mapped[int] = mapped_column(Integer, default=0)
+    http_title: Mapped[str] = mapped_column(String(512), default="")
+    http_content_length: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(Text, default="")
+    target_ip: Mapped[str] = mapped_column(String(64), default="")
+    capture_mode: Mapped[str] = mapped_column(String(16), default="dns")
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
     )

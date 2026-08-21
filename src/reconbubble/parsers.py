@@ -1759,7 +1759,7 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
     }
 
 
-def import_smbmap(session: Session, artifact: Artifact, path: Path) -> dict:
+def import_smbmap(session: Session, artifact: Artifact, path: Path, user_id: int | None = None) -> dict:
     """Parse SMBMAP output in format: host:IP, share:NAME, privs:PERMS"""
     added = 0
     skipped = 0
@@ -1781,12 +1781,13 @@ def import_smbmap(session: Session, artifact: Artifact, path: Path) -> dict:
             select(SmbShare).where(
                 SmbShare.host == host_ip,
                 SmbShare.share == share_name,
+                SmbShare.user_id == user_id,
             )
         )
         if existing:
             skipped += 1
             continue
-        session.add(SmbShare(host=host_ip, share=share_name, access=access, source_file=artifact.filename))
+        session.add(SmbShare(host=host_ip, share=share_name, access=access, source_file=artifact.filename, user_id=user_id))
         added += 1
     session.commit()
     return {

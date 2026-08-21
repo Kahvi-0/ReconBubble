@@ -757,4 +757,62 @@ def migrate_sqlite(engine) -> None:
             )
         )
 
+        # web_screenshots table
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS web_screenshots (
+          id INTEGER PRIMARY KEY,
+          fqdn VARCHAR(255) NOT NULL,
+          port INTEGER NOT NULL,
+          scheme VARCHAR(8) DEFAULT 'https',
+          screenshot_path VARCHAR(512) DEFAULT '',
+          http_status INTEGER DEFAULT 0,
+          http_title VARCHAR(512) DEFAULT '',
+          http_content_length INTEGER DEFAULT 0,
+           error TEXT DEFAULT '',
+           target_ip VARCHAR(64) DEFAULT '',
+           capture_mode VARCHAR(16) DEFAULT 'dns',
+           created_at DATETIME
+        )
+        """)
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_web_screenshots_fqdn ON web_screenshots(fqdn)")
+        )
+        conn.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_web_screenshots_port ON web_screenshots(port)")
+        )
+
+        if not _has_column(conn, "web_screenshots", "target_ip"):
+            conn.execute(
+                text(
+                    "ALTER TABLE web_screenshots ADD COLUMN target_ip VARCHAR(64) DEFAULT ''"
+                )
+            )
+        if not _has_column(conn, "web_screenshots", "capture_mode"):
+            conn.execute(
+                text(
+                    "ALTER TABLE web_screenshots ADD COLUMN capture_mode VARCHAR(16) DEFAULT 'dns'"
+                )
+            )
+
+        # smb_shares: add user_id column if missing
+        try:
+            if conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='smb_shares'"
+                )
+            ).fetchone():
+                if not _has_column(conn, "smb_shares", "user_id"):
+                    conn.execute(
+                        text("ALTER TABLE smb_shares ADD COLUMN user_id INTEGER")
+                    )
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_smb_shares_user_id ON smb_shares(user_id)"
+                    )
+                )
+        except Exception:
+            pass
+
     conn.commit()

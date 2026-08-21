@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-import json, ipaddress, re, socket
+import asyncio, json, ipaddress, re, socket, uuid
 from urllib.parse import quote_plus, urlsplit
 from datetime import datetime
 
@@ -42,6 +42,7 @@ from .models import (
     SmbShare,
     TimelineDay,
     TimelineEntry,
+    WebScreenshot,
 )
 from .parsers import (
     upsert_artifact,
@@ -68,8 +69,41 @@ from .parsers import (
 )
 
 DOMAIN_RE = re.compile(
-    r"(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+\.?$"
+    r"(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9](?:\.[a-z0-9-]{0,61}[a-z0-9])?)+\.?$"
 )
+
+
+def _web_url_host_from_domain(value: str) -> str:
+    host = (value or "").strip().lower().strip(".")
+    if host.count(":") == 1:
+        host = host.rsplit(":", 1)[0]
+    return host
+
+
+def _like_escape(value: str) -> str:
+    return (value or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _web_url_host_from_url(value: str) -> str:
+    try:
+        host = (urlsplit(value or "").hostname or "").strip().lower().strip(".")
+    except Exception:
+        host = ""
+    if not host:
+        try:
+            host = (urlsplit("http://" + (value or "")).hostname or "").strip().lower().strip(".")
+        except Exception:
+            host = ""
+    return host
+
+
+def _smb_user_label(name: NameItem) -> str:
+    full = " ".join(
+        part.strip()
+        for part in (name.first_name, name.middle_name, name.last_name)
+        if part and part.strip()
+    ).strip()
+    return (name.ad_username or full or name.email or f"user {name.id}").strip()
 
 
 def create_app(
@@ -332,13 +366,29 @@ def create_app(
         rows = s.execute(
             text(
                 "SELECT hosts.id, hosts.ip, hosts.hostname FROM host_subdomains "
-                "JOIN subdomains ON subdomains.id = host_subdomains.subdomain_id "
+                "JOIN subdomains ON subdomains.id = host_subdomains.host_id "
                 "JOIN hosts ON hosts.id = host_subdomains.host_id "
                 "WHERE subdomains.fqdn = :fq ORDER BY hosts.ip ASC"
             ),
             {"fq": fqdn},
         ).fetchall()
         return [{"id": r[0], "ip": r[1], "hostname": r[2] or ""} for r in rows]
+
+    def get_open_http_ports_by_ip(s: Session, ips: set[str] | list[str]) -> dict[str, list[int]]:
+        if not ips:
+            return {}
+        http_ports = (80, 443, 8080, 8443, 8000, 8888)
+        rows = s.execute(
+            select(Host.ip, Service.port).join(Host).where(
+                Host.ip.in_(list(ips)),
+                Service.port.in_(http_ports),
+                Service.state == "open"
+            )
+        ).fetchall()
+        result: dict[str, list[int]] = {}
+        for ip, port in rows:
+            result.setdefault(ip, []).append(port)
+        return result
 
     def link_host_domain(s: Session, host_id: int, fqdn: str) -> None:
         fqdn = fqdn.strip().lower().rstrip(".")
@@ -630,7 +680,52 @@ def create_app(
     # Upload
     @app.get("/upload", response_class=HTMLResponse)
     def upload_page(request: Request):
-        return templates.TemplateResponse("upload.html", {"request": request, "workspace": ws})
+        with db() as s:
+            users = (
+                s.execute(
+                    select(NameItem).order_by(
+                        NameItem.last_name.asc(), NameItem.first_name.asc()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            upload_count_rows = s.execute(
+                select(UploadLog.kind, func.count(UploadLog.id)).group_by(UploadLog.kind)
+            ).all()
+        upload_counts = {kind: int(count) for kind, count in upload_count_rows}
+        upload_type_labels = [
+            ("nmap_xml", "Nmap XML"),
+            ("doc", "OSINT document"),
+            ("prowl_phase1", "Prowler phase 1"),
+            ("zone_transfers", "Prowler zone transfers"),
+            ("smtp", "Prowler SMTP"),
+            ("names_emails", "Names - Email List"),
+            ("names", "Names list"),
+            ("bbot", "BBOT"),
+            ("subdomains", "Subdomains list"),
+            ("urls", "Web URLs list"),
+            ("ad_users", "Active Directory Users"),
+            ("mixed_hashes", "AD - Mixed Hashes"),
+            ("name_creds", "Credentials → Users"),
+            ("smb_shares", "SMB Shares"),
+        ]
+        type_counts = [
+            {"kind": kind, "label": label, "count": upload_counts.get(kind, 0)}
+            for kind, label in upload_type_labels
+        ]
+        total_uploads = sum(entry["count"] for entry in type_counts)
+        return templates.TemplateResponse(
+            "upload.html",
+            {
+                "request": request,
+                "workspace": ws,
+                "users": users,
+                "user_label": _smb_user_label,
+                "type_counts": type_counts,
+                "total_uploads": total_uploads,
+            },
+        )
 
     @app.post("/upload")
     async def upload(
@@ -639,8 +734,35 @@ def create_app(
         file: list[UploadFile] | None = File(None),
         raw_text: str = Form(""),
         raw_filename: str = Form(""),
+        smb_user_id: int = Form(0),
     ):
         """Handle uploads (file or raw paste) and import into DB."""
+        if kind == "smb_shares":
+            if smb_user_id <= 0:
+                return templates.TemplateResponse(
+                    "upload.html",
+                    {
+                        "request": request,
+                        "workspace": ws,
+                        "users": [],
+                        "user_label": _smb_user_label,
+                        "error": "Select a user for SMB share imports.",
+                    },
+                    status_code=400,
+                )
+            with db() as s:
+                if s.get(NameItem, smb_user_id) is None:
+                    return templates.TemplateResponse(
+                        "upload.html",
+                        {
+                            "request": request,
+                            "workspace": ws,
+                            "users": [],
+                            "user_label": _smb_user_label,
+                            "error": "Selected user not found.",
+                        },
+                        status_code=400,
+                    )
         stored: str | None = None
         redirect_map = {
             "nmap_xml": "/assets",
@@ -659,7 +781,17 @@ def create_app(
             "bbot_cloud": "/cloud",
             "smb_shares": "/smb-shares",
         }
-        def _import_file(s: Session, art: Artifact, stored_path: str, fname: str) -> dict:
+        with db() as s:
+            upload_users = (
+                s.execute(
+                    select(NameItem).order_by(
+                        NameItem.last_name.asc(), NameItem.first_name.asc()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        def _import_file(s: Session, art: Artifact, stored_path: str, fname: str, user_id: int | None = None) -> dict:
             """Run the appropriate parser and return normalized result dict."""
             p = Path(stored_path)
             try:
@@ -704,7 +836,7 @@ def create_app(
                 elif kind == "mixed_hashes":
                     res = import_mixed_hashes(s, art, p)
                 elif kind == "smb_shares":
-                    res = import_smbmap(s, art, p)
+                    res = import_smbmap(s, art, p, user_id=user_id)
                 else:
                     res = {"added": 0, "skipped": 0, "unmatched": [f"Unknown type: {kind}"]}
             except Exception as e:
@@ -818,7 +950,10 @@ def create_app(
                 stored = ws.store_text(raw_text, fname, prefix=kind)
                 with db() as s:
                     art = upsert_artifact(s, kind, Path(stored))
-                    raw_result = _import_file(s, art, stored, fname)
+                    raw_result = _import_file(
+                        s, art, stored, fname,
+                        user_id=smb_user_id if kind == "smb_shares" else None,
+                    )
                 norm = _normalize_result(raw_result)
                 _log_upload(kind, _get_label(kind), fname, norm)
                 all_errors = list(norm["unmatched"])
@@ -836,6 +971,8 @@ def create_app(
                     {
                         "request": request,
                         "workspace": ws,
+                        "users": upload_users,
+                        "user_label": _smb_user_label,
                         "upload_results": upload_results,
                         "upload_results_summary": {
                             "files": [fname],
@@ -862,6 +999,8 @@ def create_app(
                         {
                             "request": request,
                             "workspace": ws,
+                            "users": upload_users,
+                            "user_label": _smb_user_label,
                             "error": "No valid files uploaded.",
                         },
                         status_code=400,
@@ -872,7 +1011,10 @@ def create_app(
                     for i, stored_path in enumerate(stored_files):
                         fname = fnames[i] if i < len(fnames) else "file"
                         art = upsert_artifact(s, kind, Path(stored_path))
-                        raw_result = _import_file(s, art, stored_path, fname)
+                        raw_result = _import_file(
+                            s, art, stored_path, fname,
+                            user_id=smb_user_id if kind == "smb_shares" else None,
+                        )
                         norm = _normalize_result(raw_result)
                         _log_upload(kind, _get_label(kind), fname, norm)
                         all_errors.extend(norm["unmatched"])
@@ -890,6 +1032,8 @@ def create_app(
                     {
                         "request": request,
                         "workspace": ws,
+                        "users": upload_users,
+                        "user_label": _smb_user_label,
                         "upload_results": upload_results,
                         "upload_results_summary": {
                             "files": fnames,
@@ -904,6 +1048,8 @@ def create_app(
                     {
                         "request": request,
                         "workspace": ws,
+                        "users": upload_users,
+                        "user_label": _smb_user_label,
                         "error": "No file uploaded and no raw text provided.",
                     },
                     status_code=400,
@@ -912,13 +1058,25 @@ def create_app(
         except ValueError as e:
             return templates.TemplateResponse(
                 "upload.html",
-                {"request": request, "workspace": ws, "error": str(e)},
+                {
+                    "request": request,
+                    "workspace": ws,
+                    "users": upload_users,
+                    "user_label": _smb_user_label,
+                    "error": str(e),
+                },
                 status_code=400,
             )
         except Exception as e:
             return templates.TemplateResponse(
                 "upload.html",
-                {"request": request, "workspace": ws, "error": f"Upload failed: {e}"},
+                {
+                    "request": request,
+                    "workspace": ws,
+                    "users": upload_users,
+                    "user_label": _smb_user_label,
+                    "error": f"Upload failed: {e}",
+                },
                 status_code=500,
             )
 
@@ -1997,14 +2155,421 @@ def create_app(
             )
             sensitive_ip = any(ip_in_scope(ip, s_ips, s_subnets, s_excluded) for ip in ips_found)
             hosts = list_subdomain_hosts(s, fq)
+            ip_ports_map = get_open_http_ports_by_ip(s, ips_found)
+            sub_ports: dict[str, list[int]] = {}
+            for ip in ips_found:
+                if ip in ip_ports_map:
+                    sub_ports[ip] = sorted(set(ip_ports_map[ip]))
+            in_scope_ips_found = [
+                ip for ip in dict.fromkeys(ips_found)
+                if ip_in_scope(ip, ips, subnets, excluded)
+            ]
         return {
             "ok": True,
             "fqdn": fq,
             "ips": ips_found,
             "in_scope": bool(in_dom or in_ip),
+            "in_scope_ips": in_scope_ips_found,
             "sensitive": bool(sensitive_dom or sensitive_ip),
             "hosts": hosts,
+            "ports": sub_ports,
         }
+
+    app.state.screenshot_jobs = {}
+    app.state.screenshot_queue = asyncio.Queue()
+    app.state.screenshot_queue_ids = []
+    app.state.screenshot_worker_task = None
+    app.state.active_screenshot_job_id = None
+
+    def _clean_screenshot_targets(targets: list) -> list[dict]:
+        clean_targets: list[dict] = []
+        seen_targets = set()
+        for target in targets or []:
+            if not isinstance(target, dict):
+                continue
+            fqdn = str(target.get("fqdn", "")).strip().lower().rstrip(".")
+            ip = str(target.get("ip", "") or "").strip()
+            try:
+                port = int(target.get("port", 443))
+            except (TypeError, ValueError):
+                continue
+            if not fqdn or not port:
+                continue
+            key = (fqdn, port, ip)
+            if key in seen_targets:
+                continue
+            seen_targets.add(key)
+            clean_targets.append({"fqdn": fqdn, "port": port, "ip": ip})
+        return clean_targets
+
+    def _screenshot_result_label(result: dict) -> str:
+        if result.get("mode") == "forced" and result.get("ip"):
+            return f"{result['fqdn']}:{result['port']} [forced {result['ip']}]"
+        return f"{result['fqdn']}:{result['port']} [dns]"
+
+    def _screenshot_queue_position(job_id: str) -> int:
+        try:
+            return app.state.screenshot_queue_ids.index(job_id) + 1
+        except ValueError:
+            return 0
+
+    def _screenshot_pending_count() -> int:
+        return sum(1 for job in app.state.screenshot_jobs.values() if job["status"] == "pending")
+
+    def _screenshot_public_job(job: dict, queue_position: int | None = None, queued_count: int | None = None) -> dict:
+        if queue_position is None:
+            queue_position = _screenshot_queue_position(job["id"])
+        if queued_count is None:
+            queued_count = _screenshot_pending_count()
+        return {
+            "id": job["id"],
+            "status": job["status"],
+            "total": job["total"],
+            "completed": job["completed"],
+            "ok_count": job["ok_count"],
+            "failed_count": job["failed_count"],
+            "current_label": job["current_label"],
+            "results": job["results"],
+            "error": job["error"],
+            "created_at": job["created_at"],
+            "updated_at": job["updated_at"],
+            "finished_at": job["finished_at"].isoformat() if job.get("finished_at") else "",
+            "queue_position": queue_position,
+            "queued_count": queued_count,
+        }
+
+    def _get_active_screenshot_job() -> dict | None:
+        job_id = app.state.active_screenshot_job_id
+        job = app.state.screenshot_jobs.get(job_id) if job_id else None
+        if job and job["status"] in ("pending", "running"):
+            return job
+        return None
+
+    def _get_current_screenshot_job() -> dict | None:
+        active = _get_active_screenshot_job()
+        if active:
+            return active
+        for job_id in app.state.screenshot_queue_ids:
+            job = app.state.screenshot_jobs.get(job_id)
+            if job and job["status"] == "pending":
+                return job
+        return None
+
+    def _prune_screenshot_jobs() -> None:
+        now = datetime.utcnow()
+        for job_id in list(app.state.screenshot_jobs):
+            job = app.state.screenshot_jobs.get(job_id)
+            if not job or job["status"] in ("pending", "running"):
+                continue
+            finished_at = job.get("finished_at")
+            if not finished_at:
+                continue
+            if (now - finished_at).total_seconds() > 600:
+                app.state.screenshot_jobs.pop(job_id, None)
+                if job_id in app.state.screenshot_queue_ids:
+                    app.state.screenshot_queue_ids.remove(job_id)
+
+    async def _run_screenshot_capture(clean_targets: list[dict], progress_cb=None, status_cb=None) -> list[dict]:
+        from playwright.async_api import async_playwright
+
+        screenshots_dir = ws.uploads_dir / "screenshots"
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+
+        async with async_playwright() as p:
+            async def capture_targets(target_list: list[dict], launch_args: list[str] | None = None) -> list[dict]:
+                browser = await p.chromium.launch(headless=True, args=launch_args or [])
+                context = await browser.new_context(ignore_https_errors=True)
+                batch_results: list[dict] = []
+
+                for target in target_list:
+                    fqdn = target["fqdn"]
+                    port = target["port"]
+                    ip = target.get("ip", "")
+                    capture_mode = "forced" if ip else "dns"
+                    if status_cb is not None:
+                        status_cb(
+                            _screenshot_result_label(
+                                {"fqdn": fqdn, "port": port, "ip": ip, "mode": capture_mode}
+                            )
+                        )
+
+                    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                    safe_fqdn = fqdn.replace(".", "-")
+                    safe_ip = ip.replace(".", "-") if ip else ""
+                    filename = (
+                        f"{safe_fqdn}_{port}_{safe_ip}_{ts}_{uuid.uuid4().hex[:8]}_forced.png"
+                        if ip
+                        else f"{safe_fqdn}_{port}_{ts}_{uuid.uuid4().hex[:8]}_dns.png"
+                    )
+                    filepath = screenshots_dir / filename
+
+                    success = False
+                    http_status = 0
+                    http_title = ""
+                    http_content_length = 0
+                    error = ""
+                    scheme = "https"
+
+                    for try_scheme in ["https", "http"]:
+                        url = f"{try_scheme}://{fqdn}:{port}"
+                        scheme = try_scheme
+                        page = None
+                        try:
+                            page = await context.new_page()
+                            resp = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                            if resp is not None:
+                                http_status = resp.status
+                                headers = resp.headers
+                                content_length_str = headers.get("content-length", "")
+                                http_content_length = int(content_length_str) if content_length_str.isdigit() else 0
+
+                                try:
+                                    http_title = await page.title()
+                                except Exception:
+                                    http_title = ""
+
+                                await page.screenshot(path=str(filepath), clip={"x": 0, "y": 0, "width": 1280, "height": 720})
+                                success = True
+                                await page.close()
+                                page = None
+                                break
+                        except Exception as e:
+                            error = str(e)[:255]
+                            if page is not None:
+                                try:
+                                    await page.close()
+                                except Exception:
+                                    pass
+                            continue
+
+                    rec = WebScreenshot(
+                        fqdn=fqdn,
+                        port=port,
+                        scheme=scheme,
+                        screenshot_path=filepath.name if success else "",
+                        http_status=http_status,
+                        http_title=http_title[:512] if http_title else "",
+                        http_content_length=http_content_length,
+                        error=error,
+                        target_ip=ip,
+                        capture_mode=capture_mode,
+                        created_at=datetime.utcnow(),
+                    )
+                    with SessionLocal() as s:
+                        s.add(rec)
+                        s.commit()
+
+                    result = {
+                        "fqdn": fqdn,
+                        "port": port,
+                        "ip": ip,
+                        "mode": capture_mode,
+                        "ok": success,
+                        "http_status": http_status,
+                        "http_title": http_title,
+                        "file": filepath.name if success else "",
+                        "error": error,
+                    }
+                    batch_results.append(result)
+                    if progress_cb is not None:
+                        progress_cb(result)
+
+                await context.close()
+                await browser.close()
+                return batch_results
+
+            auto_targets = [t for t in clean_targets if not t["ip"]]
+            forced_targets = [t for t in clean_targets if t["ip"]]
+
+            results = []
+            if auto_targets:
+                results.extend(await capture_targets(auto_targets))
+
+            forced_groups: dict[str, list[dict]] = {}
+            for t in forced_targets:
+                forced_groups.setdefault(t["ip"], []).append(t)
+            for ip, group_targets in forced_groups.items():
+                rules = ", ".join(
+                    dict.fromkeys(
+                        f"MAP {t['fqdn']}:{t['port']} {ip}" for t in group_targets
+                    )
+                )
+                results.extend(
+                    await capture_targets(group_targets, [f"--host-resolver-rules={rules}"])
+                )
+
+        return results
+
+    async def _run_screenshot_job(job_id: str) -> None:
+        job = app.state.screenshot_jobs.get(job_id)
+        if not job:
+            return
+        try:
+            job["status"] = "running"
+            job["updated_at"] = datetime.utcnow().isoformat()
+
+            def progress_cb(result: dict) -> None:
+                job["completed"] += 1
+                if result.get("ok"):
+                    job["ok_count"] += 1
+                else:
+                    job["failed_count"] += 1
+                job["current_label"] = _screenshot_result_label(result)
+                job["results"].append(result)
+                job["updated_at"] = datetime.utcnow().isoformat()
+
+            def status_cb(label: str) -> None:
+                job["current_label"] = label
+                job["updated_at"] = datetime.utcnow().isoformat()
+
+            await _run_screenshot_capture(job["targets"], progress_cb, status_cb)
+            job["status"] = "completed"
+            job["error"] = ""
+        except Exception as e:
+            job["status"] = "failed"
+            job["error"] = str(e)[:500]
+        finally:
+            job["finished_at"] = datetime.utcnow()
+            job["updated_at"] = datetime.utcnow().isoformat()
+            if app.state.active_screenshot_job_id == job_id:
+                app.state.active_screenshot_job_id = None
+
+    async def _screenshot_worker() -> None:
+        while True:
+            job_id = await app.state.screenshot_queue.get()
+            try:
+                if job_id in app.state.screenshot_queue_ids:
+                    app.state.screenshot_queue_ids.remove(job_id)
+                job = app.state.screenshot_jobs.get(job_id)
+                if not job or job["status"] != "pending":
+                    continue
+                app.state.active_screenshot_job_id = job_id
+                job["current_label"] = "Starting..."
+                job["updated_at"] = datetime.utcnow().isoformat()
+                await _run_screenshot_job(job_id)
+            except Exception as e:
+                job = app.state.screenshot_jobs.get(job_id)
+                if job:
+                    job["status"] = "failed"
+                    job["error"] = str(e)[:500]
+                    job["finished_at"] = datetime.utcnow()
+                    job["updated_at"] = datetime.utcnow().isoformat()
+            finally:
+                if app.state.active_screenshot_job_id == job_id:
+                    app.state.active_screenshot_job_id = None
+                app.state.screenshot_queue.task_done()
+
+    def _ensure_screenshot_worker() -> None:
+        task = app.state.screenshot_worker_task
+        if task is not None and not task.done():
+            return
+        app.state.screenshot_worker_task = asyncio.create_task(_screenshot_worker())
+
+    @app.post("/api/screenshot/jobs")
+    async def api_screenshot_create_job(request: Request):
+        body = await request.json()
+        clean_targets = _clean_screenshot_targets(body.get("targets", []))
+        if not clean_targets:
+            return JSONResponse({"ok": False, "error": "No valid targets provided"}, status_code=400)
+        _prune_screenshot_jobs()
+        job_id = uuid.uuid4().hex
+        now = datetime.utcnow()
+        job = {
+            "id": job_id,
+            "targets": clean_targets,
+            "status": "pending",
+            "total": len(clean_targets),
+            "completed": 0,
+            "ok_count": 0,
+            "failed_count": 0,
+            "current_label": "Queued...",
+            "results": [],
+            "error": "",
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
+            "finished_at": None,
+        }
+        app.state.screenshot_jobs[job_id] = job
+        app.state.screenshot_queue_ids.append(job_id)
+        await app.state.screenshot_queue.put(job_id)
+        _ensure_screenshot_worker()
+        return {
+            "ok": True,
+            "job": _screenshot_public_job(
+                job,
+                queue_position=len(app.state.screenshot_queue_ids),
+                queued_count=_screenshot_pending_count(),
+            ),
+        }
+
+    @app.get("/api/screenshot/jobs/active")
+    def api_screenshot_jobs_active():
+        _prune_screenshot_jobs()
+        current = _get_current_screenshot_job()
+        last = None
+        for job in app.state.screenshot_jobs.values():
+            if job["status"] in ("pending", "running"):
+                continue
+            finished_at = job.get("finished_at")
+            if not finished_at:
+                continue
+            if last is None or finished_at > last.get("finished_at"):
+                last = job
+        queued_count = _screenshot_pending_count()
+        return {
+            "ok": True,
+            "active_job": _screenshot_public_job(current, queued_count=queued_count) if current else None,
+            "last_job": _screenshot_public_job(last, queued_count=queued_count) if last else None,
+            "queued_count": queued_count,
+        }
+
+    @app.get("/api/screenshot/jobs/{job_id}")
+    def api_screenshot_job_status(job_id: str):
+        job = app.state.screenshot_jobs.get(job_id)
+        if not job:
+            return JSONResponse({"ok": False, "error": "Job not found"}, status_code=404)
+        return {
+            "ok": True,
+            "job": _screenshot_public_job(job, queued_count=_screenshot_pending_count()),
+        }
+
+    @app.get("/api/screenshot/by-fqdn/{fqdn}")
+    def api_screenshots_by_fqdn(fqdn: str):
+        fqdn = fqdn.strip().lower()
+        with SessionLocal() as s:
+            rows = (
+                s.query(WebScreenshot)
+                .filter(WebScreenshot.fqdn == fqdn)
+                .order_by(WebScreenshot.created_at.desc())
+                .all()
+            )
+        return {
+            "ok": True,
+            "screenshots": [
+                {
+                    "id": r.id,
+                    "fqdn": r.fqdn,
+                    "port": r.port,
+                    "scheme": r.scheme,
+                    "screenshot_path": r.screenshot_path,
+                    "http_status": r.http_status,
+                    "http_title": r.http_title,
+                    "http_content_length": r.http_content_length,
+                    "error": r.error,
+                    "target_ip": r.target_ip or "",
+                    "capture_mode": r.capture_mode or "dns",
+                    "created_at": r.created_at.isoformat() if r.created_at else "",
+                }
+                for r in rows
+            ],
+        }
+
+    @app.get("/screenshots/{path:path}")
+    async def serve_screenshot(path: str):
+        filepath = ws.uploads_dir / "screenshots" / path
+        if not filepath.exists() or not filepath.is_file():
+            return JSONResponse({"error": "Not found"}, status_code=404)
+        return FileResponse(filepath, media_type="image/png")
 
     # Internal
     def _default_checklist_map(map_name: str) -> dict:
@@ -3688,23 +4253,75 @@ def create_app(
             shares = s.execute(
                 select(SmbShare).order_by(SmbShare.host, SmbShare.share)
             ).scalars().all()
-            hosts_map: dict[str, list[SmbShare]] = {}
+            all_users = (
+                s.execute(
+                    select(NameItem).order_by(
+                        NameItem.last_name.asc(), NameItem.first_name.asc()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            access_user_ids = {
+                sh.user_id for sh in shares if sh.user_id is not None
+            }
+            access_users = [u for u in all_users if u.id in access_user_ids]
+            user_map = {u.id: u for u in all_users}
+            hosts_map: dict[str, list[dict]] = {}
+            has_unassigned = False
             for sh in shares:
-                hosts_map.setdefault(sh.host, []).append(sh)
-        return templates.TemplateResponse("smb_shares.html", {"request": request, "shares": shares, "hosts_map": hosts_map})
+                if sh.user_id is None:
+                    has_unassigned = True
+                host_groups = hosts_map.setdefault(sh.host, {})
+                group = host_groups.get(sh.share)
+                if group is None:
+                    group = {"share": sh.share, "by_user": {}, "unassigned": None}
+                    host_groups[sh.share] = group
+                if sh.user_id is None:
+                    group["unassigned"] = sh
+                else:
+                    group["by_user"][sh.user_id] = sh
+            hosts_list = [
+                {
+                    "host": host,
+                    "groups": list(groups.values()),
+                    "share_count": len(groups),
+                }
+                for host, groups in hosts_map.items()
+            ]
+            hosts_list.sort(key=lambda item: item["host"].lower())
+            for item in hosts_list:
+                item["groups"].sort(key=lambda g: g["share"].lower())
+        return templates.TemplateResponse(
+            "smb_shares.html",
+            {
+                "request": request,
+                "shares": shares,
+                "hosts_list": hosts_list,
+                "column_users": access_users,
+                "all_users": all_users,
+                "user_map": user_map,
+                "has_unassigned": has_unassigned,
+                "user_label": _smb_user_label,
+            },
+        )
 
     @app.post("/api/smb-shares/create", response_class=JSONResponse)
-    def smb_shares_create(host: str = Form(""), shares: str = Form("")):
+    def smb_shares_create(host: str = Form(""), shares: str = Form(""), user_id: int = Form(0)):
         host = host.strip()
         if not host:
             return {"ok": False, "error": "Host is required."}
         lines = [l.strip() for l in shares.strip().split("\n") if l.strip()]
         if not lines:
             return {"ok": False, "error": "At least one share entry is required."}
+        if user_id <= 0:
+            return {"ok": False, "error": "User is required."}
         added = 0
         skipped = 0
         errors = []
         with db() as s:
+            if s.get(NameItem, user_id) is None:
+                return {"ok": False, "error": "Selected user not found."}
             for idx, line in enumerate(lines, 1):
                 parts = line.split(",")
                 if len(parts) < 1:
@@ -3720,39 +4337,45 @@ def create_app(
                     select(SmbShare).where(
                         SmbShare.host == host,
                         SmbShare.share == share_name,
+                        SmbShare.user_id == user_id,
                     )
                 )
                 if existing:
                     skipped += 1
                     continue
-                s.add(SmbShare(host=host, share=share_name, access=access_val, notes=note_val))
+                s.add(SmbShare(host=host, share=share_name, access=access_val, notes=note_val, user_id=user_id))
                 added += 1
             s.commit()
         return {"ok": True, "added": added, "skipped": skipped, "errors": errors}
 
     @app.post("/api/smb-shares/create-one", response_class=JSONResponse)
-    def smb_shares_create_one(host: str = Form(""), share: str = Form(""), access: str = Form(""), notes: str = Form("")):
+    def smb_shares_create_one(host: str = Form(""), share: str = Form(""), access: str = Form(""), notes: str = Form(""), user_id: int = Form(0)):
         host = host.strip()
         share = share.strip()
         access = access.strip().upper()
         notes = notes.strip()
         if not host or not share:
             return {"ok": False, "error": "Host and share are required."}
+        if user_id <= 0:
+            return {"ok": False, "error": "User is required."}
         with db() as s:
+            if s.get(NameItem, user_id) is None:
+                return {"ok": False, "error": "Selected user not found."}
             existing = s.scalar(
                 select(SmbShare).where(
                     SmbShare.host == host,
                     SmbShare.share == share,
+                    SmbShare.user_id == user_id,
                 )
             )
             if existing:
                 return {"ok": False, "error": "This share entry already exists."}
-            s.add(SmbShare(host=host, share=share, access=access, notes=notes))
+            s.add(SmbShare(host=host, share=share, access=access, notes=notes, user_id=user_id))
             s.commit()
         return {"ok": True}
 
     @app.post("/api/smb-shares/update", response_class=JSONResponse)
-    def smb_shares_update(share_id: int = Form(0), host: str = Form(""), share: str = Form(""), access: str = Form(""), notes: str = Form("")):
+    def smb_shares_update(share_id: int = Form(0), host: str = Form(""), share: str = Form(""), access: str = Form(""), notes: str = Form(""), user_id: int = Form(0)):
         if not share_id:
             return {"ok": False, "error": "share_id is required."}
         host = host.strip()
@@ -3761,14 +4384,18 @@ def create_app(
         notes = notes.strip()
         if not host or not share:
             return {"ok": False, "error": "Host and share are required."}
+        resolved_user_id = user_id if user_id > 0 else None
         with db() as s:
             target = s.get(SmbShare, share_id)
             if not target:
                 return {"ok": False, "error": "Not found."}
+            if resolved_user_id is not None and s.get(NameItem, resolved_user_id) is None:
+                return {"ok": False, "error": "Selected user not found."}
             existing = s.scalar(
                 select(SmbShare).where(
                     SmbShare.host == host,
                     SmbShare.share == share,
+                    SmbShare.user_id == resolved_user_id,
                     SmbShare.id != share_id,
                 )
             )
@@ -3778,6 +4405,7 @@ def create_app(
             target.share = share
             target.access = access
             target.notes = notes
+            target.user_id = resolved_user_id
             s.commit()
         return {"ok": True}
 
@@ -3799,6 +4427,15 @@ def create_app(
             shares = s.execute(
                 select(SmbShare).order_by(SmbShare.host, SmbShare.share)
             ).scalars().all()
+            user_ids = {sh.user_id for sh in shares if sh.user_id is not None}
+            users = {}
+            if user_ids:
+                users = {
+                    u.id: _smb_user_label(u)
+                    for u in s.execute(
+                        select(NameItem).where(NameItem.id.in_(user_ids))
+                    ).scalars().all()
+                }
             hosts_map: dict[str, list[dict]] = {}
             for sh in shares:
                 hosts_map.setdefault(sh.host, []).append({
@@ -3806,6 +4443,8 @@ def create_app(
                     "share": sh.share,
                     "access": sh.access,
                     "notes": sh.notes,
+                    "user_id": sh.user_id,
+                    "user": users.get(sh.user_id, "") if sh.user_id is not None else "",
                 })
         return {"hosts": hosts_map, "total": len(shares)}
 
@@ -4663,19 +5302,7 @@ def create_app(
                 for ip in prowl_ips_cleaned:
                     all_sub_ips.add(ip)
 
-            # Query HTTP/HTTPS services for all collected IPs
-            http_ports_set = {80, 443, 8080, 8443, 8000, 8888}
-            ip_ports_map: dict[str, list[int]] = {}
-            if all_sub_ips:
-                svc_rows = s.execute(
-                    select(Host.ip, Service.port).join(Host).where(
-                        Host.ip.in_(all_sub_ips),
-                        Service.port.in_(http_ports_set),
-                        Service.state == "open"
-                    )
-                ).fetchall()
-                for ip, port in svc_rows:
-                    ip_ports_map.setdefault(ip, []).append(port)
+            ip_ports_map = get_open_http_ports_by_ip(s, all_sub_ips)
 
             root_domains = {}
             for x in rows:
@@ -4811,36 +5438,23 @@ def create_app(
                     }
                 )
 
-            # Query all WebUrl records
-            url_rows = (
-                s.execute(
-                    select(WebUrl).order_by(WebUrl.domain.asc(), WebUrl.url.asc())
-                )
-                .scalars()
-                .all()
-            )
-            # Build hostname -> urls lookup
-            url_by_host: dict[str, list[dict]] = {}
-            for u in url_rows:
-                try:
-                    hostname = (urlsplit(u.url).hostname or "").strip().lower().strip(".")
-                    if not hostname:
-                        hostname = (urlsplit("http://" + u.url).hostname or "").strip().lower().strip(".")
-                except Exception:
-                    hostname = ""
-                if not hostname:
-                    continue
-                if hostname not in url_by_host:
-                    url_by_host[hostname] = []
-                url_by_host[hostname].append(
-                    {
-                        "id": u.id,
-                        "url": u.url,
-                        "domain": u.domain,
-                        "title": u.title,
-                        "status_code": u.status_code,
-                    }
-                )
+            # Count URLs per host without loading every URL into the page.
+            url_count_by_host: dict[str, int] = {}
+            domain_count_rows = s.execute(
+                select(WebUrl.domain, func.count(WebUrl.id)).group_by(WebUrl.domain)
+            ).all()
+            for domain_value, count in domain_count_rows:
+                host = _web_url_host_from_domain(domain_value)
+                if host:
+                    url_count_by_host[host] = url_count_by_host.get(host, 0) + int(count)
+            if any(not _web_url_host_from_domain(domain_value) for domain_value, _ in domain_count_rows):
+                empty_domain_urls = s.execute(
+                    select(WebUrl.url).where(WebUrl.domain == "")
+                ).scalars().all()
+                for url_value in empty_domain_urls:
+                    host = _web_url_host_from_url(url_value)
+                    if host:
+                        url_count_by_host[host] = url_count_by_host.get(host, 0) + 1
 
         # Group by root domain, attaching matched URLs to each subdomain
         grouped = {}
@@ -4848,8 +5462,10 @@ def create_app(
             rd = r["root_domain"] or "unknown"
             if rd not in grouped:
                 grouped[rd] = {"subs": [], "rdap": root_domains.get(rd, {})}
-            # Attach URLs matching this subdomain's FQDN
-            r["urls"] = url_by_host.get(r["fqdn"], [])
+            # Attach URL count matching this subdomain's FQDN
+            r["url_count"] = url_count_by_host.get(
+                _web_url_host_from_domain(r["fqdn"]), 0
+            )
             grouped[rd]["subs"].append(r)
 
         # Ensure standalone IPs group exists and is sorted
@@ -4873,7 +5489,7 @@ def create_app(
                         "in_scope": True, "sensitive": False,
                         "sensitive_ips": set(), "in_scope_ips": set(),
                         "rdap": {}, "prowl": {}, "scope_override": None,
-                        "ports": {}, "urls": [],
+                        "ports": {}, "url_count": 0,
                         "complete": root_sub.complete if root_sub else 0,
                         "inprogress": root_sub.inprogress if root_sub else 0,
                         "waf": root_sub.waf if root_sub else 0,
@@ -4884,6 +5500,81 @@ def create_app(
             "subdomains.html",
             {"request": request, "grouped": grouped_filtered, "show_out": show_out, "excluded": excluded},
         )
+
+    @app.get("/api/subdomains/{fqdn}/urls")
+    def api_subdomain_urls(
+        fqdn: str,
+        limit: int = Query(100, ge=1, le=500),
+        offset: int = Query(0, ge=0),
+    ):
+        host = _web_url_host_from_domain(fqdn)
+        if not host:
+            return {"ok": False, "error": "Invalid fqdn", "urls": [], "total": 0, "offset": offset, "limit": limit}
+
+        def _serialize_url(u: WebUrl) -> dict:
+            return {
+                "id": u.id,
+                "url": u.url,
+                "domain": u.domain,
+                "title": u.title or "",
+                "status_code": u.status_code or 0,
+            }
+
+        with db() as s:
+            domain_filter = (
+                (WebUrl.domain == host)
+                | (WebUrl.domain == host + ".")
+                | (WebUrl.domain.like(_like_escape(host) + ":%", escape="\\"))
+                | (WebUrl.domain.like(_like_escape(host) + ".:%", escape="\\"))
+            )
+            base_total = int(s.scalar(select(func.count(WebUrl.id)).where(domain_filter)) or 0)
+            empty_domain_urls = (
+                s.execute(select(WebUrl).where(WebUrl.domain == ""))
+                .scalars()
+                .all()
+            )
+            empty_urls = [
+                _serialize_url(u)
+                for u in empty_domain_urls
+                if _web_url_host_from_url(u.url) == host
+            ]
+            empty_urls.sort(key=lambda item: item["url"])
+            base_start = max(0, offset - len(empty_urls))
+            base_fetch = limit + len(empty_urls)
+            base_rows = (
+                s.execute(
+                    select(WebUrl)
+                    .where(domain_filter)
+                    .order_by(WebUrl.url.asc())
+                    .offset(base_start)
+                    .limit(base_fetch)
+                )
+                .scalars()
+                .all()
+            )
+            base_urls = [_serialize_url(u) for u in base_rows]
+            base_urls.sort(key=lambda item: item["url"])
+
+        merged: list[dict] = []
+        i = j = 0
+        while i < len(empty_urls) and j < len(base_urls):
+            if empty_urls[i]["url"] <= base_urls[j]["url"]:
+                merged.append(empty_urls[i]); i += 1
+            else:
+                merged.append(base_urls[j]); j += 1
+        merged.extend(empty_urls[i:])
+        merged.extend(base_urls[j:])
+        merged_start = offset - base_start
+        page = merged[merged_start:merged_start + limit]
+        total = base_total + len(empty_urls)
+        return {
+            "ok": True,
+            "urls": page,
+            "total": total,
+            "offset": offset,
+            "limit": limit,
+            "has_more": offset + limit < total,
+        }
 
     @app.get("/docs", response_class=HTMLResponse)
     def docs(request: Request):
@@ -6269,6 +6960,11 @@ def create_app(
             name = s.scalar(select(NameItem).where(NameItem.id == name_id))
             if not name:
                 return JSONResponse({"ok": False, "error": "Name not found"}, status_code=404)
+            s.execute(
+                SmbShare.__table__.update()
+                .where(SmbShare.user_id == name_id)
+                .values(user_id=None)
+            )
             s.delete(name)
             s.commit()
         return {"ok": True}
