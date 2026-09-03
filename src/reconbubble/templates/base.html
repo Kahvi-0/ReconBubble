@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>ReconBubble</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg"/>
-  <link rel="stylesheet" href="/static/app.css?v=13"/>
+  <link rel="stylesheet" href="/static/app.css?v=15"/>
 </head>
 <body>
   <header class="topbar">
@@ -102,7 +102,7 @@
       <div class="global-notes-header">
         <div class="notes-tabs">
           <button class="notes-tab active" data-notes-tab="quick" type="button">Quick Notes</button>
-          <button class="notes-tab" data-notes-tab="table" type="button">Notes</button>
+          <button class="notes-tab" data-notes-tab="table" type="button">Creds</button>
           <button class="notes-tab" data-notes-tab="spray" type="button">Spray</button>
           <button class="notes-tab" data-notes-tab="timeline" type="button">Timeline</button>
         </div>
@@ -112,13 +112,8 @@
         <div id="globalNotesStatus" class="muted" style="opacity:0;"></div>
       </div>
       <div id="notesTableTab" class="notes-tab-panel" style="display:none;">
-        <table id="globalNotesTable">
-          <thead>
-            <tr><th>Title</th><th>Notes</th><th style="width:36px;"></th></tr>
-          </thead>
-          <tbody id="globalNotesTableBody"></tbody>
-        </table>
-        <button class="btn" id="globalNotesAddRow" type="button" style="margin:10px;">+ Add Row</button>
+        <div id="globalNotesCredsList" class="notes-creds-list"></div>
+        <button class="btn" id="globalNotesAddRow" type="button" style="margin:10px;">+ Add Credential</button>
       </div>
       <div id="notesSprayTab" class="notes-tab-panel" style="display:none;">
         <div id="sprayServiceList" style="display:flex; gap:6px; margin:8px 10px 4px; flex-wrap:wrap;"></div>
@@ -136,6 +131,19 @@
       </div>
     </div>
   </aside>
+  <script>
+    if (localStorage.getItem("reconbubble.globalNotesPinned") === "1") {
+      var gnp = document.getElementById("globalNotesPanel");
+      gnp.classList.add("open", "no-transition");
+      gnp.setAttribute("aria-hidden", "false");
+      var gnt = document.getElementById("globalNotesToggle");
+      if (gnt) {
+        gnt.textContent = "🔒";
+        gnt.classList.add("locked");
+        gnt.classList.remove("unlocked");
+      }
+    }
+  </script>
 
   <div id="sidebarOverlay" class="overlay hidden"></div>
   <aside id="sidebar" class="sidebar hidden" aria-hidden="true">
@@ -149,7 +157,7 @@
 
   {% block scripts %}{% endblock %}
   <script src="/static/sidebar.js?v=11"></script>
-  <script src="/static/global_notes_panel.js?v=28"></script>
+  <script src="/static/global_notes_panel.js?v=30"></script>
   <script>
     const allDropdowns = [
       document.getElementById("perimeterDropdown"),

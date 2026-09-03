@@ -1,6 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 import asyncio, json, ipaddress, re, socket, uuid
+import html as html_lib
 from urllib.parse import quote_plus, urlsplit
 from datetime import datetime
 
@@ -9,7 +10,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, File
 from fastapi.staticfiles import StaticFiles
 from starlette.templating import Jinja2Templates
 
-from sqlalchemy import select, func, text
+from sqlalchemy import select, func, text, or_
 from sqlalchemy.orm import Session
 
 from .db import make_engine, make_session, Base, migrate_sqlite
@@ -71,6 +72,33 @@ from .parsers import (
 DOMAIN_RE = re.compile(
     r"(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9](?:\.[a-z0-9-]{0,61}[a-z0-9])?)+\.?$"
 )
+_WEB_PORTS = frozenset({80, 443, 8080, 8443, 8000, 8888})
+_WEB_SERVICE_NAME_RE = re.compile(r"(?i)(?:^|[^a-z])https?(?=$|[^a-z])")
+_WEB_PRODUCT_RE = re.compile(
+    r"(?i)(?:apache|httpd|net/http|waitress|gunicorn|werkzeug|nginx|caddy|envoy|\biis\b)"
+)
+_HTTP_STATUS_RE = re.compile(
+    r"(?im)^\s*[\"']?\s*HTTP/(?:1\\?\.[01]|2)\b(?:\\x20|%20|\s)+[1-5]\d{2}\b"
+)
+_HTTP_HTML_RE = re.compile(r"(?i)<(!doctype\s+)?html\b")
+_HTTP_CONTENT_TYPE_RE = re.compile(r"(?im)^\s*content-type\s*:")
+_HTTP_HEADER_RE = re.compile(
+    r"(?im)^\s*(?:server|content-length|connection|access-control-allow-origin)\s*:"
+)
+
+
+def _hostname_as_domain(value: str) -> str:
+    v = (value or "").strip().lower().strip(".")
+    if not v or "." not in v:
+        return ""
+    try:
+        ipaddress.ip_address(v)
+        return ""
+    except ValueError:
+        pass
+    if not DOMAIN_RE.match(v):
+        return ""
+    return v
 
 
 def _web_url_host_from_domain(value: str) -> str:
@@ -366,7 +394,7 @@ def create_app(
         rows = s.execute(
             text(
                 "SELECT hosts.id, hosts.ip, hosts.hostname FROM host_subdomains "
-                "JOIN subdomains ON subdomains.id = host_subdomains.host_id "
+                "JOIN subdomains ON subdomains.id = host_subdomains.subdomain_id "
                 "JOIN hosts ON hosts.id = host_subdomains.host_id "
                 "WHERE subdomains.fqdn = :fq ORDER BY hosts.ip ASC"
             ),
@@ -374,21 +402,69 @@ def create_app(
         ).fetchall()
         return [{"id": r[0], "ip": r[1], "hostname": r[2] or ""} for r in rows]
 
-    def get_open_http_ports_by_ip(s: Session, ips: set[str] | list[str]) -> dict[str, list[int]]:
-        if not ips:
+    def get_open_web_ports_by_ip(
+        s: Session, ips: set[str] | list[str] | None = None
+    ) -> dict[str, list[int]]:
+        if ips is not None and not ips:
             return {}
-        http_ports = (80, 443, 8080, 8443, 8000, 8888)
-        rows = s.execute(
-            select(Host.ip, Service.port).join(Host).where(
-                Host.ip.in_(list(ips)),
-                Service.port.in_(http_ports),
-                Service.state == "open"
+        evidence_service_ids = (
+            select(ServiceEvidence.service_id)
+            .where(
+                or_(
+                    ServiceEvidence.raw_output.ilike("%HTTP/1%"),
+                    ServiceEvidence.raw_output.ilike("%HTTP/2%"),
+                    ServiceEvidence.raw_output.ilike("%<html%"),
+                    ServiceEvidence.raw_output.ilike("%<!doctype%"),
+                    ServiceEvidence.raw_output.ilike("%Content-Type:%"),
+                    ServiceEvidence.raw_output.ilike("%Server:%"),
+                )
             )
-        ).fetchall()
+            .scalar_subquery()
+        )
+        query = (
+            select(Host.ip, Service)
+            .join(Host)
+            .where(
+                Service.state == "open",
+                or_(
+                    Service.port.in_(list(_WEB_PORTS)),
+                    Service.service_name.ilike("%http%"),
+                    Service.product.ilike("%http%"),
+                    Service.id.in_(evidence_service_ids),
+                ),
+            )
+        )
+        if ips is not None:
+            query = query.where(Host.ip.in_(list(ips)))
         result: dict[str, list[int]] = {}
-        for ip, port in rows:
-            result.setdefault(ip, []).append(port)
-        return result
+        for ip, svc in s.execute(query).all():
+            if (
+                svc.port in _WEB_PORTS
+                or _WEB_SERVICE_NAME_RE.search(svc.service_name or "")
+                or _WEB_PRODUCT_RE.search(svc.product or "")
+            ):
+                result.setdefault(ip, []).append(svc.port)
+                continue
+            raw_outputs = s.execute(
+                select(ServiceEvidence.raw_output).where(
+                    ServiceEvidence.service_id == svc.id
+                )
+            ).scalars().all()
+            for raw in raw_outputs:
+                normalized = html_lib.unescape(raw or "")
+                normalized = normalized.replace("\\x20", " ").replace("%20", " ")
+                normalized = normalized.replace("\\r", "\r").replace("\\n", "\n")
+                if (
+                    _HTTP_STATUS_RE.search(normalized)
+                    or _HTTP_HTML_RE.search(normalized)
+                    or (
+                        _HTTP_CONTENT_TYPE_RE.search(normalized)
+                        and _HTTP_HEADER_RE.search(normalized)
+                    )
+                ):
+                    result.setdefault(ip, []).append(svc.port)
+                    break
+        return {ip: sorted(set(ports)) for ip, ports in result.items()}
 
     def link_host_domain(s: Session, host_id: int, fqdn: str) -> None:
         fqdn = fqdn.strip().lower().rstrip(".")
@@ -678,22 +754,11 @@ def create_app(
         return RedirectResponse(url="/scope", status_code=303)
 
     # Upload
-    @app.get("/upload", response_class=HTMLResponse)
-    def upload_page(request: Request):
-        with db() as s:
-            users = (
-                s.execute(
-                    select(NameItem).order_by(
-                        NameItem.last_name.asc(), NameItem.first_name.asc()
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            upload_count_rows = s.execute(
-                select(UploadLog.kind, func.count(UploadLog.id)).group_by(UploadLog.kind)
-            ).all()
-        upload_counts = {kind: int(count) for kind, count in upload_count_rows}
+    def _upload_counts(s: Session) -> tuple[list[dict], int]:
+        rows = s.execute(
+            select(UploadLog.kind, func.count(UploadLog.id)).group_by(UploadLog.kind)
+        ).all()
+        counts = {kind: int(count) for kind, count in rows}
         upload_type_labels = [
             ("nmap_xml", "Nmap XML"),
             ("doc", "OSINT document"),
@@ -711,21 +776,40 @@ def create_app(
             ("smb_shares", "SMB Shares"),
         ]
         type_counts = [
-            {"kind": kind, "label": label, "count": upload_counts.get(kind, 0)}
+            {"kind": kind, "label": label, "count": counts.get(kind, 0)}
             for kind, label in upload_type_labels
         ]
-        total_uploads = sum(entry["count"] for entry in type_counts)
-        return templates.TemplateResponse(
-            "upload.html",
-            {
-                "request": request,
-                "workspace": ws,
-                "users": users,
-                "user_label": _smb_user_label,
-                "type_counts": type_counts,
-                "total_uploads": total_uploads,
-            },
-        )
+        return type_counts, sum(entry["count"] for entry in type_counts)
+
+    def _upload_context(request: Request, users: list, error: str | None = None, **extra) -> dict:
+        with db() as s:
+            type_counts, total_uploads = _upload_counts(s)
+        ctx = {
+            "request": request,
+            "workspace": ws,
+            "users": users,
+            "user_label": _smb_user_label,
+            "type_counts": type_counts,
+            "total_uploads": total_uploads,
+        }
+        if error is not None:
+            ctx["error"] = error
+        ctx.update(extra)
+        return ctx
+
+    @app.get("/upload", response_class=HTMLResponse)
+    def upload_page(request: Request):
+        with db() as s:
+            users = (
+                s.execute(
+                    select(NameItem).order_by(
+                        NameItem.last_name.asc(), NameItem.first_name.asc()
+                    )
+                )
+                .scalars()
+                .all()
+            )
+        return templates.TemplateResponse("upload.html", _upload_context(request, users))
 
     @app.post("/upload")
     async def upload(
@@ -741,26 +825,14 @@ def create_app(
             if smb_user_id <= 0:
                 return templates.TemplateResponse(
                     "upload.html",
-                    {
-                        "request": request,
-                        "workspace": ws,
-                        "users": [],
-                        "user_label": _smb_user_label,
-                        "error": "Select a user for SMB share imports.",
-                    },
+                    _upload_context(request, [], error="Select a user for SMB share imports."),
                     status_code=400,
                 )
             with db() as s:
                 if s.get(NameItem, smb_user_id) is None:
                     return templates.TemplateResponse(
                         "upload.html",
-                        {
-                            "request": request,
-                            "workspace": ws,
-                            "users": [],
-                            "user_label": _smb_user_label,
-                            "error": "Selected user not found.",
-                        },
+                        _upload_context(request, [], error="Selected user not found."),
                         status_code=400,
                     )
         stored: str | None = None
@@ -968,18 +1040,16 @@ def create_app(
                     upload_results[0]["conflicts"] = raw_result.get("conflicts", [])
                 return templates.TemplateResponse(
                     "upload.html",
-                    {
-                        "request": request,
-                        "workspace": ws,
-                        "users": upload_users,
-                        "user_label": _smb_user_label,
-                        "upload_results": upload_results,
-                        "upload_results_summary": {
+                    _upload_context(
+                        request,
+                        upload_users,
+                        upload_results=upload_results,
+                        upload_results_summary={
                             "files": [fname],
                             "redirect": redirect_map.get(kind, "/"),
                             "errors": all_errors,
                         },
-                    },
+                    ),
                 )
             elif file:
                 files = file if isinstance(file, list) else [file]
@@ -994,15 +1064,9 @@ def create_app(
                         stored_files.append(stored)
                         fnames.append(f.filename)
                 if not stored_files:
-                    return templates.TemplateResponse(
+                        return templates.TemplateResponse(
                         "upload.html",
-                        {
-                            "request": request,
-                            "workspace": ws,
-                            "users": upload_users,
-                            "user_label": _smb_user_label,
-                            "error": "No valid files uploaded.",
-                        },
+                        _upload_context(request, upload_users, error="No valid files uploaded."),
                         status_code=400,
                     )
                 upload_results = []
@@ -1029,54 +1093,38 @@ def create_app(
                             upload_results[-1]["conflicts"] = raw_result.get("conflicts", [])
                 return templates.TemplateResponse(
                     "upload.html",
-                    {
-                        "request": request,
-                        "workspace": ws,
-                        "users": upload_users,
-                        "user_label": _smb_user_label,
-                        "upload_results": upload_results,
-                        "upload_results_summary": {
+                    _upload_context(
+                        request,
+                        upload_users,
+                        upload_results=upload_results,
+                        upload_results_summary={
                             "files": fnames,
                             "redirect": redirect_map.get(kind, "/"),
                             "errors": all_errors,
                         },
-                    },
+                    ),
                 )
             else:
                 return templates.TemplateResponse(
                     "upload.html",
-                    {
-                        "request": request,
-                        "workspace": ws,
-                        "users": upload_users,
-                        "user_label": _smb_user_label,
-                        "error": "No file uploaded and no raw text provided.",
-                    },
+                    _upload_context(
+                        request,
+                        upload_users,
+                        error="No file uploaded and no raw text provided.",
+                    ),
                     status_code=400,
                 )
 
         except ValueError as e:
             return templates.TemplateResponse(
                 "upload.html",
-                {
-                    "request": request,
-                    "workspace": ws,
-                    "users": upload_users,
-                    "user_label": _smb_user_label,
-                    "error": str(e),
-                },
+                _upload_context(request, upload_users, error=str(e)),
                 status_code=400,
             )
         except Exception as e:
             return templates.TemplateResponse(
                 "upload.html",
-                {
-                    "request": request,
-                    "workspace": ws,
-                    "users": upload_users,
-                    "user_label": _smb_user_label,
-                    "error": f"Upload failed: {e}",
-                },
+                _upload_context(request, upload_users, error=f"Upload failed: {e}"),
                 status_code=500,
             )
 
@@ -1199,6 +1247,9 @@ def create_app(
             ip_in = ip_in_scope(r.ip, ips, subnets, excluded)
             ip_sensitive = ip_in_scope(r.ip, s_ips, s_subnets, s_excluded)
             host_domains = domains_by_host.get(r.id, [])
+            hostname_domain = _hostname_as_domain(r.hostname)
+            if hostname_domain and hostname_domain not in host_domains:
+                host_domains = sorted([*host_domains, hostname_domain])
             # Check scope for each individual domain
             domain_list = []
             any_domain_in = False
@@ -2155,7 +2206,7 @@ def create_app(
             )
             sensitive_ip = any(ip_in_scope(ip, s_ips, s_subnets, s_excluded) for ip in ips_found)
             hosts = list_subdomain_hosts(s, fq)
-            ip_ports_map = get_open_http_ports_by_ip(s, ips_found)
+            ip_ports_map = get_open_web_ports_by_ip(s, ips_found)
             sub_ports: dict[str, list[int]] = {}
             for ip in ips_found:
                 if ip in ip_ports_map:
@@ -4775,24 +4826,28 @@ def create_app(
                 .first()
             )
 
-            # Detect deleted user nodes and clear topology_node_id from NameItem
-            if row and (row.body or "").strip():
-                try:
-                    old_data = json.loads(row.body)
-                    old_user_ids = {
-                        n["id"]
-                        for n in (old_data.get("nodes") or [])
-                        if n.get("type") == "user"
-                    }
-                    new_user_ids = {n["id"] for n in nodes if n.get("type") == "user"}
-                    deleted_user_ids = old_user_ids - new_user_ids
-                    if deleted_user_ids:
-                        for ni in s.execute(
-                            select(NameItem).where(NameItem.topology_node_id.in_(deleted_user_ids))
-                        ).scalars().all():
-                            ni.topology_node_id = ""
-                except Exception:
-                    pass
+            current_name_nodes = {}
+            for n in nodes:
+                if n.get("type") == "user":
+                    linked_name_id = str(n.get("linked_name_id") or "").strip()
+                    if linked_name_id:
+                        current_name_nodes[linked_name_id] = str(n.get("id") or "")
+
+            if current_name_nodes:
+                linked_ids = [int(k) for k in current_name_nodes if str(k).isdigit()]
+                if linked_ids:
+                    for ni in s.execute(
+                        select(NameItem).where(NameItem.id.in_(linked_ids))
+                    ).scalars().all():
+                        expected = current_name_nodes.get(str(ni.id), "")
+                        if (ni.topology_node_id or "") != expected:
+                            ni.topology_node_id = expected
+
+            for ni in s.execute(
+                select(NameItem).where(NameItem.topology_node_id != "")
+            ).scalars().all():
+                if str(ni.id) not in current_name_nodes:
+                    ni.topology_node_id = ""
 
             _update_compromised_cache(s, nodes)
 
@@ -5302,7 +5357,7 @@ def create_app(
                 for ip in prowl_ips_cleaned:
                     all_sub_ips.add(ip)
 
-            ip_ports_map = get_open_http_ports_by_ip(s, all_sub_ips)
+            ip_ports_map = get_open_web_ports_by_ip(s, all_sub_ips)
 
             root_domains = {}
             for x in rows:
@@ -5395,20 +5450,7 @@ def create_app(
                                 ips_covered_by_inscope_subs.add(ip)
 
             # Find ALL hosts with HTTP/HTTPS open services (linked or unlinked)
-            all_web_svc_rows = s.execute(
-                select(Host.id, Host.ip, Service.port).join(Host).where(
-                    Service.state == "open",
-                    (
-                        Service.port.in_([80, 443, 8080, 8443, 8000, 8888])
-                        | Service.service_name.ilike("%http%")
-                    ),
-                )
-            ).fetchall()
-
-            # Group by IP: all IPs with web ports
-            all_web_ips_ports: dict[str, list[int]] = {}
-            for _, ip, port in all_web_svc_rows:
-                all_web_ips_ports.setdefault(ip, []).append(port)
+            all_web_ips_ports = get_open_web_ports_by_ip(s)
 
             # All in-scope IPs with HTTP/HTTPS ports
             standalone_seen: set[str] = set()
@@ -6392,18 +6434,7 @@ def create_app(
                         out.append(x.root_domain)
 
             # Include standalone IPs with HTTP/HTTPS ports
-            all_web_svc_rows = s.execute(
-                select(Host.id, Host.ip, Service.port).join(Host).where(
-                    Service.state == "open",
-                    (
-                        Service.port.in_([80, 443, 8080, 8443, 8000, 8888])
-                        | Service.service_name.ilike("%http%")
-                    ),
-                )
-            ).fetchall()
-            all_web_ips_ports: dict[str, list[int]] = {}
-            for _, ip, port in all_web_svc_rows:
-                all_web_ips_ports.setdefault(ip, []).append(port)
+            all_web_ips_ports = get_open_web_ports_by_ip(s)
             for ip in all_web_ips_ports:
                 if ip_in_scope(ip, ips, subnets, excluded):
                     for p in sorted(set(all_web_ips_ports[ip])):
@@ -6769,6 +6800,7 @@ def create_app(
 
     @app.get("/users", response_class=HTMLResponse)
     def users_page(request: Request):
+        topology_name_node_ids: dict[str, str] = {}
         with db() as s:
             names = (
                 s.execute(
@@ -6777,11 +6809,36 @@ def create_app(
                 .scalars()
                 .all()
             )
+            topo_row = (
+                s.execute(
+                    select(Note)
+                    .where(Note.object_type == "topology_map", Note.object_id == 0)
+                    .order_by(Note.updated_at.desc(), Note.id.desc())
+                )
+                .scalars()
+                .first()
+            )
+            if topo_row and (topo_row.body or "").strip():
+                try:
+                    topo_data = json.loads(topo_row.body)
+                    for n in (topo_data.get("nodes") or []):
+                        if n.get("type") == "user":
+                            nid = str(n.get("linked_name_id") or "").strip()
+                            if nid:
+                                topology_name_node_ids[nid] = str(n.get("id") or "")
+                except Exception:
+                    pass
         compromised_ids = _topology_compromised_ids()
         compromised_name_ids = compromised_ids.get("name_ids", set()) if compromised_ids else set()
         return templates.TemplateResponse(
-            "users.html", {"request": request, "names": names, "compromised_name_ids": compromised_name_ids}
-            )
+            "users.html",
+            {
+                "request": request,
+                "names": names,
+                "compromised_name_ids": compromised_name_ids,
+                "topology_name_node_ids": topology_name_node_ids,
+            },
+        )
 
     @app.get("/api/names/list")
     def api_names_list():

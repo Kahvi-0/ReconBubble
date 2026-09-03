@@ -1,39 +1,503 @@
 {% extends "base.html" %}
 {% block content %}
 <style>
+  :root {
+    --topo-topbar-height: 81px;
+    --topo-border: #263349;
+    --topo-border-strong: #334155;
+    --topo-text: #e5eefb;
+    --topo-accent: #60a5fa;
+  }
   body { overflow: hidden; }
-  .container { margin: 0; padding: 0; }
+  .container { margin: 0; padding: 0; max-width: none; }
+  .topo-page {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - var(--topo-topbar-height));
+    padding: 0;
+    border-top: 1px solid var(--topo-border);
+  }
+  .topo-toolbar {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    right: 10px;
+    z-index: 70;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 48px;
+    padding: 8px 10px;
+    background: linear-gradient(180deg, rgba(17, 24, 39, 0.94), rgba(11, 18, 32, 0.9));
+    border: 1px solid var(--topo-border);
+    border-radius: 14px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(10px);
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-shrink: 0;
+    scrollbar-width: thin;
+  }
+  .topo-palette {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    padding: 2px;
+    scrollbar-width: thin;
+  }
+  .topo-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 9px;
+    border: 1px solid var(--topo-border-strong);
+    border-radius: 999px;
+    background: #111b28;
+    color: #dbeafe;
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: grab;
+    transition: transform 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+  }
+  .topo-chip:hover {
+    border-color: var(--topo-accent);
+    background: #15243a;
+    transform: translateY(-1px);
+  }
+  .topo-chip:active {
+    cursor: grabbing;
+    transform: scale(0.98);
+  }
+  .topo-chip:focus-visible {
+    outline: 2px solid var(--topo-accent);
+    outline-offset: 2px;
+  }
+  .topo-chip-icon {
+    font-size: 14px;
+    line-height: 1;
+  }
+  #topoNoteContent {
+    margin-top: 4px;
+    min-height: 260px;
+    max-height: 440px;
+    overflow-y: auto;
+    background: #0d1526;
+    border: 1px solid #243044;
+    border-radius: 8px;
+    padding: 10px 12px;
+    color: #dbe7ff;
+    font-size: 13px;
+    line-height: 1.55;
+    outline: none;
+    word-break: break-word;
+  }
+  #topoNoteContent:focus {
+    border-color: var(--topo-accent, #3b82f6);
+  }
+  #topoNoteContent img {
+    max-width: 100%;
+    border-radius: 6px;
+    display: block;
+    margin: 6px 0;
+  }
+  .topo-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    padding-left: 8px;
+    border-left: 1px solid #24324a;
+  }
+  .topo-icon-btn {
+    width: 32px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--topo-border-strong);
+    border-radius: 10px;
+    background: #111b28;
+    color: #d7e3f8;
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .topo-icon-btn:hover {
+    border-color: var(--topo-accent);
+    background: #17263a;
+    color: #ffffff;
+  }
+  .topo-icon-btn:focus-visible {
+    outline: 2px solid var(--topo-accent);
+    outline-offset: 2px;
+  }
+  .topo-canvas-wrap {
+    position: relative;
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    background: #0b1220;
+  }
+  #topologyCy {
+    width: 100%;
+    height: 100%;
+    background-color: #0b1220;
+    background-image: radial-gradient(circle, #26354f 1px, transparent 1.2px);
+    background-size: 28px 28px;
+    background-position: 0 0;
+    cursor: default;
+  }
+  #topologyNoteLayer {
+    position: absolute;
+    inset: 0;
+    z-index: 10;
+    pointer-events: none;
+    overflow: hidden;
+  }
+  #topologyNoteLayer .topo-note-card {
+    position: absolute;
+    left: 0;
+    top: 0;
+    transform-origin: 0 0;
+    box-sizing: border-box;
+    overflow: hidden;
+    padding: 10px 12px;
+    font-size: 13px;
+    line-height: 1.45;
+    color: #dbe7ff;
+    word-break: break-word;
+    pointer-events: none;
+  }
+  #topologyNoteLayer .topo-note-card img {
+    max-width: 100%;
+    height: auto;
+  }
+  #topologyCy.topo-space { cursor: grab; }
+  #topologyCy.topo-panning { cursor: grabbing; }
+  .topo-controls {
+    position: absolute;
+    left: 10px;
+    bottom: 10px;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px;
+    background: rgba(10, 15, 26, 0.82);
+    border: 1px solid #263349;
+    border-radius: 14px;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 12px 26px rgba(0, 0, 0, 0.24);
+  }
+  #topologyInspectorWrap {
+    display: none;
+    position: absolute;
+    top: 64px;
+    right: 10px;
+    bottom: 10px;
+    z-index: 65;
+    width: min(360px, calc(100% - 20px));
+    overflow-y: auto;
+    background: rgba(15, 23, 42, 0.97);
+    border: 1px solid #263349;
+    border-radius: 14px;
+    padding: 14px;
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.52);
+    backdrop-filter: blur(10px);
+    animation: topo-drawer-in 0.18s ease;
+  }
+  #topologyInspectorWrap.topo-closing {
+    animation: topo-drawer-out 0.16s ease forwards;
+  }
+  @keyframes topo-drawer-in {
+    from {
+      transform: translateX(18px);
+      opacity: 0;
+    }
+    to {
+      transform: translateX(0);
+      opacity: 1;
+    }
+  }
+  @keyframes topo-drawer-out {
+    from {
+      transform: translateX(0);
+      opacity: 1;
+    }
+    to {
+      transform: translateX(18px);
+      opacity: 0;
+    }
+  }
+  #topologyInspectorWrap h2 {
+    margin: 0;
+    font-size: 15px;
+    color: var(--topo-text);
+  }
+  .topo-inspector-head {
+    position: sticky;
+    top: -14px;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    padding: 2px 0 8px;
+    background: rgba(15, 23, 42, 0.97);
+  }
+  .topo-unlink {
+    width: 22px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid #334155;
+    border-radius: 9999px;
+    background: #0b1220;
+    color: #94a3b8;
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .topo-unlink:hover {
+    background: #7f1d1d;
+    border-color: #ef4444;
+    color: #fecaca;
+  }
+  .topo-unlink:focus-visible {
+    outline: 2px solid #58a6ff;
+    outline-offset: 2px;
+  }
+  .topo-search {
+    position: relative;
+    flex: 0 1 240px;
+    min-width: 150px;
+  }
+  .topo-search input {
+    width: 100%;
+    height: 32px;
+    padding: 0 32px 0 12px;
+    border: 1px solid var(--topo-border-strong);
+    border-radius: 999px;
+    background: #111b28;
+    color: var(--topo-text);
+    font-size: 12px;
+  }
+  .topo-search input::placeholder {
+    color: #7c8aa0;
+  }
+  .topo-search input:focus-visible {
+    outline: 2px solid var(--topo-accent);
+    outline-offset: 2px;
+    border-color: transparent;
+  }
+  .topo-search-clear {
+    position: absolute;
+    right: 4px;
+    top: 4px;
+    width: 24px;
+    height: 24px;
+    border: 0;
+    border-radius: 999px;
+    background: #1e293b;
+    color: #cbd5e1;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+  }
+  .topo-search-clear:hover {
+    background: #7f1d1d;
+    color: #fecaca;
+  }
+  .topo-search-clear:focus-visible {
+    outline: 2px solid var(--topo-accent);
+    outline-offset: 2px;
+  }
+  .topo-search-clear[hidden] {
+    display: none;
+  }
+  .topo-zoom-level {
+    min-width: 44px;
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+    border: 1px solid var(--topo-border-strong);
+    border-radius: 10px;
+    background: #111b28;
+    color: #93a6c4;
+    font-size: 11px;
+    font-weight: 650;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .topo-btn {
+    height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 0 10px;
+    border: 1px solid var(--topo-border-strong);
+    border-radius: 10px;
+    background: #111b28;
+    color: #d7e3f8;
+    font-size: 12px;
+    font-weight: 650;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .topo-btn:hover {
+    border-color: var(--topo-accent);
+    background: #17263a;
+    color: #ffffff;
+  }
+  .topo-btn:focus-visible {
+    outline: 2px solid var(--topo-accent);
+    outline-offset: 2px;
+  }
+  #shortcutOverlay {
+    position: absolute;
+    inset: 0;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(4, 8, 16, 0.55);
+    backdrop-filter: blur(3px);
+  }
+  #shortcutOverlay[hidden] {
+    display: none;
+  }
+  .topo-help-card {
+    width: min(440px, calc(100% - 40px));
+    max-height: calc(100% - 40px);
+    overflow-y: auto;
+    background: #0f172a;
+    border: 1px solid var(--topo-border-strong);
+    border-radius: 16px;
+    padding: 18px;
+    box-shadow: 0 18px 42px rgba(0, 0, 0, 0.55);
+  }
+  .topo-help-card h3 {
+    margin: 0 0 12px;
+    font-size: 14px;
+    color: var(--topo-text);
+  }
+  .topo-help-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 7px 0;
+    border-bottom: 1px solid #1c2941;
+    font-size: 12px;
+    color: #cbd5e1;
+  }
+  .topo-help-row:last-of-type {
+    border-bottom: 0;
+  }
+  .topo-help-row kbd {
+    display: inline-block;
+    min-width: 20px;
+    padding: 2px 6px;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    background: #111b28;
+    color: #e5eefb;
+    font-family: inherit;
+    font-size: 11px;
+    text-align: center;
+  }
+  .topo-help-card .topo-btn {
+    margin-top: 14px;
+    width: 100%;
+  }
 </style>
-<div style="display:flex; flex-direction:column; height:calc(100vh - 56px); padding:0 14px;">
-  <div class="card" style="padding:10px 14px; margin:10px 0 6px; flex-shrink:0; display:flex; gap:10px; align-items:center; overflow-x:auto; overflow-y:hidden; flex-wrap:nowrap;">
-    <div style="display:flex; gap:10px; flex-shrink:0;">
-      <button class="btn" draggable="true" data-node-type="computer">💻 Computer</button>
-      <button class="btn" draggable="true" data-node-type="server">🗄️ Server</button>
-      <button class="btn" draggable="true" data-node-type="router">📡 Router</button>
-      <button class="btn" draggable="true" data-node-type="switch">🔀 Switch</button>
-      <button class="btn" draggable="true" data-node-type="firewall">🧱 Firewall</button>
-      <button class="btn" draggable="true" data-node-type="user">👤 User</button>
-      <button class="btn" draggable="true" data-node-type="domain">🌐 Domain</button>
-      <button class="btn" draggable="true" data-node-type="company">🏢 Company</button>
-      <button class="btn" draggable="true" data-node-type="asn">🌍 ASN</button>
+<div class="topo-page">
+  <section class="topo-toolbar" aria-label="Topology tools">
+    <div class="topo-palette">
+      <button type="button" class="topo-chip" draggable="true" data-node-type="computer"><span class="topo-chip-icon">💻</span><span>Computer</span></button>
+      <button type="button" class="topo-chip" draggable="true" data-node-type="server"><span class="topo-chip-icon">🗄️</span><span>Server</span></button>
+      <button type="button" class="topo-chip" draggable="true" data-node-type="router"><span class="topo-chip-icon">📡</span><span>Router</span></button>
+      <button type="button" class="topo-chip" draggable="true" data-node-type="switch"><span class="topo-chip-icon">🔀</span><span>Switch</span></button>
+      <button type="button" class="topo-chip" draggable="true" data-node-type="firewall"><span class="topo-chip-icon">🧱</span><span>Firewall</span></button>
+      <button type="button" class="topo-chip" draggable="true" data-node-type="user"><span class="topo-chip-icon">👤</span><span>User</span></button>
+      <button type="button" class="topo-chip" draggable="true" data-node-type="domain"><span class="topo-chip-icon">🌐</span><span>Domain</span></button>
+      <button type="button" class="topo-chip" draggable="true" data-node-type="company"><span class="topo-chip-icon">🏢</span><span>Company</span></button>
+      <button type="button" class="topo-chip" draggable="true" data-node-type="asn"><span class="topo-chip-icon">🌍</span><span>ASN</span></button>
+      <button type="button" class="topo-chip" draggable="true" data-node-type="note"><span class="topo-chip-icon">📝</span><span>Notes</span></button>
     </div>
-
-  </div>
-
-  <div style="position:relative; flex:1; min-height:0;">
-    <div class="card" style="height:100%; padding:0; overflow:hidden;">
-      <div id="topologyCy" style="width:100%; height:100%; border-radius:12px; background-color:#0f172a; background-image: radial-gradient(circle, #1e293b 1px, transparent 1px); background-size:28px 28px;"></div>
+    <div class="topo-search">
+      <input id="topoSearch" type="text" placeholder="Filter nodes…" aria-label="Filter nodes" autocomplete="off" spellcheck="false" />
+      <button id="topoSearchClear" class="topo-search-clear" type="button" title="Clear filter" aria-label="Clear filter" hidden>&times;</button>
     </div>
-    <div id="topologyInspectorWrap" style="display:none; position:absolute; top:14px; right:14px; width:340px; max-height:calc(100vh - 180px); overflow-y:auto; background:#10161d; border:1px solid #1e2630; border-radius:14px; padding:14px; box-shadow:0 12px 32px rgba(0,0,0,.55); z-index:100;">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <h2 style="margin:0;">Node Inspector</h2>
-        <button id="topoCloseInspector" class="btn" style="padding:2px 8px; font-size:14px;">&times;</button>
+    <div class="topo-toolbar-actions">
+      <button type="button" id="fitView" class="topo-icon-btn" title="Fit view (F)" aria-label="Fit view">⤢</button>
+      <button type="button" id="helpBtn" class="topo-icon-btn" title="Keyboard shortcuts (?)" aria-label="Keyboard shortcuts">?</button>
+    </div>
+  </section>
+
+  <div class="topo-canvas-wrap">
+    <div id="topologyCy" role="application" aria-label="Attack topology canvas"></div>
+    <div id="topologyNoteLayer" aria-hidden="true"></div>
+
+    <div id="topologyInspectorWrap">
+      <div class="topo-inspector-head">
+        <h2>Node Inspector</h2>
+        <button id="topoCloseInspector" class="topo-unlink" type="button" title="Close inspector" aria-label="Close inspector">&times;</button>
       </div>
       <div id="topologyInspector" class="muted">Click a node to edit label, notes, color, and compromise state.</div>
+    </div>
+
+    <div class="topo-controls" aria-label="Canvas controls">
+      <button type="button" id="zoomIn" class="topo-icon-btn" title="Zoom in (+)" aria-label="Zoom in">+</button>
+      <button type="button" id="zoomOut" class="topo-icon-btn" title="Zoom out (-)" aria-label="Zoom out">−</button>
+      <button type="button" id="zoomReset" class="topo-icon-btn" title="Reset zoom (0)" aria-label="Reset zoom">1:1</button>
+      <span id="zoomLevel" class="topo-zoom-level" title="Current zoom level">100%</span>
+      <button type="button" id="tidyUp" class="topo-btn" title="Auto-arrange the graph layout">Tidy up</button>
+      <button type="button" id="exportPng" class="topo-btn" title="Download the canvas as a PNG image">Export PNG</button>
+    </div>
+
+    <div id="shortcutOverlay" hidden>
+      <div class="topo-help-card" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+        <h3>Keyboard shortcuts</h3>
+        <div class="topo-help-row"><span>Fit view</span><kbd>F</kbd></div>
+        <div class="topo-help-row"><span>Zoom in / out</span><span><kbd>+</kbd> <kbd>−</kbd></span></div>
+        <div class="topo-help-row"><span>Reset zoom</span><kbd>0</kbd></div>
+        <div class="topo-help-row"><span>Pan mode (hold)</span><kbd>Space</kbd></div>
+        <div class="topo-help-row"><span>Delete selection</span><span><kbd>Del</kbd> <kbd>⌫</kbd></span></div>
+        <div class="topo-help-row"><span>Close / deselect</span><kbd>Esc</kbd></div>
+        <div class="topo-help-row"><span>Undo</span><span><kbd>Ctrl</kbd>+<kbd>Z</kbd></span></div>
+        <div class="topo-help-row"><span>Redo</span><span><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd></span></div>
+        <div class="topo-help-row"><span>Show this overlay</span><kbd>?</kbd></div>
+        <button id="helpClose" class="topo-btn" type="button">Close</button>
+      </div>
     </div>
   </div>
 </div>
 
+<script>
+  (() => {
+    const topbar = document.querySelector(".topbar");
+    const syncTopbarHeight = () => {
+      if (topbar) document.documentElement.style.setProperty("--topo-topbar-height", topbar.offsetHeight + "px");
+    };
+    syncTopbarHeight();
+    if (topbar && typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(syncTopbarHeight).observe(topbar);
+    }
+  })();
+</script>
 <script src="/static/vendor/cytoscape.min.js"></script>
-<script src="/static/topology.js?v=44"></script>
+<script src="/static/topology.js?v=61"></script>
 {% endblock %}

@@ -10,6 +10,8 @@
 .toggle-switch input:focus-visible + .toggle-slider { box-shadow:0 0 0 2px #58a6ff44; }
 .toggle-row { display:flex; align-items:center; gap:10px; margin:6px 0 12px; }
 .toggle-row .filter-label { font-size:14px; color:#aab; margin:0; }
+#scopeKind, #scopeValues, #scopeNote { max-width:560px; }
+#scopeValues { display:block; margin-top:8px; }
 </style>
 <h1>Scope</h1>
 {% if scope_error %}
@@ -27,7 +29,6 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
 <div class="card">
   <h2>Add scope item(s)</h2>
   <form id="scopeAddForm" action="/scope/add" method="post">
-    <label>Type</label>
     <select name="kind" id="scopeKind">
       <option value="ip_or_subnet">IP / Subnet (auto-detect)</option>
       <option value="domain">Domain</option>
@@ -35,7 +36,6 @@ in-scope IPs will only inscope the domain and not the IP automatically</p>
       <option value="exclusion">Exclusion (FQDN)</option>
     </select>
 
-    <label>Paste a list (one per line)</label>
     <textarea name="values_raw" id="scopeValues" rows="7" placeholder="Paste multiple items..."></textarea>
 
     <div id="domainWrap" class="toggle-row">

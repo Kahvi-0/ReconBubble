@@ -1,5 +1,16 @@
 {% extends "base.html" %}
 {% block content %}
+<style>
+  #profileTable textarea.cell-input {
+    width: 100%;
+    min-height: 28px;
+    box-sizing: border-box;
+    resize: vertical;
+    overflow-y: auto;
+    font: inherit;
+    line-height: 1.35;
+  }
+</style>
 <h1>Profiling</h1>
 <p class="muted" style="margin-bottom:20px;">Editable profiling table — rows persist in the workspace database.</p>
 
@@ -29,6 +40,20 @@ function esc(s) {
   return (s || "").replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 }
 
+function autoResizeTextareas(root = document, exact = false) {
+  root.querySelectorAll("textarea.cell-input").forEach(el => {
+    const style = getComputedStyle(el);
+    const border = parseFloat(style.borderTopWidth) + parseFloat(style.borderBottomWidth);
+    if (exact) {
+      el.style.height = "auto";
+    }
+    const needed = Math.max(el.scrollHeight + border, 28);
+    if (exact || needed > el.offsetHeight) {
+      el.style.height = needed + "px";
+    }
+  });
+}
+
 function renderRows() {
   const body = document.getElementById("profileBody");
   body.innerHTML = "";
@@ -37,21 +62,28 @@ function renderRows() {
     tr.dataset.id = r.id;
     tr.innerHTML = `
       <td><input type="text" class="cell-input" data-field="category" value="${esc(r.category)}" /></td>
-      <td><input type="text" class="cell-input" data-field="description" value="${esc(r.description)}" /></td>
+      <td><textarea class="cell-input" data-field="description" rows="1">${esc(r.description)}</textarea></td>
       <td><input type="text" class="cell-input" data-field="comments" value="${esc(r.comments)}" /></td>
       <td style="width:40px;"><button class="btn del-row" title="Delete row">x</button></td>
     `;
     tr.querySelectorAll(".cell-input").forEach(inp => {
-      inp.addEventListener("input", debounce(() => {
+      const save = debounce(() => {
         r[inp.dataset.field] = inp.value;
         saveRow(r.id, r);
-      }, 300));
+      }, 300);
+      inp.addEventListener("input", () => {
+        if (inp.tagName === "TEXTAREA") {
+          autoResizeTextareas(inp.closest("tr"), false);
+        }
+        save();
+      });
     });
     tr.querySelector(".del-row").addEventListener("click", () => {
       deleteRow(r.id);
     });
     body.appendChild(tr);
   });
+  requestAnimationFrame(() => autoResizeTextareas(body, true));
 }
 
 function debounce(fn, ms) {

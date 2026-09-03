@@ -215,7 +215,7 @@ input[type="checkbox"]:checked {
   position: fixed;
   top: 72px;
   right: 0;
-  width: min(420px, 90vw);
+  width: min(480px, 90vw);
   height: calc(100vh - 72px);
   background: #0f141b;
   border-left: 1px solid #273245;
@@ -227,6 +227,9 @@ input[type="checkbox"]:checked {
 }
 .global-notes-panel.open {
   transform: translateX(0);
+}
+.global-notes-panel.no-transition {
+  transition: none;
 }
 .global-notes-handle {
   width: 34px;
@@ -344,45 +347,44 @@ input[type="checkbox"]:checked {
   line-height: 1.35;
 }
 
-#globalNotesTable {
-  width: 100%;
-  margin: 0;
-  border: none;
-  background: transparent;
-  border-radius: 0;
-  table-layout: fixed;
-}
-
-#globalNotesTable thead th {
-  padding: 6px 8px;
-  font-size: 11px;
-  background: #0f141b;
-  border-bottom: 1px solid #243041;
-}
-
-#globalNotesTable tbody {
-  display: block;
-  max-height: calc(100vh - 200px);
+.notes-creds-list {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
-#globalNotesTable tbody tr {
-  display: table;
-  width: 100%;
-  table-layout: fixed;
+.cred-card {
+  border: 1px solid #243041;
+  border-radius: 6px;
+  background: #111827;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
-#globalNotesTable td {
-  padding: 4px 6px;
-  border-bottom: 1px solid #1e2630;
-  background: transparent;
-  vertical-align: middle;
+.cred-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
-#globalNotesTable td input {
-  width: 100%;
+.cred-label {
+  flex: none;
+  width: 64px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #7a8a9e;
+}
+
+.cred-field input {
+  flex: 1;
+  min-width: 0;
   padding: 5px 8px;
-  margin: 0;
   background: #0f141b;
   border: 1px solid #243041;
   border-radius: 4px;
@@ -391,12 +393,35 @@ input[type="checkbox"]:checked {
   font-family: inherit;
 }
 
-#globalNotesTable td input:focus {
+.cred-field input:focus {
   outline: none;
   border-color: #3a6da8;
 }
 
-#globalNotesTable .note-del {
+.cred-copy-btn {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 5px;
+  border: 1px solid #3a5a7a;
+  background: #1a2f4a;
+  color: #a0c4e8;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 0;
+}
+
+.cred-copy-btn:hover {
+  background: #24405f;
+}
+
+.cred-copy-btn.copied {
+  color: #49dcb1;
+  border-color: #49dcb1;
+}
+
+.cred-card .note-del {
   width: 26px;
   height: 26px;
   font-size: 12px;

@@ -12,7 +12,7 @@
   const quickTab = document.getElementById("notesQuickTab");
   const tableTab = document.getElementById("notesTableTab");
   const sprayTab = document.getElementById("notesSprayTab");
-  const tableBody = document.getElementById("globalNotesTableBody");
+  const credsList = document.getElementById("globalNotesCredsList");
   const addRowBtn = document.getElementById("globalNotesAddRow");
   const tabBtns = document.querySelectorAll(".notes-tab");
   const sprayServiceList = document.getElementById("sprayServiceList");
@@ -23,6 +23,8 @@
 
   const PIN_KEY = "reconbubble.globalNotesPinned";
   const SPRAY_KEY = "reconbubble.sprayActiveService";
+  const TAB_KEY = "reconbubble.globalNotesTab";
+  const VALID_TABS = ["quick", "table", "spray", "timeline"];
   let pinned = localStorage.getItem(PIN_KEY) === "1";
   let hideTimer = null;
   let saveTimer = null;
@@ -31,19 +33,25 @@
   let sprayActiveServiceId = null;
   let sprayLoaded = false;
 
-  function setOpen(open) {
+  function setOpen(open, animate = true) {
+    if (!animate) panel.classList.add("no-transition");
     panel.classList.toggle("open", !!open);
     panel.setAttribute("aria-hidden", open ? "false" : "true");
+    if (!animate) {
+      void panel.offsetWidth;
+      requestAnimationFrame(() => panel.classList.remove("no-transition"));
+    }
   }
 
-  function applyPinState() {
+  function applyPinState(initial = false) {
     toggleBtn.textContent = pinned ? "\uD83D\uDD12" : "\uD83D\uDD13";
     toggleBtn.classList.toggle("unlocked", !pinned);
     toggleBtn.classList.toggle("locked", pinned);
-    if (pinned) setOpen(true);
+    if (pinned) setOpen(true, !initial);
   }
 
   function switchTab(tabName) {
+    localStorage.setItem(TAB_KEY, tabName);
     tabBtns.forEach(b => b.classList.toggle("active", b.dataset.notesTab === tabName));
     quickTab.style.display = tabName === "quick" ? "" : "none";
     tableTab.style.display = tabName === "table" ? "" : "none";
@@ -109,24 +117,71 @@
       const res = await fetch("/api/global-notes-table");
       const data = await res.json();
       noteRows = data.rows || [];
-      renderTableRows();
+      renderCredsRows();
     } catch (_) {}
   }
 
-  function renderTableRows() {
-    tableBody.innerHTML = "";
+  function renderCredsRows() {
+    if (!credsList) return;
+    credsList.innerHTML = "";
+    if (noteRows.length === 0) {
+      credsList.innerHTML = '<p style="color:#888; margin:16px;">No credentials yet. Click + Add Credential.</p>';
+      return;
+    }
     noteRows.forEach((row, i) => {
-      const tr = document.createElement("tr");
-      tr.innerHTML = `
-        <td><input type="text" class="note-title" value="${escHtml(row.title)}" /></td>
-        <td><input type="text" class="note-body" value="${escHtml(row.body)}" /></td>
-        <td><button class="cred-action-btn del note-del" title="Delete" type="button">✕</button></td>
+      const card = document.createElement("div");
+      card.className = "cred-card";
+      card.innerHTML = `
+        <div class="cred-field">
+          <span class="cred-label">Username</span>
+          <input type="text" class="note-title" value="${escHtml(row.title)}" />
+          <button class="cred-copy-btn note-copy" data-copy-target="title" title="Copy username" type="button">&#8985;</button>
+        </div>
+        <div class="cred-field">
+          <span class="cred-label">Password</span>
+          <input type="text" class="note-body" value="${escHtml(row.body)}" />
+          <button class="cred-copy-btn note-copy" data-copy-target="body" title="Copy password" type="button">&#8985;</button>
+          <button class="cred-action-btn del note-del" title="Delete" type="button">✕</button>
+        </div>
       `;
-      tr.querySelector(".note-title").addEventListener("input", debounceSaveRow(i));
-      tr.querySelector(".note-body").addEventListener("input", debounceSaveRow(i));
-      tr.querySelector(".note-del").addEventListener("click", () => deleteRow(i));
-      tableBody.appendChild(tr);
+      card.querySelector(".note-title").addEventListener("input", debounceSaveRow(i));
+      card.querySelector(".note-body").addEventListener("input", debounceSaveRow(i));
+      card.querySelectorAll(".note-copy").forEach(btn => {
+        btn.addEventListener("click", () => {
+          const sel = btn.dataset.copyTarget === "title" ? ".note-title" : ".note-body";
+          copyToClipboard(card.querySelector(sel).value, btn);
+        });
+      });
+      card.querySelector(".note-del").addEventListener("click", () => deleteRow(i));
+      credsList.appendChild(card);
     });
+  }
+
+  function copyToClipboard(value, btn) {
+    if (value == null || value === "") return;
+    const done = () => {
+      btn.textContent = "✓";
+      btn.classList.add("copied");
+      setTimeout(() => {
+        btn.innerHTML = "&#8985;";
+        btn.classList.remove("copied");
+      }, 1200);
+    };
+    const fallback = () => {
+      const ta = document.createElement("textarea");
+      ta.value = value;
+      ta.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch (_) {}
+      ta.remove();
+      done();
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(value).then(done).catch(fallback);
+    } else {
+      fallback();
+    }
   }
 
   let rowSaveTimers = {};
@@ -134,7 +189,7 @@
     return () => {
       const timer = rowSaveTimers[idx];
       if (timer) clearTimeout(timer);
-      const tr = tableBody.children[idx];
+      const tr = credsList.querySelectorAll(".cred-card")[idx];
       if (!tr) return;
       const title = tr.querySelector(".note-title").value;
       const body = tr.querySelector(".note-body").value;
@@ -161,8 +216,8 @@
       const data = await res.json();
       if (data.ok) {
         noteRows.push({ id: data.id, title: "", body: "", order_index: noteRows.length });
-        renderTableRows();
-        const firstInput = tableBody.querySelector(".note-title");
+        renderCredsRows();
+        const firstInput = credsList.querySelector(".note-title");
         if (firstInput) firstInput.focus();
       }
     } catch (_) {}
@@ -174,7 +229,7 @@
     try {
       await fetch(`/api/global-notes-table/${row.id}`, { method: "DELETE" });
       noteRows.splice(idx, 1);
-      renderTableRows();
+      renderCredsRows();
     } catch (_) {}
   }
 
@@ -627,7 +682,9 @@
 
   text.addEventListener("input", queueSave);
 
-  applyPinState();
+  applyPinState(true);
   loadNote();
   loadTableRows();
+  const savedTab = localStorage.getItem(TAB_KEY);
+  switchTab(VALID_TABS.includes(savedTab) ? savedTab : "quick");
 })();
