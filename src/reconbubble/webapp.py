@@ -44,6 +44,7 @@ from .models import (
     TimelineDay,
     TimelineEntry,
     WebScreenshot,
+    ServiceApiKey,
 )
 from .parsers import (
     upsert_artifact,
@@ -67,11 +68,23 @@ from .parsers import (
     import_mixed_hashes,
     import_smbmap,
     resolve_ips_concurrent,
+    DOMAIN_RE,
+)
+from .tools import (
+    build_tools,
+    find_tool,
+    run_tool,
+    run_cero,
+    run_builtin,
+    _CERO_DEFAULT_PORTS,
+    keys_for_tool,
+    parse_tool_config,
+    service_key_registry,
+    tool_config_preview,
+    tool_version,
+    validate_target,
 )
 
-DOMAIN_RE = re.compile(
-    r"(?i)^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9](?:\.[a-z0-9-]{0,61}[a-z0-9])?)+\.?$"
-)
 _WEB_PORTS = frozenset({80, 443, 8080, 8443, 8000, 8888})
 _WEB_SERVICE_NAME_RE = re.compile(r"(?i)(?:^|[^a-z])https?(?=$|[^a-z])")
 _WEB_PRODUCT_RE = re.compile(
@@ -929,7 +942,15 @@ def create_app(
                         "hosts": res.get("hosts_added", 0),
                         "services": res.get("services_added", 0),
                         "evidence": res.get("evidence_added", 0),
+                        "hosts_in_file": res.get("total_hosts", 0),
                     }
+                    if res.get("notice"):
+                        details["notice"] = res["notice"]
+                    if res.get("total_hosts", 0) == 0:
+                        unmatched = list(unmatched) + [
+                            "Note: Nmap XML parsed OK but contained 0 <host> entries - the scan "
+                            "likely found nothing (target unreachable / no open ports). No data imported."
+                        ]
                 elif kind == "bbot":
                     added = res.get("subdomains", 0) + res.get("hosts", 0)
                     details = {
@@ -2231,6 +2252,14 @@ def create_app(
     app.state.screenshot_queue_ids = []
     app.state.screenshot_worker_task = None
     app.state.active_screenshot_job_id = None
+    app.state.tool_jobs = {}
+    app.state.tool_active_task = None
+    app.state.tool_queue = asyncio.Queue()
+    app.state.tool_queue_ids = []
+    app.state.tool_worker_task = None
+    app.state.active_tool_job_id = None
+    app.state.tools_registry = build_tools(ws.bin_dir)
+    app.state.process_providers = []
 
     def _clean_screenshot_targets(targets: list) -> list[dict]:
         clean_targets: list[dict] = []
@@ -2621,6 +2650,942 @@ def create_app(
         if not filepath.exists() or not filepath.is_file():
             return JSONResponse({"error": "Not found"}, status_code=404)
         return FileResponse(filepath, media_type="image/png")
+
+    # ---- External recon tools (subfinder, theHarvester) ----
+    def _tool_queue_position(job_id: str) -> int:
+        # Position in line, counting the currently-running job as position 1.
+        ahead = 0
+        for jid in app.state.tool_queue_ids:
+            if jid == job_id:
+                return ahead + 1 + (1 if app.state.active_tool_job_id else 0)
+            ahead += 1
+        return 0
+
+    def _tool_queued_count() -> int:
+        return len(app.state.tool_queue_ids)
+
+    def _tool_public_job(job: dict) -> dict:
+        return {
+            "id": job["id"],
+            "tool": job["tool"],
+            "target": job["target"],
+            "status": job["status"],
+            "current_label": job.get("current_label", ""),
+            "keys_applied": job.get("keys_applied", []),
+            "found": job.get("found", 0),
+            "added": job.get("added", 0),
+            "skipped": job.get("skipped", 0),
+            "artifact_id": job.get("artifact_id"),
+            "error": job.get("error", ""),
+            "queue_position": _tool_queue_position(job["id"]),
+            "queued_count": _tool_queued_count(),
+        }
+
+    def _prune_tool_jobs() -> None:
+        now = datetime.utcnow()
+        for job_id in list(app.state.tool_jobs):
+            job = app.state.tool_jobs.get(job_id)
+            if not job or job["status"] in ("pending", "running"):
+                continue
+            finished_at = job.get("finished_at")
+            if not finished_at:
+                continue
+            if (now - finished_at).total_seconds() > 3600:
+                app.state.tool_jobs.pop(job_id, None)
+                if job_id in app.state.tool_queue_ids:
+                    app.state.tool_queue_ids.remove(job_id)
+
+    def _service_keys() -> dict:
+        """All stored service keys as {service: {field: value}}."""
+        try:
+            with SessionLocal() as s:
+                rows = s.query(ServiceApiKey).all()
+        except Exception:
+            return {}
+        out: dict = {}
+        for r in rows:
+            if r.value:
+                out.setdefault(r.service, {})[r.field] = r.value
+        return out
+
+    def _tool_keys_for(tool: str) -> dict:
+        """Stored service keys mapped to one tool's {source: {field: value}}."""
+        return keys_for_tool(tool, _service_keys())
+
+    def _mask_key(value: str) -> str:
+        if not value:
+            return ""
+        if len(value) <= 8:
+            return "•" * len(value)
+        return value[:4] + "…" + value[-4:]
+
+    async def _run_tool_job(job_id: str) -> None:
+        job = app.state.tool_jobs.get(job_id)
+        if not job:
+            return
+        try:
+            job["status"] = "running"
+            job["updated_at"] = datetime.utcnow().isoformat()
+            spec = app.state.tools_registry[job["tool"]]
+            targets = job.get("targets") or [job["target"]]
+            keys = _tool_keys_for(job["tool"])
+            total_found = 0
+            total_added = 0
+            last_artifact_id = None
+            target_errors = []
+            current_target = job.get("target") or ""
+
+            def _log_lines(result: dict) -> list:
+                lines = []
+                for stream in (result.get("raw_error") or "", result.get("raw") or ""):
+                    for ln in stream.splitlines():
+                        if ln.strip():
+                            lines.append(f"# log|{ln}")
+                return lines
+
+            if spec.name == "cero":
+                # Cero is a batch tool: one run over the whole host list (stdin),
+                # not a per-target argv loop.
+                ports = job.get("ports") or _CERO_DEFAULT_PORTS
+                host_list = [h for h in targets if h]
+                job["current_label"] = (
+                    f"Probing {len(host_list)} host(s) with {spec.label} (ports {ports})..."
+                )
+                job["updated_at"] = datetime.utcnow().isoformat()
+                result = await asyncio.to_thread(run_cero, spec, host_list, ports, ws.bin_dir)
+                header = (
+                    f"# tool=cero hosts={len(host_list)} ports={ports} job={job_id} "
+                    f"ts={datetime.utcnow().isoformat()}"
+                )
+                if result.get("fqdns"):
+                    body = "\n".join([header, *result["fqdns"]]) + "\n"
+                    stored = ws.store_text(
+                        body, f"cero_batch_{job_id[:8]}.txt", prefix="tool_run"
+                    )
+                    with SessionLocal() as s:
+                        art = upsert_artifact(s, "subdomains_tool", stored)
+                        added = import_subdomains(s, art, stored)
+                        last_artifact_id = art.id
+                    tail = f"# done found={len(result['fqdns'])} added={added}\n"
+                    if not result.get("ok"):
+                        target_error = result.get("error") or "tool error"
+                        target_errors.append(f"cero: {target_error[:300]}")
+                        tail += (
+                            f"# error=cero: {target_error.replace(chr(10), ' | ')[:500]}\n"
+                        )
+                    logs = _log_lines(result)
+                    if logs:
+                        tail += "\n".join(logs) + "\n"
+                    with stored.open("a", encoding="utf-8") as fh:
+                        fh.write(tail)
+                    total_found = len(result["fqdns"])
+                    total_added = added
+                elif not result.get("ok"):
+                    err_text = (
+                        (result.get("error") or "cero produced no subdomains")
+                        .replace("\n", " | ")[:500]
+                    )
+                    target_errors.append(err_text)
+                    body = (
+                        f"{header}\n"
+                        f"# error={err_text}\n"
+                        f"# done found=0 added=0\n"
+                    )
+                    logs = _log_lines(result)
+                    if logs:
+                        body += "\n".join(logs) + "\n"
+                    stored = ws.store_text(
+                        body, f"cero_batch_{job_id[:8]}_failed.txt", prefix="tool_run"
+                    )
+                    with SessionLocal() as s:
+                        upsert_artifact(s, "subdomains_tool", stored)
+                job["found"] = total_found
+                job["added"] = total_added
+                job["skipped"] = max(0, total_found - total_added)
+                job["artifact_id"] = last_artifact_id
+                if target_errors and total_found == 0:
+                    job["status"] = "failed"
+                    job["error"] = target_errors[0][:500]
+                    job["current_label"] = "Failed"
+                else:
+                    job["status"] = "completed"
+                    job["error"] = ""
+                    if total_found:
+                        job["current_label"] = (
+                            f"Done: {total_added} new, {total_found - total_added} already known"
+                        )
+                    else:
+                        job["current_label"] = "Done: no subdomains found"
+                    if target_errors:
+                        job["current_label"] += " · error (see log)"
+                return
+
+            for i, tgt in enumerate(targets, 1):
+                n = len(targets)
+                current_target = tgt
+                job["current_label"] = (
+                    f"Running {job['tool']} against {tgt} ({i}/{n})..."
+                    if n > 1
+                    else f"Running {job['tool']} against {tgt}..."
+                )
+                job["updated_at"] = datetime.utcnow().isoformat()
+                if spec.builtin:
+                    result = await asyncio.to_thread(run_builtin, spec, tgt)
+                else:
+                    result = await asyncio.to_thread(run_tool, spec, tgt, ws.bin_dir, keys)
+                if not result.get("fqdns"):
+                    if result.get("ok"):
+                        # Tool ran fine but found nothing: a valid result, not an error.
+                        continue
+                    # Hard failure for this target: log it and keep running the rest.
+                    target_error = result.get("error") or "tool produced no subdomains"
+                    target_errors.append(f"{tgt}: {target_error[:300]}")
+                    err_text = target_error.replace("\n", " | ")[:500]
+                    header = (
+                        f"# tool={job['tool']} target={tgt} job={job_id} "
+                        f"ts={datetime.utcnow().isoformat()}"
+                    )
+                    body = (
+                        f"{header}\n"
+                        f"# error={tgt}: {err_text}\n"
+                        f"# done found=0 added=0\n"
+                    )
+                    logs = _log_lines(result)
+                    if logs:
+                        body += "\n".join(logs) + "\n"
+                    fname = f"{job['tool']}_{tgt.replace(' ', '_')}_failed.txt"
+                    stored = ws.store_text(body, fname, prefix="tool_run")
+                    with SessionLocal() as s:
+                        upsert_artifact(s, "subdomains_tool", stored)
+                    continue
+                header = (
+                    f"# tool={job['tool']} target={tgt} job={job_id} "
+                    f"ts={datetime.utcnow().isoformat()}"
+                )
+                body = "\n".join([header, *result["fqdns"]]) + "\n"
+                stored = ws.store_text(body, f"{job['tool']}_{tgt}.txt", prefix="tool_run")
+                with SessionLocal() as s:
+                    art = upsert_artifact(s, "subdomains_tool", stored)
+                    added = import_subdomains(s, art, stored)
+                    last_artifact_id = art.id
+                tail = f"# done found={len(result['fqdns'])} added={added}\n"
+                if not result.get("ok"):
+                    # e.g. timeout that still produced output: keep the result, log the error.
+                    target_error = result.get("error") or "tool error"
+                    target_errors.append(f"{tgt}: {target_error[:300]}")
+                    tail += (
+                        f"# error={tgt}: {target_error.replace(chr(10), ' | ')[:500]}\n"
+                    )
+                logs = _log_lines(result)
+                if logs:
+                    tail += "\n".join(logs) + "\n"
+                with stored.open("a", encoding="utf-8") as fh:
+                    fh.write(tail)
+                total_found += len(result["fqdns"])
+                total_added += added
+            job["found"] = total_found
+            job["added"] = total_added
+            job["skipped"] = max(0, total_found - total_added)
+            job["artifact_id"] = last_artifact_id
+            if target_errors and total_found == 0:
+                job["status"] = "failed"
+                job["error"] = (
+                    f"{len(target_errors)} of {len(targets)} targets failed; {target_errors[0]}"
+                )[:500]
+                job["current_label"] = "Failed"
+            else:
+                job["status"] = "completed"
+                job["error"] = ""
+                if total_found:
+                    job["current_label"] = (
+                        f"Done: {total_added} new, {total_found - total_added} already known"
+                    )
+                else:
+                    job["current_label"] = "Done: no subdomains found"
+                if target_errors:
+                    job["current_label"] += f" · {len(target_errors)} target(s) failed (see log)"
+        except Exception as e:
+            job["status"] = "failed"
+            job["error"] = str(e)[:500]
+            job["current_label"] = "Failed"
+            try:
+                err_text = str(e).replace("\n", " | ")[:500]
+                header = (
+                    f"# tool={job['tool']} target={current_target} job={job_id} "
+                    f"ts={datetime.utcnow().isoformat()}"
+                )
+                body = (
+                    f"{header}\n"
+                    f"# error={err_text}\n"
+                    f"# done found=0 added=0\n"
+                )
+                fname = f"{job['tool']}_{(current_target or 'run').replace(' ', '_')}_failed.txt"
+                stored = ws.store_text(body, fname, prefix="tool_run")
+                with SessionLocal() as s:
+                    upsert_artifact(s, "subdomains_tool", stored)
+            except Exception:
+                pass
+        finally:
+            job["finished_at"] = datetime.utcnow()
+            job["updated_at"] = datetime.utcnow().isoformat()
+            if app.state.active_tool_job_id == job_id:
+                app.state.active_tool_job_id = None
+            app.state.tool_active_task = None
+
+    async def _tool_worker() -> None:
+        while True:
+            job_id = await app.state.tool_queue.get()
+            try:
+                if job_id in app.state.tool_queue_ids:
+                    app.state.tool_queue_ids.remove(job_id)
+                job = app.state.tool_jobs.get(job_id)
+                if not job or job["status"] != "pending":
+                    continue
+                app.state.active_tool_job_id = job_id
+                app.state.tool_active_task = asyncio.current_task()
+                await _run_tool_job(job_id)
+            except Exception:
+                job = app.state.tool_jobs.get(job_id)
+                if job:
+                    job["status"] = "failed"
+                    job["error"] = "tool worker crashed"
+                    job["finished_at"] = datetime.utcnow()
+                    job["updated_at"] = datetime.utcnow().isoformat()
+            finally:
+                if app.state.active_tool_job_id == job_id:
+                    app.state.active_tool_job_id = None
+                app.state.tool_queue.task_done()
+
+    def _ensure_tool_worker() -> None:
+        task = app.state.tool_worker_task
+        if task is not None and not task.done():
+            return
+        app.state.tool_worker_task = asyncio.create_task(_tool_worker())
+
+    @app.get("/api/tools")
+    def api_tools():
+        out = []
+        for spec in app.state.tools_registry.values():
+            if spec.builtin:
+                out.append(
+                    {
+                        "name": spec.name,
+                        "label": spec.label,
+                        "available": True,
+                        "path": None,
+                        "version": "",
+                        "builtin": True,
+                        "input_mode": spec.input_mode,
+                        "network_note": spec.network_note,
+                        "install_commands": spec.install_commands,
+                    }
+                )
+                continue
+            path = find_tool(spec.name, spec, ws.bin_dir)
+            out.append(
+                {
+                    "name": spec.name,
+                    "label": spec.label,
+                    "available": path is not None,
+                    "path": str(path) if path else None,
+                    "version": tool_version(path) if path else "",
+                    "builtin": False,
+                    "input_mode": spec.input_mode,
+                    "network_note": spec.network_note,
+                    "install_commands": spec.install_commands,
+                }
+            )
+        return {"ok": True, "bin_dir": str(ws.bin_dir), "tools": out}
+
+    @app.get("/api/tools/cero/hosts")
+    def api_tools_cero_hosts():
+        """In-scope hosts (subdomains + IPs/subnets) selectable as cero targets."""
+        with db() as s:
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
+            sub_ips = list_all_subdomain_ips(s)
+            subs = s.execute(select(Subdomain).order_by(Subdomain.fqdn)).scalars().all()
+            sub_hosts = []
+            for sub in subs:
+                fq = (sub.fqdn or "").strip().lower().rstrip(".")
+                if not fq:
+                    continue
+                resolved = sub_ips.get(fq, [])
+                if domain_in_scope(
+                    fq, domains, domain_all_subs, domain_subs_if_ip,
+                    resolved, ips, subnets, excluded,
+                ):
+                    sub_hosts.append({"label": fq, "type": "subdomain", "value": fq})
+            ip_items = s.execute(
+                select(ScopeItem)
+                .where(ScopeItem.in_scope == 1, ScopeItem.kind.in_(["ip", "subnet"]))
+                .order_by(ScopeItem.value)
+            ).scalars().all()
+            ip_hosts = []
+            seen = set()
+            for it in ip_items:
+                v = (it.value or "").strip().lower().strip(".")
+                if not v or v in seen:
+                    continue
+                seen.add(v)
+                ip_hosts.append({
+                    "label": v,
+                    "type": "subnet" if it.kind == "subnet" else "ip",
+                    "value": v,
+                })
+        return {
+            "ok": True,
+            "hosts": sub_hosts + ip_hosts,
+            "default_ports": _CERO_DEFAULT_PORTS,
+        }
+
+    @app.post("/api/tools/run")
+    async def api_tools_run(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+        tool = str(body.get("tool") or "").strip()
+        target_raw = str(body.get("target") or "").strip()
+        spec = app.state.tools_registry.get(tool)
+        if not spec:
+            return JSONResponse({"ok": False, "error": "Unknown tool"}, status_code=400)
+        if spec.name == "cero":
+            raw_hosts = body.get("hosts")
+            if not isinstance(raw_hosts, list):
+                return JSONResponse({"ok": False, "error": "hosts must be a list"}, status_code=400)
+            hosts: list = []
+            for h in raw_hosts:
+                h = str(h or "").strip()
+                if not h:
+                    continue
+                if h.startswith("-"):
+                    return JSONResponse({"ok": False, "error": "invalid host"}, status_code=400)
+                if h in hosts:
+                    continue
+                hosts.append(h)
+            if not hosts:
+                return JSONResponse({"ok": False, "error": "select at least one host"}, status_code=400)
+            if len(hosts) > 500:
+                return JSONResponse(
+                    {"ok": False, "error": "too many hosts (max 500 per run)"}, status_code=400
+                )
+            ports = re.sub(r"[^0-9,]", "", str(body.get("ports") or ""))
+            if not ports.strip(","):
+                return JSONResponse({"ok": False, "error": "ports are required"}, status_code=400)
+            if not find_tool(spec.name, spec, ws.bin_dir):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": f"{spec.label} is not installed — see the Tools page for install commands.",
+                    },
+                    status_code=400,
+                )
+            _prune_tool_jobs()
+            if len(app.state.tool_queue_ids) >= 5:
+                return JSONResponse(
+                    {"ok": False, "error": "Tool run queue is full (max 5 waiting)"},
+                    status_code=409,
+                )
+            job_id = uuid.uuid4().hex
+            now = datetime.utcnow()
+            job = {
+                "id": job_id,
+                "tool": spec.name,
+                "target": f"{len(hosts)} host(s)",
+                "targets": hosts,
+                "ports": ports,
+                "status": "pending",
+                "current_label": "Queued...",
+                "keys_applied": sorted(_tool_keys_for(spec.name).keys()),
+                "found": 0,
+                "added": 0,
+                "skipped": 0,
+                "artifact_id": None,
+                "error": "",
+                "created_at": now,
+                "updated_at": now,
+                "finished_at": None,
+            }
+            app.state.tool_jobs[job_id] = job
+            app.state.tool_queue_ids.append(job_id)
+            app.state.tool_queue.put_nowait(job_id)
+            _ensure_tool_worker()
+            return {"ok": True, "job": _tool_public_job(job), "queue_position": _tool_queue_position(job_id)}
+        tokens = [t for t in re.split(r"[,\s]+", target_raw) if t]
+        if not tokens:
+            return JSONResponse({"ok": False, "error": "target is required"}, status_code=400)
+        if len(tokens) > 20:
+            return JSONResponse(
+                {"ok": False, "error": "too many targets (max 20 per run)"}, status_code=400
+            )
+        targets = []
+        try:
+            for tok in tokens:
+                t = validate_target(tok)
+                if t not in targets:
+                    targets.append(t)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        target = " ".join(targets)
+        if not spec.builtin and not find_tool(spec.name, spec, ws.bin_dir):
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": f"{spec.label} is not installed — see the Tools page for install commands.",
+                },
+                status_code=400,
+            )
+        _prune_tool_jobs()
+        if len(app.state.tool_queue_ids) >= 5:
+            return JSONResponse(
+                {"ok": False, "error": "Tool run queue is full (max 5 waiting)"},
+                status_code=409,
+            )
+        job_id = uuid.uuid4().hex
+        now = datetime.utcnow()
+        job = {
+            "id": job_id,
+            "tool": spec.name,
+            "target": target,
+            "targets": targets,
+            "status": "pending",
+            "current_label": "Queued...",
+            "keys_applied": sorted(_tool_keys_for(spec.name).keys()),
+            "found": 0,
+            "added": 0,
+            "skipped": 0,
+            "artifact_id": None,
+            "error": "",
+            "created_at": now,
+            "updated_at": now,
+            "finished_at": None,
+        }
+        app.state.tool_jobs[job_id] = job
+        app.state.tool_queue_ids.append(job_id)
+        app.state.tool_queue.put_nowait(job_id)
+        _ensure_tool_worker()
+        return {"ok": True, "job": _tool_public_job(job), "queue_position": _tool_queue_position(job_id)}
+
+    @app.get("/api/tools/jobs/active")
+    def api_tools_jobs_active():
+        _prune_tool_jobs()
+        running = None
+        queued_ids = list(app.state.tool_queue_ids)
+        last = None
+        for job in app.state.tool_jobs.values():
+            if job["status"] == "running":
+                running = job
+                continue
+            if job["status"] == "pending":
+                continue
+            finished_at = job.get("finished_at")
+            if not finished_at:
+                continue
+            if last is None or finished_at > last.get("finished_at"):
+                last = job
+        active = running
+        if active is None and queued_ids:
+            active = app.state.tool_jobs.get(queued_ids[0])
+        queued = [
+            {"tool": app.state.tool_jobs[jid]["tool"], "target": app.state.tool_jobs[jid]["target"]}
+            for jid in queued_ids
+            if jid in app.state.tool_jobs
+        ]
+        return {
+            "ok": True,
+            "active_job": _tool_public_job(active) if active else None,
+            "last_job": _tool_public_job(last) if last else None,
+            "queued_count": len(queued),
+            "queued": queued,
+        }
+
+    @app.get("/api/tools/jobs/{job_id}")
+    def api_tools_job_status(job_id: str):
+        job = app.state.tool_jobs.get(job_id)
+        if not job:
+            return JSONResponse({"ok": False, "error": "Job not found"}, status_code=404)
+        return {"ok": True, "job": _tool_public_job(job)}
+
+    @app.get("/api/services/keys")
+    def api_service_keys():
+        with SessionLocal() as s:
+            rows = (
+                s.query(ServiceApiKey)
+                .order_by(ServiceApiKey.service.asc(), ServiceApiKey.field.asc())
+                .all()
+            )
+        return {
+            "ok": True,
+            "registry": service_key_registry(),
+            "keys": [
+                {
+                    "service": r.service,
+                    "field": r.field,
+                    "masked": _mask_key(r.value),
+                    "created_at": r.created_at.isoformat() if r.created_at else "",
+                }
+                for r in rows
+            ],
+        }
+
+    @app.post("/api/services/keys")
+    async def api_service_keys_set(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+        service = str(body.get("service") or "").strip()
+        field = str(body.get("field") or "key").strip()
+        value = str(body.get("value") or "")
+        reg = service_key_registry()
+        if service not in reg:
+            return JSONResponse(
+                {"ok": False, "error": f"Unknown service '{service}'"}, status_code=400
+            )
+        if field not in reg[service]["fields"]:
+            return JSONResponse(
+                {"ok": False, "error": f"Unknown field '{field}' for {service}"},
+                status_code=400,
+            )
+        if not value:
+            return JSONResponse({"ok": False, "error": "value is required"}, status_code=400)
+        with SessionLocal() as s:
+            row = (
+                s.query(ServiceApiKey)
+                .filter(ServiceApiKey.service == service, ServiceApiKey.field == field)
+                .first()
+            )
+            if row:
+                row.value = value
+            else:
+                s.add(ServiceApiKey(service=service, field=field, value=value))
+            s.commit()
+        return {"ok": True}
+
+    @app.delete("/api/services/keys/{service}")
+    def api_service_keys_delete(service: str):
+        # No catalog check: stored services not in the current catalog stay deletable.
+        with SessionLocal() as s:
+            n = (
+                s.query(ServiceApiKey)
+                .filter(ServiceApiKey.service == service)
+                .delete()
+            )
+            s.commit()
+        return {"ok": True, "deleted": n}
+
+    @app.post("/api/services/keys/import")
+    async def api_service_keys_import(request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"ok": False, "error": "Invalid JSON"}, status_code=400)
+        content = str(body.get("content") or "")
+        if not content.strip():
+            return JSONResponse({"ok": False, "error": "content is required"}, status_code=400)
+        try:
+            parsed = parse_tool_config(content)
+        except ValueError as e:
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+        saved = 0
+        with SessionLocal() as s:
+            for service, fields in parsed["services"].items():
+                for field, value in fields.items():
+                    row = (
+                        s.query(ServiceApiKey)
+                        .filter(ServiceApiKey.service == service, ServiceApiKey.field == field)
+                        .first()
+                    )
+                    if row:
+                        row.value = value
+                    else:
+                        s.add(ServiceApiKey(service=service, field=field, value=value))
+                    saved += 1
+            s.commit()
+        return {
+            "ok": True,
+            "tool": parsed["tool"],
+            "saved": saved,
+            "services": sorted(parsed["services"].keys()),
+            "skipped": parsed["skipped"],
+        }
+
+    @app.get("/api/services/keys/config-preview")
+    def api_service_keys_config_preview():
+        configs = {}
+        for tool in ("theharvester", "subfinder"):
+            spec = app.state.tools_registry[tool]
+            configs[tool] = tool_config_preview(spec, _tool_keys_for(tool))
+        return {"ok": True, "configs": configs}
+
+    @app.get("/api/tools/discoveries")
+    def api_tools_discoveries():
+        with SessionLocal() as s:
+            arts = (
+                s.query(Artifact)
+                .filter(Artifact.type == "subdomains_tool")
+                .order_by(Artifact.created_at.desc())
+                .all()
+            )
+            if not arts:
+                return {"ok": True, "tools": [], "subdomains": []}
+            parsed = []
+            for art in arts:
+                tool = ""
+                target = ""
+                job_id = ""
+                ts = art.created_at.isoformat() if art.created_at else ""
+                added_hdr = None
+                error = ""
+                fqdns = []
+                logs = []
+                p = Path(art.stored_path)
+                if p.exists():
+                    try:
+                        text = p.read_text(errors="ignore")
+                    except OSError:
+                        text = ""
+                    for line in text.splitlines():
+                        line = line.strip()
+                        if not line:
+                            continue
+                        if line.startswith("# done"):
+                            for part in line[7:].split():
+                                k, _, v = part.partition("=")
+                                if k == "added" and v.isdigit():
+                                    added_hdr = int(v)
+                            continue
+                        if line.startswith("# tool="):
+                            for part in line[2:].split():
+                                k, _, v = part.partition("=")
+                                if k == "tool":
+                                    tool = v
+                                elif k == "target":
+                                    target = v
+                                elif k == "job":
+                                    job_id = v
+                                elif k == "ts" and not ts:
+                                    ts = v
+                            continue
+                        if line.startswith("# error="):
+                            error = line[len("# error="):].strip()
+                            continue
+                        if line.startswith("# log|"):
+                            logs.append(line[len("# log|"):])
+                            continue
+                        tok = line.split()[0].lower().rstrip(".")
+                        if tok and DOMAIN_RE.match(tok) and tok not in fqdns:
+                            fqdns.append(tok)
+                parsed.append(
+                    {
+                        "artifact_id": art.id,
+                        "tool": tool,
+                        "target": target,
+                        "job_id": job_id,
+                        "ts": ts,
+                        "added": added_hdr,
+                        "error": error,
+                        "fqdns": fqdns,
+                        "logs": logs,
+                    }
+                )
+            # Group artifacts into runs: one run per job (older artifacts without a
+            # job id fall back to one run per artifact). Ascending time order keeps
+            # targets in the order the job actually ran them.
+            runs_by_key: dict = {}
+            for item in sorted(parsed, key=lambda i: i["ts"] or ""):
+                key = (item["tool"], item["job_id"] or f"art:{item['artifact_id']}")
+                run = runs_by_key.get(key)
+                if run is None:
+                    run = {
+                        "job_id": item["job_id"] or None,
+                        "tool": item["tool"],
+                        "created_at": item["ts"],
+                        "targets": [],
+                        "found": 0,
+                        "added": None if item["added"] is None else 0,
+                        "fqdns": [],
+                        "errors": [],
+                        "logs": [],
+                    }
+                    runs_by_key[key] = run
+                if item["target"] and item["target"] not in run["targets"]:
+                    run["targets"].append(item["target"])
+                if item["error"] and item["error"] not in run["errors"]:
+                    run["errors"].append(item["error"])
+                if item["logs"]:
+                    run["logs"].append({"target": item["target"], "lines": item["logs"]})
+                run["found"] += len(item["fqdns"])
+                if item["added"] is None:
+                    run["added"] = None
+                elif run["added"] is not None:
+                    run["added"] += item["added"]
+                if item["ts"] and (not run["created_at"] or item["ts"] < run["created_at"]):
+                    run["created_at"] = item["ts"]
+                for f in item["fqdns"]:
+                    if f not in run["fqdns"]:
+                        run["fqdns"].append(f)
+            runs = list(runs_by_key.values())
+            runs.sort(key=lambda r: r["created_at"])
+            # A subdomain is "new" in a run if no earlier run found it.
+            first_seen: dict = {}
+            for r in runs:
+                for f in r["fqdns"]:
+                    if f not in first_seen:
+                        first_seen[f] = r
+            for r in runs:
+                r["new_set"] = {f for f in r["fqdns"] if first_seen[f] is r}
+            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
+            resolved = list_all_subdomain_ips(s)
+            scope_of: dict = {}
+            for r in runs:
+                for f in r["fqdns"]:
+                    if f in scope_of:
+                        continue
+                    scope_of[f] = bool(
+                        domain_in_scope(
+                            f,
+                            domains,
+                            domain_all_subs,
+                            domain_subs_if_ip,
+                            resolved.get(f, []),
+                            ips,
+                            subnets,
+                            excluded,
+                        )
+                    )
+            # Flat union of every subdomain found across all runs, with the
+            # runs that found it (deduped; one entry per fqdn).
+            union: dict = {}
+            for r in runs:
+                for f in r["fqdns"]:
+                    e = union.get(f)
+                    if e is None:
+                        e = union[f] = {
+                            "fqdn": f,
+                            "in_scope": scope_of[f],
+                            "runs": [],
+                        }
+                    e["runs"].append({"tool": r["tool"], "created_at": r["created_at"]})
+            subdomains_out = [union[f] for f in sorted(union)]
+            tools_out = []
+            for spec in app.state.tools_registry.values():
+                truns = [r for r in runs if r["tool"] == spec.name]
+                if not truns:
+                    continue
+                unique = {f for r in truns for f in r["fqdns"]}
+                tools_out.append(
+                    {
+                        "name": spec.name,
+                        "unique": len(unique),
+                        "runs": [
+                            {
+                                "job_id": r["job_id"],
+                                "created_at": r["created_at"],
+                                "targets": r["targets"],
+                                "found": r["found"],
+                                "added": r["added"],
+                                "new_count": len(r["new_set"]),
+                                "errors": r["errors"],
+                                "logs": r["logs"],
+                            }
+                            for r in reversed(truns)
+                        ],
+                    }
+                )
+            return {"ok": True, "tools": tools_out, "subdomains": subdomains_out}
+
+    # ---- Global "running processes" registry (top-right indicator) ----
+    def _register_process_provider(fn) -> None:
+        app.state.process_providers.append(fn)
+
+    def _tool_processes() -> list:
+        _prune_tool_jobs()
+        out = []
+        for job in app.state.tool_jobs.values():
+            if job["status"] not in ("pending", "running"):
+                continue
+            label = job.get("current_label") or ""
+            if not label or label in ("Starting...", "Queued..."):
+                label = f"{job['tool']}: {job['target']}"
+            if job["status"] == "pending":
+                label = f"queued — {label}"
+            out.append(
+                {
+                    "kind": "tool",
+                    "id": job["id"],
+                    "status": job["status"],
+                    "label": label,
+                    "href": "/subdomains-discovery",
+                }
+            )
+        return out
+
+    def _screenshot_processes() -> list:
+        _prune_screenshot_jobs()
+        current = _get_current_screenshot_job()
+        if not current:
+            return []
+        if current["status"] == "running":
+            label = f"Screenshots {current['completed']}/{current['total']}"
+        else:
+            label = "Screenshots queued"
+        return [
+            {
+                "kind": "screenshot",
+                "id": current["id"],
+                "status": current["status"],
+                "label": label,
+                "href": "/subdomains",
+            }
+        ]
+
+    _register_process_provider(_tool_processes)
+    _register_process_provider(_screenshot_processes)
+
+    @app.get("/api/jobs/active")
+    def api_all_jobs_active():
+        jobs = []
+        for provider in list(app.state.process_providers):
+            try:
+                jobs.extend(provider())
+            except Exception:
+                continue
+        return {"ok": True, "jobs": jobs}
+
+    @app.get("/tools", response_class=HTMLResponse)
+    def tools_page(request: Request):
+        data = api_tools()
+        return templates.TemplateResponse(
+            "tools.html",
+            {"request": request, "tools": data["tools"], "bin_dir": data["bin_dir"]},
+        )
+
+    @app.get("/subdomains-discovery", response_class=HTMLResponse)
+    def subdomains_discovery_page(request: Request):
+        data = api_tools()
+        with db() as s:
+            _, _, domains, _, _, _, _ = scope_sets(s)
+            in_scope_domains = sorted(domains)
+            sub_rows = s.execute(
+                select(Subdomain.fqdn, Subdomain.root_domain).order_by(
+                    Subdomain.root_domain.asc(), Subdomain.fqdn.asc()
+                )
+            ).all()
+            discovered_subdomains = [
+                {"fqdn": fqdn, "root": (root or "").strip()}
+                for fqdn, root in sub_rows
+            ]
+        return templates.TemplateResponse(
+            "subdomains_discovery.html",
+            {
+                "request": request,
+                "tools": data["tools"],
+                "bin_dir": data["bin_dir"],
+                "in_scope_domains": in_scope_domains,
+                "discovered_subdomains": discovered_subdomains,
+            },
+        )
 
     # Internal
     def _default_checklist_map(map_name: str) -> dict:

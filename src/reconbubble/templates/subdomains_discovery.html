@@ -1,0 +1,664 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Subdomains</h1>
+
+<div class="card" style="margin-bottom:20px;">
+  <h2>Run External Tools</h2>
+  <p class="muted">
+    Discover subdomains with external recon tools. Results merge into the
+    <a href="/subdomains">Web Apps</a> table. Tool status and install instructions
+    are on the <a href="/tools">Tools page</a>.
+  </p>
+  <span id="toolButtons" style="display:inline-flex; gap:8px;"></span>
+</div>
+
+<div id="toolProgress" class="hidden">
+  <div class="progress-bar-container">
+    <div id="toolProgressBar" class="progress-bar-fill" style="width:0%"></div>
+  </div>
+  <p id="toolProgressText" class="muted">Starting...</p>
+</div>
+
+<div id="toolTargetModal" class="overlay hidden" style="cursor:pointer;" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="card" style="max-width:620px; cursor:default;" onclick="event.stopPropagation()">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h2 style="margin:0;">Run <span id="toolTargetToolName"></span></h2>
+      <button class="btn" onclick="document.getElementById('toolTargetModal').classList.add('hidden')">X</button>
+    </div>
+    <p class="muted">Target domains for <span id="toolTargetToolName2"></span>. In-scope domains are pre-filled, one per line — edit to keep the ones you want, or type any domain. Ctrl/Cmd+Enter to run.</p>
+    <textarea id="toolTargetInput" rows="6" placeholder="one domain per line, e.g.&#10;example.com&#10;api.example.com" style="width:100%; box-sizing:border-box; min-height:150px; resize:vertical; font-family:inherit; line-height:1.6;"></textarea>
+    <div id="toolTargetCount" class="muted" style="font-size:11px; margin-top:4px;"></div>
+    <label class="checkbox-label" style="margin-top:10px;">
+      <input type="checkbox" id="includeDiscovered" />
+      Include already-discovered subdomains (<span id="discoveredCount">0</span>)
+    </label>
+    <div id="toolDiscoveredSuggestions" style="display:none; flex-wrap:wrap; gap:6px; margin-top:6px; max-height:220px; overflow:auto;"></div>
+    <div style="display:flex; gap:8px; margin-top:12px;">
+      <button class="btn" id="btnToolTargetGo">Run</button>
+      <button class="btn" onclick="document.getElementById('toolTargetModal').classList.add('hidden')">Cancel</button>
+    </div>
+    <p id="toolTargetError" style="color:#ff6666; margin-top:8px; display:none;"></p>
+  </div>
+</div>
+
+<div id="ceroModal" class="overlay hidden" style="cursor:pointer;" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="card" style="max-width:680px; cursor:default;" onclick="event.stopPropagation()">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h2 style="margin:0;">Run Cero</h2>
+      <button class="btn" onclick="document.getElementById('ceroModal').classList.add('hidden')">X</button>
+    </div>
+    <p class="muted">Cero connects to each selected host over TLS and scrapes the SAN domain names from its certificate. Select the in-scope hosts to probe (in-scope subdomains plus in-scope IPs/subnets).</p>
+    <div style="display:flex; gap:8px; margin:8px 0; align-items:center;">
+      <input type="text" id="ceroFilter" placeholder="Filter hosts…" style="flex:1; box-sizing:border-box;" />
+      <label class="checkbox-label" style="white-space:nowrap; font-size:12px;">
+        <input type="checkbox" id="ceroSelectAll" /> Select all
+      </label>
+    </div>
+    <div id="ceroHostList" style="max-height:260px; overflow:auto; border:1px solid #d0d7de; border-radius:4px; padding:6px 8px; font-size:12px; background:#f6f8fa;"></div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; flex-wrap:wrap; gap:8px;">
+      <div class="muted" style="font-size:11px;"><span id="ceroCount">0</span> selected</div>
+      <div style="display:flex; gap:8px; align-items:center;">
+        <label class="muted" style="font-size:11px;">TLS ports</label>
+        <input type="text" id="ceroPorts" style="width:220px; box-sizing:border-box;" />
+      </div>
+    </div>
+    <p class="muted" style="font-size:11px; margin-top:6px;">Comma-separated TLS ports. Port 80 is non-TLS and will not yield certificates. Common: 443, 8443, 465, 587, 993, 995.</p>
+    <div style="display:flex; gap:8px; margin-top:12px;">
+      <button class="btn" id="btnCeroGo">Run Cero</button>
+      <button class="btn" onclick="document.getElementById('ceroModal').classList.add('hidden')">Cancel</button>
+    </div>
+    <p id="ceroError" style="color:#ff6666; margin-top:8px; display:none;"></p>
+  </div>
+</div>
+
+<div class="card" style="margin-top:20px;">
+  <h2>Discovery Log</h2>
+  <p class="muted">Every tool run and what it found, grouped by tool, newest first. Results merge into the <a href="/subdomains">Web Apps</a> table.</p>
+  <div style="display:flex; gap:8px; margin:8px 0;" id="toolScopeToggles">
+    <button class="btn btn-sm tool-scope-toggle" data-filter="in">In scope</button>
+    <button class="btn btn-sm tool-scope-toggle" data-filter="out">Out of scope</button>
+  </div>
+  <div id="toolDiscoveryLog"></div>
+</div>
+
+<style>
+ .scope-dot { font-size: 14px; }
+ .tool-scope-toggle.active { background:#2f5d8f; border-color:#4a9eff; }
+ .scope-dot.in { color: #00ff00; }
+ .scope-dot.out { color: #ff3333; }
+ .tool-run-summary { cursor:pointer; list-style:none; font-size:13px; }
+ .tool-run-summary::-webkit-details-marker { display:none; }
+ .tool-run-arrow { display:inline-block; margin-right:4px; transition:transform .1s ease; }
+ .tool-run[open] > .tool-run-summary .tool-run-arrow { transform:rotate(90deg); }
+ .tool-run-body { padding:8px 2px 2px 20px; }
+ .tool-targets { margin:0 0 8px; padding:0; list-style:none; font-size:12px; }
+ .tool-targets li { margin:1px 0; }
+ .tool-subs { list-style:none; padding:0; margin:0; max-height:320px; overflow:auto; }
+ .tool-subs li { margin:3px 0; font-size:13px; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Handle bfcache: reload when page restored from browser back/forward cache
+  window.addEventListener("pageshow", (ev) => {
+    if (ev.persisted) window.location.reload();
+  });
+</script>
+<script>
+  // ---- External recon tools (subfinder, theHarvester, ...) ----
+  const toolButtonsWrap = document.getElementById("toolButtons");
+  const toolProgress = document.getElementById("toolProgress");
+  const toolProgressBar = document.getElementById("toolProgressBar");
+  const toolProgressText = document.getElementById("toolProgressText");
+  const toolTargetModal = document.getElementById("toolTargetModal");
+  const toolTargetInput = document.getElementById("toolTargetInput");
+  const toolTargetError = document.getElementById("toolTargetError");
+  const btnToolTargetGo = document.getElementById("btnToolTargetGo");
+  const inScopeDomains = {{ in_scope_domains | tojson }};
+  const discoveredSubs = {{ discovered_subdomains | tojson }};
+  const includeDiscovered = document.getElementById("includeDiscovered");
+  const discoveredWrap = document.getElementById("toolDiscoveredSuggestions");
+  let toolsData = { tools: [] };
+  let toolPollTimer = null;
+  let toolPollInFlight = false;
+  let toolRestoreInFlight = false;
+  let activeToolName = null;
+  let discoveryTools = [];
+  let discoverySubs = [];
+  let discoveryFilter = "in";
+  const CERO_DEFAULT_PORTS = "443,8443,465,587,993,995";
+  const ceroModal = document.getElementById("ceroModal");
+  const ceroFilter = document.getElementById("ceroFilter");
+  const ceroSelectAll = document.getElementById("ceroSelectAll");
+  const ceroHostList = document.getElementById("ceroHostList");
+  const ceroPorts = document.getElementById("ceroPorts");
+  const ceroCount = document.getElementById("ceroCount");
+  const ceroError = document.getElementById("ceroError");
+  const btnCeroGo = document.getElementById("btnCeroGo");
+  let ceroHosts = [];
+  let ceroDeselected = new Set();
+
+  const toolSpecByName = (name) => toolsData.tools.find((t) => t.name === name) || {};
+
+  const installHint = (spec) => {
+    const first = Object.values(spec.install_commands || {})[0] || "see /tools page";
+    return `Not installed. Install with: ${first}`;
+  };
+
+  const setToolButtonBusy = (tool, state) => {
+    const btn = document.getElementById(`btn-tool-${tool}`);
+    if (!btn) return;
+    const spec = toolSpecByName(tool);
+    const label = spec.label || tool;
+    if (state === "running") {
+      btn.disabled = false;
+      btn.classList.remove("btn--disabled");
+      btn.textContent = `⏳ ${label} running…`;
+      btn.title = "In progress — you can still queue more runs.";
+    } else if (state === "queued") {
+      btn.disabled = false;
+      btn.classList.remove("btn--disabled");
+      btn.textContent = `⏳ ${label} queued…`;
+      btn.title = "Waiting in the run queue.";
+    } else {
+      btn.disabled = !spec.available;
+      btn.classList.toggle("btn--disabled", !spec.available);
+      btn.textContent = spec.available ? label : `${label} (not installed)`;
+      btn.title = spec.available ? "" : installHint(spec);
+    }
+  };
+
+  const renderToolButtons = () => {
+    if (!toolButtonsWrap) return;
+    toolButtonsWrap.innerHTML = "";
+    for (const t of toolsData.tools) {
+      const btn = document.createElement("button");
+      btn.className = "btn";
+      btn.id = `btn-tool-${t.name}`;
+      btn.textContent = t.available ? t.label : `${t.label} (not installed)`;
+      if (!t.available) {
+        btn.disabled = true;
+        btn.classList.add("btn--disabled");
+        btn.title = installHint(t);
+      }
+      btn.addEventListener("click", () =>
+        t.input_mode === "hosts_ports" ? openCeroModal(t) : openToolTargetModal(t)
+      );
+      toolButtonsWrap.appendChild(btn);
+    }
+  };
+
+  const loadToolStatus = async () => {
+    try {
+      const resp = await fetch("/api/tools", { cache: "no-store" });
+      const data = await resp.json();
+      if (data.ok) {
+        toolsData = data;
+        renderToolButtons();
+      }
+    } catch {
+      // best-effort
+    }
+  };
+  loadToolStatus();
+
+  let discoveredBuilt = false;
+  const buildDiscoveredSuggestions = () => {
+    if (discoveredBuilt) return;
+    discoveredBuilt = true;
+    document.getElementById("discoveredCount").textContent = String(discoveredSubs.length);
+    if (!discoveredSubs.length) {
+      discoveredWrap.innerHTML = '<span class="muted">No subdomains discovered yet.</span>';
+      return;
+    }
+    const byRoot = {};
+    for (const d of discoveredSubs) {
+      const r = d.root || "?";
+      (byRoot[r] = byRoot[r] || []).push(d.fqdn);
+    }
+    for (const root of Object.keys(byRoot)) {
+      const row = document.createElement("div");
+      row.style.cssText = "width:100%; margin:6px 0 2px 0;";
+      const lbl = document.createElement("span");
+      lbl.className = "muted";
+      lbl.style.cssText = "font-size:11px;";
+      lbl.textContent = `${root} (${byRoot[root].length})`;
+      row.appendChild(lbl);
+      for (const f of byRoot[root]) {
+        const b = document.createElement("button");
+        b.className = "btn btn-sm";
+        b.textContent = f;
+        b.addEventListener("click", () => {
+          const lines = toolTargetInput.value.split("\n").map((s) => s.trim()).filter(Boolean);
+          const fqdn = f.toLowerCase().replace(/\.$/, "");
+          if (!lines.some((l) => l.toLowerCase().replace(/\.$/, "") === fqdn)) lines.push(f);
+          toolTargetInput.value = lines.join("\n");
+          updateTargetCount();
+        });
+        row.appendChild(b);
+      }
+      discoveredWrap.appendChild(row);
+    }
+  };
+
+  document.getElementById("discoveredCount").textContent = String(discoveredSubs.length);
+
+  includeDiscovered.addEventListener("change", () => {
+    if (includeDiscovered.checked) buildDiscoveredSuggestions();
+    discoveredWrap.style.display = includeDiscovered.checked ? "flex" : "none";
+  });
+
+  const toolTargetCountEl = document.getElementById("toolTargetCount");
+  const updateTargetCount = () => {
+    const n = toolTargetInput.value.split(/[,\s]+/).filter(Boolean).length;
+    toolTargetCountEl.textContent = `${n} target${n === 1 ? "" : "s"} (max 20 per run)`;
+    toolTargetCountEl.style.color = n > 20 ? "#ff6666" : "";
+  };
+  toolTargetInput.addEventListener("input", updateTargetCount);
+
+  const openToolTargetModal = (t) => {
+    if (!t || !t.available) return;
+    activeToolName = t.name;
+    document.getElementById("toolTargetToolName").textContent = t.label;
+    document.getElementById("toolTargetToolName2").textContent = t.label;
+    toolTargetError.style.display = "none";
+    toolTargetError.textContent = "";
+    btnToolTargetGo.disabled = false;
+    if (includeDiscovered.checked) buildDiscoveredSuggestions();
+    discoveredWrap.style.display = includeDiscovered.checked ? "flex" : "none";
+    toolTargetInput.value = inScopeDomains.join("\n");
+    updateTargetCount();
+    toolTargetModal.classList.remove("hidden");
+    setTimeout(() => toolTargetInput.focus(), 50);
+  };
+
+  const selectedCeroHosts = () =>
+    ceroHosts.map((h) => h.value).filter((v) => !ceroDeselected.has(v));
+
+  const updateCeroCount = () => {
+    ceroCount.textContent = String(selectedCeroHosts().length);
+    if (ceroSelectAll) {
+      ceroSelectAll.checked =
+        ceroHosts.length > 0 && selectedCeroHosts().length === ceroHosts.length;
+    }
+  };
+
+  const renderCeroHostList = () => {
+    const q = (ceroFilter.value || "").trim().toLowerCase();
+    ceroHostList.innerHTML = "";
+    if (!ceroHosts.length) {
+      ceroHostList.innerHTML =
+        '<span class="muted">No in-scope hosts yet. Add scope or discovered subdomains first.</span>';
+      updateCeroCount();
+      return;
+    }
+    let shown = 0;
+    for (const h of ceroHosts) {
+      if (q && !h.value.toLowerCase().includes(q)) continue;
+      shown++;
+      const row = document.createElement("label");
+      row.className = "checkbox-label";
+      row.style.cssText = "display:block; margin:2px 0; font-size:12px; cursor:pointer;";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.className = "cero-host-cb";
+      cb.value = h.value;
+      cb.checked = !ceroDeselected.has(h.value);
+      cb.addEventListener("change", () => {
+        if (cb.checked) ceroDeselected.delete(h.value);
+        else ceroDeselected.add(h.value);
+        updateCeroCount();
+      });
+      row.appendChild(cb);
+      row.appendChild(document.createTextNode(" "));
+      const code = document.createElement("code");
+      code.textContent = h.value;
+      row.appendChild(code);
+      if (h.type !== "subdomain") {
+        const tag = document.createElement("span");
+        tag.className = "muted";
+        tag.style.cssText = "font-size:10px; margin-left:6px;";
+        tag.textContent = `[${h.type}]`;
+        row.appendChild(tag);
+      }
+      ceroHostList.appendChild(row);
+    }
+    if (!shown) {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.textContent = "No hosts match the filter.";
+      ceroHostList.appendChild(empty);
+    }
+    updateCeroCount();
+  };
+
+  const openCeroModal = async (t) => {
+    if (!t || !t.available) return;
+    activeToolName = t.name;
+    ceroError.style.display = "none";
+    ceroError.textContent = "";
+    btnCeroGo.disabled = false;
+    ceroFilter.value = "";
+    ceroPorts.value = CERO_DEFAULT_PORTS;
+    ceroHosts = [];
+    ceroDeselected = new Set();
+    ceroHostList.innerHTML = '<span class="muted">Loading in-scope hosts…</span>';
+    updateCeroCount();
+    ceroModal.classList.remove("hidden");
+    try {
+      const resp = await fetch("/api/tools/cero/hosts", { cache: "no-store" });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "Could not load hosts");
+      ceroHosts = data.hosts || [];
+      if (data.default_ports) ceroPorts.value = data.default_ports;
+      renderCeroHostList();
+    } catch (e) {
+      ceroHosts = [];
+      renderCeroHostList();
+      ceroError.textContent = e.message;
+      ceroError.style.display = "";
+    }
+  };
+
+  ceroFilter.addEventListener("input", () => {
+    if (activeToolName === "cero") renderCeroHostList();
+  });
+
+  ceroSelectAll.addEventListener("change", () => {
+    if (ceroSelectAll.checked) ceroDeselected = new Set();
+    else for (const h of ceroHosts) ceroDeselected.add(h.value);
+    renderCeroHostList();
+  });
+
+  const updateToolProgressFromJob = (job, queuedCount = 0) => {
+    if (!toolProgress) return;
+    toolProgress.classList.remove("hidden");
+    const keySuffix = job.keys_applied && job.keys_applied.length
+      ? ` · keys: ${job.keys_applied.join(", ")}`
+      : "";
+    if (job.status === "running" || job.status === "pending") {
+      toolProgressBar.style.width = "45%";
+      let text = job.status === "pending"
+        ? `Queued: ${job.tool} for ${job.target} — waiting for the current run to finish`
+        : (job.current_label || `Running ${job.tool}...`);
+      if (queuedCount > 0) text += ` · ${queuedCount} queued`;
+      text += keySuffix;
+      toolProgressText.textContent = text;
+    } else if (job.status === "completed") {
+      toolProgressBar.style.width = "100%";
+      toolProgressText.textContent =
+        `Done: ${job.added} new subdomains, ${job.skipped} already known (of ${job.found} found).${keySuffix} See them in the Web Apps table.`;
+    } else if (job.status === "failed") {
+      toolProgressBar.style.width = "100%";
+      toolProgressText.textContent = `Error: ${job.error || "tool failed"}`;
+    }
+  };
+
+  const stopToolPolling = () => {
+    if (toolPollTimer) { clearTimeout(toolPollTimer); toolPollTimer = null; }
+  };
+
+  const applyQueueButtonStates = (data) => {
+    if (!toolsData || !toolsData.tools) return;
+    const runningTool = data.active_job && data.active_job.status === "running" ? data.active_job.tool : null;
+    const queuedTools = new Set((data.queued || []).map((q) => q.tool));
+    for (const t of toolsData.tools) {
+      setToolButtonBusy(
+        t.name,
+        t.name === runningTool ? "running" : queuedTools.has(t.name) ? "queued" : "idle"
+      );
+    }
+  };
+
+  const pollToolQueue = async () => {
+    if (toolPollInFlight) return;
+    toolPollInFlight = true;
+    try {
+      const resp = await fetch("/api/tools/jobs/active", { cache: "no-store" });
+      const data = await resp.json();
+      if (!data.ok) throw new Error("Tool queue not found");
+      applyQueueButtonStates(data);
+      if (data.active_job) {
+        updateToolProgressFromJob(data.active_job, data.queued_count || 0);
+        stopToolPolling();
+        toolPollTimer = setTimeout(() => pollToolQueue(), 1500);
+        return;
+      }
+      stopToolPolling();
+      if (data.last_job) {
+        updateToolProgressFromJob(data.last_job);
+        if (data.last_job.status === "completed") {
+          loadDiscoveryLog();
+          setTimeout(() => toolProgress.classList.add("hidden"), 8000);
+        }
+      }
+    } catch (e) {
+      stopToolPolling();
+      toolProgressText.textContent = `Error: ${e.message}`;
+    } finally {
+      toolPollInFlight = false;
+    }
+  };
+
+  const startToolJobPolling = (job) => {
+    if (!job || !job.id) return;
+    stopToolPolling();
+    updateToolProgressFromJob(job, job.queued_count || 0);
+    setToolButtonBusy(job.tool, job.status === "running" ? "running" : "queued");
+    toolPollTimer = setTimeout(() => pollToolQueue(), 1500);
+  };
+
+  const restoreToolJob = async () => {
+    if (toolRestoreInFlight) return;
+    toolRestoreInFlight = true;
+    try {
+      const resp = await fetch("/api/tools/jobs/active", { cache: "no-store" });
+      const data = await resp.json();
+      if (!data.ok) return;
+      applyQueueButtonStates(data);
+      if (data.active_job) {
+        updateToolProgressFromJob(data.active_job, data.queued_count || 0);
+        stopToolPolling();
+        toolPollTimer = setTimeout(() => pollToolQueue(), 1500);
+      }
+      // Finished runs are no longer flashed as a banner — they live in the Discovery Log below.
+    } catch {
+      // Restore is best-effort.
+    } finally {
+      toolRestoreInFlight = false;
+    }
+  };
+  restoreToolJob();
+  window.addEventListener("visibilitychange", () => {
+    if (!document.hidden) restoreToolJob();
+  });
+  window.addEventListener("focus", () => restoreToolJob());
+
+  btnToolTargetGo.addEventListener("click", async () => {
+    const target = toolTargetInput.value.trim();
+    if (!target) {
+      toolTargetError.textContent = "Enter at least one target domain.";
+      toolTargetError.style.display = "";
+      return;
+    }
+    if (!activeToolName) return;
+    btnToolTargetGo.disabled = true;
+    toolTargetError.style.display = "none";
+    try {
+      const resp = await fetch("/api/tools/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tool: activeToolName, target }),
+      });
+      const data = await resp.json();
+      if (!data.ok || !data.job) throw new Error(data.error || "Could not start tool");
+      toolTargetModal.classList.add("hidden");
+      startToolJobPolling(data.job);
+    } catch (e) {
+      toolTargetError.textContent = e.message;
+      toolTargetError.style.display = "";
+      btnToolTargetGo.disabled = false;
+    }
+  });
+
+  btnCeroGo.addEventListener("click", async () => {
+    const hosts = selectedCeroHosts();
+    if (!hosts.length) {
+      ceroError.textContent = "Select at least one host to probe.";
+      ceroError.style.display = "";
+      return;
+    }
+    const ports = (ceroPorts.value || "").trim();
+    if (!ports) {
+      ceroError.textContent = "Enter at least one TLS port.";
+      ceroError.style.display = "";
+      return;
+    }
+    if (!activeToolName) return;
+    btnCeroGo.disabled = true;
+    ceroError.style.display = "none";
+    try {
+      const resp = await fetch("/api/tools/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tool: activeToolName, hosts, ports }),
+      });
+      const data = await resp.json();
+      if (!data.ok || !data.job) throw new Error(data.error || "Could not start Cero");
+      ceroModal.classList.add("hidden");
+      startToolJobPolling(data.job);
+    } catch (e) {
+      ceroError.textContent = e.message;
+      ceroError.style.display = "";
+      btnCeroGo.disabled = false;
+    }
+  });
+
+  toolTargetInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
+      ev.preventDefault();
+      btnToolTargetGo.click();
+    }
+  });
+
+  const escHtml = (v) =>
+    String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  const fmtTs = (ts) => String(ts || "").replace("T", " ").slice(0, 19);
+
+  // Unique tools that found a subdomain, in order of first discovery (no timestamps).
+  const firstTools = (runs) => {
+    const seen = new Set();
+    const out = [];
+    for (const rn of runs || []) {
+      if (!seen.has(rn.tool)) { seen.add(rn.tool); out.push(rn.tool); }
+    }
+    return out;
+  };
+
+  const renderDiscoveryLog = () => {
+    const el = document.getElementById("toolDiscoveryLog");
+    document.querySelectorAll(".tool-scope-toggle").forEach((b) => {
+      b.classList.toggle("active", b.getAttribute("data-filter") === discoveryFilter);
+    });
+    if (!discoveryTools.length) {
+      el.innerHTML =
+        '<span class="muted">No tool runs yet. Use the tool buttons above — install tools on the <a href="/tools">Tools page</a>.</span>';
+      return;
+    }
+    const toolsHtml = discoveryTools
+      .map((t) => {
+        const runsHtml = t.runs
+          .map((r) => {
+            const targetText =
+              r.targets.length === 1 ? escHtml(r.targets[0]) : `${r.targets.length} targets`;
+            const targetsList = r.targets.length > 1
+              ? (r.targets.length > 8
+                  ? `<details style="margin:0 0 8px 0;"><summary class="muted" style="cursor:pointer; font-size:12px;">${r.targets.length} targets</summary><ul class="tool-targets">${r.targets.map((x) => `<li><code>${escHtml(x)}</code></li>`).join("")}</ul></details>`
+                  : `<ul class="tool-targets">${r.targets.map((x) => `<li><code>${escHtml(x)}</code></li>`).join("")}</ul>`)
+              : `<span class="muted" style="font-size:12px;">target <code>${escHtml(r.targets[0])}</code></span>`;
+            const runErrors = r.errors || [];
+            const firstErr = runErrors.length
+              ? (runErrors[0].length > 140 ? runErrors[0].slice(0, 140) + "…" : runErrors[0])
+              : "";
+            const failSummary = runErrors.length
+              ? ` <span style="color:#ff6666;">Failed: ${escHtml(firstErr)}</span>`
+              : "";
+            const errorBox = runErrors.length
+              ? `<pre style="margin:8px 0 0; padding:8px; background:#fff0f0; border:1px solid #ff6666; border-radius:4px; color:#8b0000; font-size:12px; white-space:pre-wrap; word-break:break-word;">${runErrors.map(escHtml).join("\n---\n")}</pre>`
+              : "";
+            const runLogs = r.logs || [];
+            const allLogLines = [];
+            for (const blk of runLogs) for (const ln of blk.lines) allLogLines.push(ln);
+            const ERR_LINE_RE = /error|err\b|fail|warn|denied|invalid|unauthor|forbidden|timed out|timeout|\b4\d\d\b|\b5\d\d\b/i;
+            const isZeroStat = (ln) => /\b0 errors\b/.test(ln) || /"errors"\s*:\s*0\b/.test(ln);
+            const errLines = allLogLines.filter((ln) => ERR_LINE_RE.test(ln) && !isZeroStat(ln));
+            const errLineBox = errLines.length
+              ? `<pre style="margin:8px 0 0; padding:8px; background:#fff8e6; border:1px solid #e6a23c; border-radius:4px; color:#8a5a00; font-size:12px; white-space:pre-wrap; word-break:break-word;">${errLines.slice(0, 200).map(escHtml).join("\n")}</pre>`
+              : "";
+            const logDetails = runLogs.length
+              ? `<details class="tool-log" style="margin:8px 0 0;"><summary style="cursor:pointer; font-size:12px; color:#666;">Tool log (${allLogLines.length} lines)</summary>${runLogs.map((b) => `<div style="margin-top:6px;"><span class="muted" style="font-size:11px;">${escHtml(b.target || "run")}</span><pre style="margin:4px 0 0; padding:8px; background:#f6f8fa; color:#1f2328; border-radius:4px; font-size:11px; white-space:pre-wrap; word-break:break-word; max-height:320px; overflow:auto;">${b.lines.map(escHtml).join("\n")}</pre></div>`).join("")}</details>`
+              : "";
+            const summary =
+              r.added != null
+                ? `${r.new_count} new subdomains discovered, ${Math.max(0, (r.found || 0) - r.added)} already in database`
+                : `${r.new_count} new subdomains discovered (of ${r.found} found)`;
+            return `<details class="tool-run" style="margin:6px 0;">
+  <summary class="tool-run-summary"><span class="tool-run-arrow">▸</span> ${fmtTs(r.created_at)} <span class="muted">· ${targetText} · ${summary}</span>${failSummary}</summary>
+  <div class="tool-run-body">${targetsList}${errorBox}${errLineBox}${logDetails}</div>
+</details>`;
+          })
+          .join("");
+        return `<div style="margin:14px 0;">
+  <div style="display:flex; align-items:baseline; gap:8px; border-bottom:1px solid #e5e5e5; padding-bottom:6px;">
+    <h3 style="margin:0;">${escHtml(t.name)}</h3>
+    <span class="muted" style="font-size:12px;">${t.runs.length} run${t.runs.length === 1 ? "" : "s"} · ${t.unique} unique subdomain${t.unique === 1 ? "" : "s"}</span>
+  </div>
+  ${runsHtml}
+</div>`;
+      })
+      .join("");
+    const subs = discoverySubs.filter((x) =>
+      discoveryFilter === "out" ? !x.in_scope : x.in_scope
+    );
+    const subsHtml = subs.length
+      ? `<ul class="tool-subs" style="max-height:420px;">${subs.map((x) =>
+          `<li><span class="scope-dot ${x.in_scope ? "in" : "out"}">●</span> <code>${escHtml(x.fqdn)}</code><span class="muted" style="font-size:11px; margin-left:6px;">via ${firstTools(x.runs).map(escHtml).join(", ")}</span></li>`
+        ).join("")}</ul>`
+      : '<span class="muted" style="font-size:12px;">No subdomains in this category.</span>';
+    const scopeHeading = discoveryFilter === "out" ? "Out-of-scope subdomains" : "In-scope subdomains";
+    el.innerHTML =
+      toolsHtml +
+      `<div style="margin-top:18px; border-top:1px solid #e5e5e5; padding-top:10px;">
+  <div style="display:flex; align-items:baseline; gap:8px; margin-bottom:8px;">
+    <h3 style="margin:0;">${scopeHeading}</h3>
+    <span class="muted" style="font-size:12px;">${subs.length} of ${discoverySubs.length} total, deduped across tools and runs</span>
+  </div>
+  ${subsHtml}
+</div>`;
+  };
+
+  const loadDiscoveryLog = async () => {
+    const el = document.getElementById("toolDiscoveryLog");
+    try {
+      const resp = await fetch("/api/tools/discoveries", { cache: "no-store" });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "Failed to load discovery log");
+      discoveryTools = data.tools || [];
+      discoverySubs = data.subdomains || [];
+      renderDiscoveryLog();
+    } catch (e) {
+      el.innerHTML = `<span style="color:#ff6666;">${escHtml(e.message)}</span>`;
+    }
+  };
+  loadDiscoveryLog();
+
+  document.querySelectorAll(".tool-scope-toggle").forEach((b) => {
+    b.addEventListener("click", () => {
+      discoveryFilter = b.getAttribute("data-filter");
+      renderDiscoveryLog();
+    });
+  });
+</script>
+{% endblock %}

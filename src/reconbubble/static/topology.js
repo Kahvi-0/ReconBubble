@@ -409,8 +409,7 @@
     let lastX = e.clientX;
     let lastY = e.clientY;
     const onMove = (ev) => {
-      const z = cy.zoom() || 1;
-      cy.panBy({ x: (ev.clientX - lastX) / z, y: (ev.clientY - lastY) / z });
+      cy.panBy({ x: ev.clientX - lastX, y: ev.clientY - lastY });
       lastX = ev.clientX;
       lastY = ev.clientY;
     };

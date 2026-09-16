@@ -485,6 +485,43 @@ class WebScreenshot(Base):
     )
 
 
+class ToolApiKey(Base):
+    __tablename__ = "tool_api_keys"
+    __table_args__ = (
+        UniqueConstraint("tool", "key_name", "field", name="uq_tool_key_name_field"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    tool: Mapped[str] = mapped_column(String(32), index=True)
+    key_name: Mapped[str] = mapped_column(String(64), index=True)
+    field: Mapped[str] = mapped_column(String(16), default="key")
+    value: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
+class ServiceApiKey(Base):
+    """API credentials stored once per *service* (e.g. shodan, censys).
+
+    A service's values are fanned out to every tool that consumes it, in that
+    tool's own source/field layout (see tools.SERVICE_CATALOG). This replaces
+    the old per-tool ToolApiKey rows; the old table is kept for compatibility
+    but is no longer written by the key flow.
+    """
+
+    __tablename__ = "service_api_keys"
+    __table_args__ = (
+        UniqueConstraint("service", "field", name="uq_service_field"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    service: Mapped[str] = mapped_column(String(64), index=True)
+    field: Mapped[str] = mapped_column(String(16), default="key")
+    value: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
 class UploadLog(Base):
     __tablename__ = "upload_log"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

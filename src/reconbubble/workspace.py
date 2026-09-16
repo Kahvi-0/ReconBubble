@@ -19,6 +19,7 @@ class Workspace:
     uploads_dir: Path
     exports_dir: Path
     logs_dir: Path
+    bin_dir: Path
 
     @classmethod
     def from_db(cls, db_path: Path, workspace: Path | None = None) -> "Workspace":
@@ -27,10 +28,12 @@ class Workspace:
         uploads_dir = root / "uploads"
         exports_dir = root / "exports"
         logs_dir = root / "logs"
+        bin_dir = root / "bin"
         uploads_dir.mkdir(parents=True, exist_ok=True)
         exports_dir.mkdir(parents=True, exist_ok=True)
         logs_dir.mkdir(parents=True, exist_ok=True)
-        return cls(db_path=db_path, root=root, uploads_dir=uploads_dir, exports_dir=exports_dir, logs_dir=logs_dir)
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        return cls(db_path=db_path, root=root, uploads_dir=uploads_dir, exports_dir=exports_dir, logs_dir=logs_dir, bin_dir=bin_dir)
 
     def store_upload(self, src: Path, prefix: str = "upload") -> Path:
         src = src.expanduser().resolve()

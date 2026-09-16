@@ -7,3 +7,4 @@ python-docx>=1.1.0
 typer>=0.9
 rich>=13.0
 playwright>=1.40
+pyyaml>=6.0

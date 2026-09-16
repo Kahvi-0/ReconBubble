@@ -436,15 +436,52 @@ def extract_doc_names(session: Session, meta_fields: set[str] | None = None) -> 
     return count
 
 
-def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
+def _salvage_truncated_nmap_root(path: Path):
+    """Recover complete <host> blocks from a truncated nmap XML (interrupted scan).
+
+    Returns the root Element if the file is a truncated nmap XML with at least one
+    complete host, else None. A truncated file is one cut off before its closing
+    </nmaprun> tag (nmap was interrupted mid-write).
+    """
     try:
-        tree = ET.parse(path)
-        root = tree.getroot()
+        data = path.read_bytes().decode("utf-8", "replace")
+    except OSError:
+        return None
+    if "</nmaprun>" in data:
+        return None  # not a truncation; malformed for another reason
+    i = data.rfind("</host>")
+    if i == -1:
+        return None  # no complete host blocks to recover
+    fixed = data[: i + len("</host>")] + "\n</nmaprun>\n"
+    try:
+        return ET.fromstring(fixed)
+    except ET.ParseError:
+        return None
+
+
+def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
+    note = None
+    try:
+        root = ET.parse(path).getroot()
     except ET.ParseError as e:
+        root = _salvage_truncated_nmap_root(path)
+        if root is None:
+            raise ValueError(
+                "Invalid Nmap XML - not well-formed and no complete hosts could be recovered. "
+                "The scan may have failed or been interrupted, or the wrong file was selected. "
+                "Re-run nmap with -oX scan.xml (or -oA name) and upload the .xml "
+                "(it must start with <nmaprun>)."
+            ) from e
+        note = (
+            f"Recovered {len(root.findall('host'))} hosts from a truncated nmap XML "
+            "(scan interrupted); the original file was incomplete."
+        )
+    if root.tag != "nmaprun":
         raise ValueError(
-            "Invalid Nmap XML upload. Make sure you ran nmap with -oX scan.xml (or -oA name and upload the .xml) "
-            "and upload the XML file (it should start with <nmaprun>)."
-        ) from e
+            f"Not a Nmap XML file - root element is <{root.tag}>, expected <nmaprun>. "
+            "Upload the file nmap wrote with -oX."
+        )
+    total_hosts = len(root.findall("host"))
     host_count = service_count = evidence_count = 0
     batch = 50
     processed = 0
@@ -563,11 +600,15 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
         if processed % batch == 0:
             session.commit()
     session.commit()
-    return {
+    result = {
         "hosts_added": host_count,
         "services_added": service_count,
         "evidence_added": evidence_count,
+        "total_hosts": total_hosts,
     }
+    if note:
+        result["notice"] = note
+    return result
 
 
 def import_document(session: Session, artifact: Artifact, path: Path) -> int:

@@ -5,6 +5,7 @@ src/reconbubble/cli.py
 src/reconbubble/db.py
 src/reconbubble/models.py
 src/reconbubble/parsers.py
+src/reconbubble/tools.py
 src/reconbubble/webapp.py
 src/reconbubble/workspace.py
 src/reconbubble.egg-info/PKG-INFO
@@ -22,6 +23,7 @@ src/reconbubble/static/favicon.svg
 src/reconbubble/static/fire.gif
 src/reconbubble/static/global_notes_panel.js
 src/reconbubble/static/graph.js
+src/reconbubble/static/jobs_indicator.js
 src/reconbubble/static/sidebar.js
 src/reconbubble/static/topology.js
 src/reconbubble/static/vendor/cytoscape.min.js
@@ -52,6 +54,8 @@ src/reconbubble/templates/smtp.html
 src/reconbubble/templates/social.html
 src/reconbubble/templates/stats.html
 src/reconbubble/templates/subdomains.html
+src/reconbubble/templates/subdomains_discovery.html
+src/reconbubble/templates/tools.html
 src/reconbubble/templates/topology.html
 src/reconbubble/templates/upload.html
 src/reconbubble/templates/urls.html

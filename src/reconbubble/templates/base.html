@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>ReconBubble</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg"/>
-  <link rel="stylesheet" href="/static/app.css?v=15"/>
+  <link rel="stylesheet" href="/static/app.css?v=16"/>
 </head>
 <body>
   <header class="topbar">
@@ -69,14 +69,16 @@
               <a href="/osint/registrars" {{ 'class=current' if request.url.path == '/osint/registrars' }}>Registrars</a>
             </div>
           </div>
-          <div class="nav-dropdown" id="perimeterDropdown">
-             <a href="#" class="nav-dropbtn">Perimeter ▾</a>
-             <div class="nav-dropdown-content">
-               <a href="/cloud" {{ 'class=current' if request.url.path == '/cloud' }}>Cloud</a>
-             </div>
-           </div>
-          <a href="/subdomains" {{ 'class=current' if request.url.path in ('/subdomains', '/urls') }}>Web Apps</a>
-        <div class="nav-dropdown" id="internalDropdown">
+           <div class="nav-dropdown" id="perimeterDropdown">
+              <a href="#" class="nav-dropbtn">Perimeter ▾</a>
+              <div class="nav-dropdown-content">
+                <a href="/subdomains-discovery" {{ 'class=current' if request.url.path == '/subdomains-discovery' }}>Subdomains</a>
+                <a href="/cloud" {{ 'class=current' if request.url.path == '/cloud' }}>Cloud</a>
+              </div>
+            </div>
+           <a href="/subdomains" {{ 'class=current' if request.url.path in ('/subdomains', '/urls') }}>Web Apps</a>
+           <a href="/tools" {{ 'class=current' if request.url.path == '/tools' }}>Tools</a>
+         <div class="nav-dropdown" id="internalDropdown">
           <a href="#" class="nav-dropbtn">Internal ▾</a>
           <div class="nav-dropdown-content">
             <a href="/checklist-unauthenticated" {{ 'class=current' if request.url.path == '/checklist-unauthenticated' }}>Domain Unauth Checklist</a>
@@ -90,7 +92,13 @@
 
       <a class="btn" href="/upload">Upload</a>
     </nav>
-    <img class="firegif firegif-right" src="/static/fire.gif" alt="retro fire"/>
+    <div class="topbar-right">
+      <div id="globalJobsIndicator" class="jobs-indicator" hidden title="" role="status">
+        <span id="jobsIndicatorIcon" class="jobs-spinner"></span>
+        <span id="jobsIndicatorLabel"></span>
+      </div>
+      <img class="firegif firegif-right" src="/static/fire.gif" alt="retro fire"/>
+    </div>
   </header>
   <main class="container">
     {% block content %}{% endblock %}
@@ -157,6 +165,7 @@
 
   {% block scripts %}{% endblock %}
   <script src="/static/sidebar.js?v=11"></script>
+  <script src="/static/jobs_indicator.js?v=1"></script>
   <script src="/static/global_notes_panel.js?v=30"></script>
   <script>
     const allDropdowns = [

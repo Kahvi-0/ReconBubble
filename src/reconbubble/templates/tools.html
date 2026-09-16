@@ -1,0 +1,341 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Recon Tools</h1>
+
+<div class="card">
+  <h2>External Subdomain Tools</h2>
+  <p class="muted">
+    These tools run on this machine as the user running ReconBubble. ReconBubble
+    never downloads or installs them automatically &mdash; install one manually using
+    the commands below, then refresh this page.
+    Binaries are looked up in the workspace bin directory first
+    (<code>{{ bin_dir }}</code>), then on your PATH.
+  </p>
+  <p class="muted" style="color:#ffaa00;">
+    ⚠ Running a tool executes a local binary. Only use this if the ReconBubble web UI
+    is reachable solely by you (it binds to 127.0.0.1 by default; <code>--listen-all</code>
+    would expose tool execution to the network).
+  </p>
+</div>
+
+{% for t in tools %}
+<div class="card" style="margin-top:12px;">
+  <h2>
+    <span class="scope-dot {% if t.available %}in{% else %}out{% endif %}">●</span>
+    {{ t.label }}
+    {% if t.builtin %}
+      <span class="muted">(built-in — no install needed)</span>
+    {% elif t.available %}
+      <span class="muted">(v{{ t.version or "unknown" }} — <code>{{ t.path }}</code>)</span>
+    {% else %}
+      <span class="muted">(not installed)</span>
+    {% endif %}
+  </h2>
+  <p class="muted">{{ t.network_note }}</p>
+  {% if not t.builtin %}
+  <details {% if not t.available %}open{% endif %}>
+    <summary>Install</summary>
+    <table style="margin-top:8px;">
+      <thead><tr><th>Method</th><th>Command</th></tr></thead>
+      <tbody>
+        {% for method, cmd in t.install_commands.items() %}
+        <tr>
+          <td style="white-space:nowrap;"><strong>{{ method }}</strong></td>
+          <td><code>{{ cmd }}</code></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <p class="muted" style="margin-top:8px;">
+      After installing, click Refresh below &mdash; or run the tool from the
+      <a href="/subdomains-discovery">Subdomains</a> page (Perimeter menu).
+    </p>
+  </details>
+  {% endif %}
+</div>
+{% endfor %}
+
+<div class="card" style="margin-top:12px;">
+  <h2>API Keys</h2>
+  <p class="muted" style="margin:4px 0 12px;">
+    Keys are stored once per <strong>service</strong> (e.g. <code>shodan</code>,
+    <code>censys</code>) and applied to every tool that uses that service.
+    The table shows masked values; use <strong>Show config files</strong> to see
+    the exact <code>api-keys.yaml</code> / <code>provider-config.yaml</code> each
+    tool will receive at run time (with full values).
+  </p>
+  <div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+    <label>Service
+      <select id="apiKeyService" style="min-width:180px;"></select>
+    </label>
+    <span id="apiKeyFieldsWrap"></span>
+    <button class="btn" id="btnApiKeySave">Save</button>
+    <button class="btn" id="btnApiKeyConfig">Show config files</button>
+  </div>
+  <p id="apiKeyServiceTools" class="muted" style="margin-top:8px;"></p>
+  <p id="apiKeyStatus" style="margin-top:10px; display:none;"></p>
+  <div id="apiKeyConfigWrap" style="display:none; margin-top:10px;"></div>
+
+  <details style="margin-top:14px;">
+    <summary>Import from a tool config file</summary>
+    <p class="muted" style="margin:8px 0;">
+      Paste a theHarvester <code>api-keys.yaml</code> or a subfinder
+      <code>provider-config.yaml</code>. ReconBubble detects the format, maps each
+      source to its service, and fills in the keys.
+    </p>
+    <textarea id="apiKeyImportText" rows="8"
+      style="width:100%; box-sizing:border-box; font-family:monospace; font-size:12px;"
+      placeholder="# paste YAML here"></textarea>
+    <div style="margin-top:8px;">
+      <button class="btn" id="btnApiKeyImport">Import</button>
+      <span id="apiKeyImportStatus" class="muted" style="margin-left:10px; display:none;"></span>
+    </div>
+  </details>
+
+  <table style="margin-top:14px;">
+    <thead>
+      <tr>
+        <th style="width:160px;">Service</th>
+        <th>Stored fields</th>
+        <th style="width:160px;">Saved</th>
+        <th style="width:80px;"></th>
+      </tr>
+    </thead>
+    <tbody id="apiKeyRows"></tbody>
+  </table>
+  <p id="apiKeyEmpty" class="muted">No API keys stored yet.</p>
+</div>
+
+<div class="card" style="margin-top:12px;">
+  <div style="display:flex; gap:8px; align-items:center;">
+    <button class="btn" id="btnToolsRefresh">↻ Refresh</button>
+    <a class="btn" href="/subdomains-discovery">Run tools from Subdomains →</a>
+    <span id="toolsRefreshStatus" class="muted" style="display:none;"></span>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const btnToolsRefresh = document.getElementById("btnToolsRefresh");
+  const toolsRefreshStatus = document.getElementById("toolsRefreshStatus");
+  btnToolsRefresh.addEventListener("click", async () => {
+    toolsRefreshStatus.style.display = "";
+    toolsRefreshStatus.textContent = "Checking...";
+    try {
+      const resp = await fetch("/api/tools", { cache: "no-store" });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "Failed to load tools");
+      const available = data.tools.filter(t => t.available).map(t => t.label);
+      if (available.length === data.tools.length) {
+        toolsRefreshStatus.textContent = `All ${data.tools.length} tools available.`;
+      } else {
+        toolsRefreshStatus.textContent =
+          `Available: ${available.length ? available.join(", ") : "none"} — refresh the page to update buttons.`;
+      }
+    } catch (e) {
+      toolsRefreshStatus.textContent = `Error: ${e.message}`;
+    }
+  });
+
+  // ---- API Keys (per-service) ----
+  const apiKeyService = document.getElementById("apiKeyService");
+  const apiKeyFieldsWrap = document.getElementById("apiKeyFieldsWrap");
+  const apiKeyServiceTools = document.getElementById("apiKeyServiceTools");
+  const btnApiKeySave = document.getElementById("btnApiKeySave");
+  const btnApiKeyConfig = document.getElementById("btnApiKeyConfig");
+  const apiKeyConfigWrap = document.getElementById("apiKeyConfigWrap");
+  let apiKeyConfigOpen = false;
+  const apiKeyStatus = document.getElementById("apiKeyStatus");
+  const apiKeyRows = document.getElementById("apiKeyRows");
+  const apiKeyEmpty = document.getElementById("apiKeyEmpty");
+  const apiKeyImportText = document.getElementById("apiKeyImportText");
+  const btnApiKeyImport = document.getElementById("btnApiKeyImport");
+  const apiKeyImportStatus = document.getElementById("apiKeyImportStatus");
+  let apiKeysData = { registry: {}, keys: [] };
+
+  const escHtmlK = (v) =>
+    String(v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  const fmtTsK = (ts) => String(ts || "").replace("T", " ").slice(0, 19);
+
+  function renderServiceSelect() {
+    const services = Object.keys(apiKeysData.registry).sort();
+    apiKeyService.innerHTML = services
+      .map((s) => `<option value="${escHtmlK(s)}">${escHtmlK(s)}</option>`)
+      .join("");
+    renderServiceFields();
+  }
+
+  function renderServiceFields() {
+    const service = apiKeyService.value;
+    const entry = apiKeysData.registry[service] || {};
+    const fields = entry.fields || ["key"];
+    apiKeyFieldsWrap.innerHTML = fields
+      .map((f) => `<label style="margin-right:10px;">${escHtmlK(f)} <input id="apiKeyField_${escHtmlK(f)}" type="password" placeholder="paste ${escHtmlK(f)}" style="min-width:220px;" autocomplete="off"></label>`)
+      .join("");
+    const tools = Object.entries(entry.tools || {})
+      .map(([tool, source]) => `${escHtmlK(tool)} <span class="muted">(${escHtmlK(source)})</span>`)
+      .join(", ");
+    apiKeyServiceTools.innerHTML = tools ? `Used by: ${tools}` : "";
+  }
+
+  function renderKeysTable() {
+    const byService = {};
+    for (const k of apiKeysData.keys) (byService[k.service] = byService[k.service] || []).push(k);
+    const services = Object.keys(byService).sort();
+    apiKeyEmpty.style.display = services.length ? "none" : "";
+    apiKeyRows.innerHTML = services
+      .map((s) => {
+        const fields = byService[s]
+          .map((k) => `<code>${escHtmlK(k.field)}</code> = <code>${escHtmlK(k.masked)}</code>`)
+          .join(" &middot; ");
+        const saved = fmtTsK(byService[s].map((k) => k.created_at).sort().pop());
+        return `<tr>
+        <td><strong>${escHtmlK(s)}</strong></td>
+        <td>${fields}</td>
+        <td class="muted">${escHtmlK(saved)}</td>
+        <td><button class="btn btn-sm" data-del-service="${escHtmlK(s)}">Delete</button></td>
+      </tr>`;
+      })
+      .join("");
+    apiKeyRows.querySelectorAll("button[data-del-service]").forEach((b) =>
+      b.addEventListener("click", async () => {
+        if (!confirm(`Delete all stored fields for ${b.dataset.delService}?`)) return;
+        try {
+          const resp = await fetch(
+            `/api/services/keys/${encodeURIComponent(b.dataset.delService)}`,
+            { method: "DELETE" }
+          );
+          const data = await resp.json();
+          if (!data.ok) throw new Error(data.error || "Delete failed");
+          loadApiKeys();
+        } catch (e) {
+          showApiKeyStatus(`Error: ${e.message}`, true);
+        }
+      })
+    );
+  }
+
+  function showApiKeyStatus(msg, isError) {
+    apiKeyStatus.style.display = "";
+    apiKeyStatus.textContent = msg;
+    apiKeyStatus.style.color = isError ? "#ff6666" : "#2e7d32";
+  }
+
+  async function loadApiKeys() {
+    try {
+      const resp = await fetch("/api/services/keys", { cache: "no-store" });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "Failed to load API keys");
+      apiKeysData = data;
+      renderServiceSelect();
+      renderKeysTable();
+    } catch (e) {
+      console.error("api keys", e);
+    }
+  }
+
+  apiKeyService.addEventListener("change", renderServiceFields);
+
+  btnApiKeySave.addEventListener("click", async () => {
+    const service = apiKeyService.value;
+    const fields = (apiKeysData.registry[service] || {}).fields || ["key"];
+    const payloads = [];
+    for (const f of fields) {
+      const input = document.getElementById(`apiKeyField_${f}`);
+      const v = input ? input.value.trim() : "";
+      if (v) payloads.push({ service, field: f, value: v });
+    }
+    if (!payloads.length) {
+      showApiKeyStatus("Nothing to save — paste at least one value.", true);
+      return;
+    }
+    try {
+      for (const p of payloads) {
+        const resp = await fetch("/api/services/keys", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(p),
+        });
+        const data = await resp.json();
+        if (!data.ok) throw new Error(data.error || "Save failed");
+      }
+      showApiKeyStatus(`Saved ${payloads.length} field${payloads.length === 1 ? "" : "s"} for ${service}.`, false);
+      fields.forEach((f) => {
+        const input = document.getElementById(`apiKeyField_${f}`);
+        if (input) input.value = "";
+      });
+      loadApiKeys();
+      if (apiKeyConfigOpen) loadApiKeyConfig();
+    } catch (e) {
+      showApiKeyStatus(`Error: ${e.message}`, true);
+    }
+  });
+
+  async function loadApiKeyConfig() {
+    apiKeyConfigWrap.innerHTML = `<span class="muted">Loading config files…</span>`;
+    try {
+      const resp = await fetch("/api/services/keys/config-preview", { cache: "no-store" });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "Failed to load config preview");
+      apiKeyConfigWrap.innerHTML = Object.entries(data.configs).map(([tool, c]) => {
+        const note = c.generated
+          ? " — written at run time with your stored keys"
+          : " — no keys stored for this tool, showing the default file";
+        const body = c.content ? c.content : "(no config file)";
+        return `<div style="margin-top:10px;">
+          <div class="muted" style="font-size:12px;"><strong>${escHtmlK(tool)}</strong> — <code>${escHtmlK(c.path)}</code><span>${note}</span></div>
+          <pre style="background:#f6f8fa; color:#1f2328; border:1px solid #e1e4e8; border-radius:4px; padding:8px; font-size:12px; margin:4px 0 0; white-space:pre-wrap; word-break:break-word;">${escHtmlK(body)}</pre>
+        </div>`;
+      }).join("");
+    } catch (e) {
+      apiKeyConfigWrap.innerHTML = `<span style="color:#ff6666;">Error: ${escHtmlK(e.message)}</span>`;
+    }
+  }
+
+  btnApiKeyConfig.addEventListener("click", () => {
+    apiKeyConfigOpen = !apiKeyConfigOpen;
+    btnApiKeyConfig.textContent = apiKeyConfigOpen ? "Hide config files" : "Show config files";
+    if (apiKeyConfigOpen) {
+      apiKeyConfigWrap.style.display = "";
+      loadApiKeyConfig();
+    } else {
+      apiKeyConfigWrap.style.display = "none";
+    }
+  });
+
+  btnApiKeyImport.addEventListener("click", async () => {
+    const content = apiKeyImportText.value;
+    if (!content.trim()) {
+      apiKeyImportStatus.style.display = "";
+      apiKeyImportStatus.style.color = "#ff6666";
+      apiKeyImportStatus.textContent = "Paste a config file first.";
+      return;
+    }
+    apiKeyImportStatus.style.display = "";
+    apiKeyImportStatus.style.color = "";
+    apiKeyImportStatus.textContent = "Importing...";
+    try {
+      const resp = await fetch("/api/services/keys/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "Import failed");
+      let msg = `Imported from ${data.tool}: ${data.saved} value${data.saved === 1 ? "" : "s"} across ${data.services.length} service${data.services.length === 1 ? "" : "s"}`;
+      if (data.skipped.length) msg += ` (skipped: ${data.skipped.join(", ")})`;
+      apiKeyImportStatus.textContent = msg;
+      apiKeyImportStatus.style.color = "#2e7d32";
+      loadApiKeys();
+    } catch (e) {
+      apiKeyImportStatus.textContent = `Error: ${e.message}`;
+      apiKeyImportStatus.style.color = "#ff6666";
+    }
+  });
+
+  loadApiKeys();
+</script>
+{% endblock %}
