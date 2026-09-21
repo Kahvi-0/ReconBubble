@@ -815,4 +815,25 @@ def migrate_sqlite(engine) -> None:
         except Exception:
             pass
 
+        # services: add inspected column if missing
+        try:
+            if conn.execute(
+                text(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='services'"
+                )
+            ).fetchone():
+                if not _has_column(conn, "services", "inspected"):
+                    conn.execute(
+                        text(
+                            "ALTER TABLE services ADD COLUMN inspected INTEGER DEFAULT 0"
+                        )
+                    )
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_services_inspected ON services(inspected)"
+                    )
+                )
+        except Exception:
+            pass
+
     conn.commit()

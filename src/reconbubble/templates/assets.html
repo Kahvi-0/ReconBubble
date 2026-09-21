@@ -30,8 +30,8 @@
       </li>
     </ul>
     <label class="row-limit-label">Max assets shown</label>
-    <span class="muted" style="font-size:11px;">Limit rows per subnet group.</span>
-    <select id="rowLimit">
+    <span class="muted" style="font-size:11px;">Limit the total number of asset rows across all subnet groups.</span>
+    <select id="rowLimit" class="toolbar-select">
       <option value="50"{% if row_limit == 50 %} selected{% endif %}>50</option>
       <option value="100"{% if row_limit == 100 %} selected{% endif %}>100</option>
       <option value="200"{% if row_limit == 200 %} selected{% endif %}>200</option>
@@ -39,8 +39,11 @@
       <option value="0"{% if row_limit == 0 %} selected{% endif %}>All (paginated)</option>
     </select>
     <label class="tag-filter-label">Host Tag Filter</label>
-    <select id="tagFilter">
+    <select id="tagFilter" class="toolbar-select">
       <option value="">All</option>
+      {% for t in available_tags %}
+      <option value="{{ t }}" {% if t == tag_filter %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
     </select>
     <p class="muted actions-summary-note">Showing <span id="shownCountValue">{{ shown_count }}</span> of <span id="totalCountValue">{{ total_count }}</span> assets.</p>
   </div>
@@ -97,11 +100,13 @@
             <td>{{ r.svc_count }}</td>
             <td>
               <details>
-                {% set in_scope_domains = r.domains | selectattr('in_scope') | list %}
-                <summary class="muted asset-domain-summary" data-in-scope="{{ in_scope_domains | length }}" data-total="{{ r.domains | length }}">show ({{ in_scope_domains | length }}{% if r.domains | length > in_scope_domains | length %} / {{ r.domains | length }}{% endif %})</summary>
-                {% if r.domains %}
+                {% set visible_domains = r.domains if show_out == 1 else (r.domains | selectattr('in_scope') | list) %}
+                {% set visible_in_scope = visible_domains | selectattr('in_scope') | list | length %}
+                {% set visible_total = visible_domains | length %}
+                <summary class="muted asset-domain-summary" data-in-scope="{{ visible_in_scope }}" data-total="{{ visible_total }}">show ({{ visible_in_scope }}{% if visible_total > visible_in_scope %} / {{ visible_total }}{% endif %})</summary>
+                {% if visible_domains %}
                   <ul class="miniList">
-                    {% for d in r.domains %}
+                    {% for d in visible_domains %}
                     <li class="asset-domain-item" data-in-scope="{{ 1 if d.in_scope else 0 }}">
                     <span class="scope-dot {% if d.in_scope %}in{% else %}out{% endif %}" title="Domain scope: {% if d.in_scope %}IN{% else %}OUT{% endif %}">●</span>
                     <code>{{ d.fqdn }}</code>
@@ -134,26 +139,23 @@
 <div class="card"><p class="muted">No assets match current filters.</p></div>
 {% endif %}
 
-{% if total_hosts and page_size > 0 and total_hosts > page_size %}
+{% if page_count > 1 %}
 <div class="card" style="margin-top:16px;display:flex;align-items:center;justify-content:center;gap:8px;flex-wrap:wrap;">
-  <span class="muted" style="margin-right:8px;">{{ total_hosts }} total — page {{ page }} of {{ (total_hosts + page_size - 1) // page_size }}</span>
-  {% set totalPages = (total_hosts + page_size - 1) // page_size %}
-  {% set urlStr = request.url.__str__() %}
-  {% set baseUrl = urlStr.replace('page=' ~ page|string, '') ~ ('&page=' if '?' in urlStr else '?page=') %}
+  <span class="muted" style="margin-right:8px;">{{ total_count }} total — page {{ page }} of {{ page_count }}</span>
   {% if page > 1 %}
-  <a href="{{ baseUrl }}{{ page - 1 }}" class="btn" style="padding:4px 12px;text-decoration:none;">&larr; Prev</a>
+  <a href="{{ request.url.path }}{{ page_url(page - 1) }}" class="btn" style="padding:4px 12px;text-decoration:none;">&larr; Prev</a>
   {% endif %}
-  {% for p in range(1, totalPages + 1) %}
+  {% for p in range(1, page_count + 1) %}
     {% if p >= page - 2 and p <= page + 2 %}
       {% if p == page %}
       <strong style="padding:4px 10px;">{{ p }}</strong>
       {% else %}
-      <a href="{{ baseUrl }}{{ p }}" style="padding:4px 10px;text-decoration:none;">{{ p }}</a>
+      <a href="{{ request.url.path }}{{ page_url(p) }}" style="padding:4px 10px;text-decoration:none;">{{ p }}</a>
       {% endif %}
     {% endif %}
   {% endfor %}
-  {% if page < totalPages %}
-  <a href="{{ baseUrl }}{{ page + 1 }}" class="btn" style="padding:4px 12px;text-decoration:none;">Next &rarr;</a>
+  {% if page < page_count %}
+  <a href="{{ request.url.path }}{{ page_url(page + 1) }}" class="btn" style="padding:4px 12px;text-decoration:none;">Next &rarr;</a>
   {% endif %}
 </div>
 {% endif %}
@@ -282,8 +284,14 @@ html { scrollbar-gutter: stable; }
     const persistedKeys = ["show_out", "hide_completed", "hide_zero_services", "row_limit", "tag_filter"];
     const persistedKeySet = new Set(persistedKeys);
     persistedKeys.forEach((k) => {
-      if (!url.searchParams.has(k) && Object.prototype.hasOwnProperty.call(prefs, k)) {
-        url.searchParams.set(k, String(prefs[k]));
+      const prefValue = prefs[k];
+      if (
+        !url.searchParams.has(k) &&
+        Object.prototype.hasOwnProperty.call(prefs, k) &&
+        prefValue !== null &&
+        prefValue !== ""
+      ) {
+        url.searchParams.set(k, String(prefValue));
         needsReload = true;
       }
     });
@@ -297,90 +305,34 @@ html { scrollbar-gutter: stable; }
         return;
       }
 
-    const updateQueryNoReload = (key, value) => {
+    const setFilter = (key, value) => {
       const u = new URL(window.location.href);
-      u.searchParams.set(key, value);
-      window.history.replaceState({}, "", u.toString());
-    };
-
-    const getUniqueTags = () => {
-      const tagSet = new Set();
-      document.querySelectorAll("[data-tag]").forEach(row => {
-        const tag = row.getAttribute("data-tag") || "";
-        if (tag) tagSet.add(tag.toLowerCase());
-      });
-      return Array.from(tagSet).sort();
-    };
-
-    const populateTagFilter = () => {
-      const tags = getUniqueTags();
-      const tagFilterEl = document.getElementById("tagFilter");
-      if (tagFilterEl) {
-        tagFilterEl.innerHTML = '<option value="">All</option>';
-        tags.forEach(tag => {
-          const option = document.createElement("option");
-          option.value = tag;
-          option.textContent = tag.charAt(0).toUpperCase() + tag.slice(1);
-          tagFilterEl.appendChild(option);
-        });
+      if (value === null || value === "") {
+        u.searchParams.delete(key);
+      } else {
+        u.searchParams.set(key, String(value));
       }
+      if (key !== "page") {
+        u.searchParams.delete("page");
+      }
+      const nextPrefs = { ...loadPrefs() };
+      if (value === null || value === "") {
+        delete nextPrefs[key];
+      } else {
+        nextPrefs[key] = String(value);
+      }
+      savePrefs(nextPrefs);
+      window.location.href = u.toString();
     };
 
-    const applyClientFilters = () => {
-      const showOutCb = document.getElementById("showOut");
-      const hideCompletedCb = document.getElementById("hideCompleted");
-      const hideZeroServicesCb = document.getElementById("hideZeroServices");
-      const tagFilterEl = document.getElementById("tagFilter");
-      const showOutOn = !!(showOutCb && showOutCb.checked);
-      const hideCompletedOn = !!(hideCompletedCb && hideCompletedCb.checked);
-      const hideZeroServicesOn = !!(hideZeroServicesCb && hideZeroServicesCb.checked);
-      const tagFilter = tagFilterEl ? tagFilterEl.value : "";
-
-      let shown = 0;
-      document.querySelectorAll(".asset-subnet-group").forEach(group => {
-        const rows = Array.from(group.querySelectorAll("tbody tr"));
-        let visibleInGroup = 0;
-        rows.forEach(row => {
-          const isComplete = row.getAttribute("data-complete") === "1";
-          const svcCount = parseInt(row.getAttribute("data-svc-count") || "0", 10);
-          const inScope = row.getAttribute("data-in-scope") === "1";
-          const rowTag = row.getAttribute("data-tag") || "";
-
-          let visible = true;
-          if (!showOutOn && !inScope) visible = false;
-          if (hideCompletedOn && isComplete) visible = false;
-          if (hideZeroServicesOn && svcCount === 0) visible = false;
-           if (tagFilter && rowTag.trim().toLowerCase() !== tagFilter.trim().toLowerCase()) visible = false;
-
-          row.style.display = visible ? "" : "none";
-          if (visible) {
-            visibleInGroup += 1;
-            shown += 1;
-          }
-
-          row.querySelectorAll(".asset-domain-item").forEach(li => {
-            const dInScope = li.getAttribute("data-in-scope") === "1";
-            li.style.display = (showOutOn || dInScope) ? "" : "none";
-          });
-          const summary = row.querySelector(".asset-domain-summary");
-          if (summary) {
-            const inScopeCount = summary.getAttribute("data-in-scope");
-            const totalCount = summary.getAttribute("data-total");
-            summary.textContent = showOutOn
-              ? `show (${totalCount})`
-              : `show (${inScopeCount}${totalCount > inScopeCount ? ' / ' + totalCount : ''})`;
-          }
-        });
-
-        const card = group.closest(".card");
-        if (card) card.style.display = visibleInGroup > 0 ? "" : "none";
-
-        const summaryMuted = group.querySelector("summary .muted");
-        if (summaryMuted) summaryMuted.textContent = `(${visibleInGroup} assets)`;
-      });
-
-      const shownEl = document.getElementById("shownCountValue");
-      if (shownEl) shownEl.textContent = String(shown);
+    const postForm = async (url, fd) => {
+      try {
+        const r = await fetch(url, { method: "POST", body: fd });
+        const j = await r.json().catch(() => ({}));
+        return { status: r.status, ok: !!(j && j.ok), data: j || {} };
+      } catch (e) {
+        return { status: 0, ok: false, data: { error: e.message } };
+      }
     };
 
     const assetDetail = document.getElementById("assetDetail");
@@ -485,32 +437,15 @@ html { scrollbar-gutter: stable; }
       const r = await fetch(endpoint, { method: "POST", body: fd });
       const j = await r.json().catch(() => ({ ok: false, error: "Error" }));
       if (j.ok) {
-        const isNew = !hostId || parseInt(hostId, 10) <= 0;
-        if (isNew) {
-          hostUpdateMsg.textContent = "Saved. Refreshing…";
-          setTimeout(() => location.reload(), 300);
+        hostUpdateMsg.textContent = "Saved. Refreshing…";
+        hostUpdateMsg.style.color = "";
+        const parsedHostId = parseInt(hostId, 10);
+        if (parsedHostId > 0) {
+          try { sessionStorage.setItem("reconbubble.assets.detailHost", String(parsedHostId)); } catch {}
         } else {
-          hostUpdateMsg.textContent = "Saved.";
-          const savedIp = fd.get("ip");
-          const savedHostname = fd.get("hostname");
-          const savedTag = fd.get("tag");
-          const savedOsGuess = fd.get("os_guess");
-          detailIp.value = savedIp;
-          detailHostname.value = savedHostname;
-          detailTag.value = savedTag;
-          detailOsGuess.value = savedOsGuess;
-          document.querySelector(".asset-detail-name").textContent = savedIp;
-          var row = document.querySelector('.asset-row[data-id="' + parseInt(hostId, 10) + '"]');
-          if (row) {
-            var ipA = row.querySelector("td:nth-child(4) a");
-            if (ipA) ipA.textContent = savedIp;
-            var hTd = row.querySelector("td:nth-child(5)");
-            if (hTd) hTd.textContent = savedHostname;
-            var tTd = row.querySelector("td:nth-child(9)");
-            if (tTd) tTd.textContent = savedTag;
-            row.setAttribute("data-tag", savedTag || "");
-          }
+          try { sessionStorage.removeItem("reconbubble.assets.detailHost"); } catch {}
         }
+        setTimeout(() => { window.location.href = window.location.href; }, 300);
       } else {
         hostUpdateMsg.textContent = j.error || "Save failed.";
         hostUpdateMsg.style.color = "#f87171";
@@ -606,7 +541,7 @@ html { scrollbar-gutter: stable; }
               setDisabled(true);
             } else {
               const err = await r.json().catch(() => ({}));
-              assetTopoMsg.textContent = err.detail || "Failed to add node";
+              assetTopoMsg.textContent = err.detail || err.error || "Failed to add node";
               assetTopoMsg.style.color = "#f87171";
               assetTopoBtn.textContent = "Add to Attack Topology";
               setDisabled(false);
@@ -631,13 +566,17 @@ html { scrollbar-gutter: stable; }
     }
     window._bindAssetServiceLinks = bindServiceLinks;
 
+    let detailRequestSeq = 0;
+
     document.querySelectorAll("[data-open-host]").forEach(a => {
       a.addEventListener("click", async (ev) => {
         ev.preventDefault();
         const hostId = parseInt(a.getAttribute("data-open-host"), 10);
+        const requestSeq = ++detailRequestSeq;
         try {
           const r = await fetch(`/api/host/${hostId}`, { cache: "no-store" });
           const j = await r.json();
+          if (requestSeq !== detailRequestSeq) return;
           if (j.ok) {
             populateAssetForm(j);
             bindNoteDeleteHandlers();
@@ -646,7 +585,9 @@ html { scrollbar-gutter: stable; }
             showAssetDetail();
           }
         } catch (e) {
-          console.error("Failed to load host:", e);
+          if (requestSeq === detailRequestSeq) {
+            console.error("Failed to load host:", e);
+          }
         }
       });
     });
@@ -659,26 +600,17 @@ html { scrollbar-gutter: stable; }
 
     const showOut = document.getElementById("showOut");
     showOut && showOut.addEventListener("change", () => {
-      const val = showOut.checked ? "1" : "0";
-      savePrefs({ ...loadPrefs(), show_out: val });
-      updateQueryNoReload("show_out", val);
-      applyClientFilters();
+      setFilter("show_out", showOut.checked ? "1" : null);
     });
 
     const hideCompleted = document.getElementById("hideCompleted");
     hideCompleted && hideCompleted.addEventListener("change", () => {
-      const val = hideCompleted.checked ? "1" : "0";
-      savePrefs({ ...loadPrefs(), hide_completed: val });
-      updateQueryNoReload("hide_completed", val);
-      applyClientFilters();
+      setFilter("hide_completed", hideCompleted.checked ? "1" : null);
     });
 
     const hideZeroServices = document.getElementById("hideZeroServices");
     hideZeroServices && hideZeroServices.addEventListener("change", () => {
-      const val = hideZeroServices.checked ? "1" : "0";
-      savePrefs({ ...loadPrefs(), hide_zero_services: val });
-      updateQueryNoReload("hide_zero_services", val);
-      applyClientFilters();
+      setFilter("hide_zero_services", hideZeroServices.checked ? "1" : null);
     });
 
     const rowLimit = document.getElementById("rowLimit");
@@ -696,10 +628,7 @@ html { scrollbar-gutter: stable; }
 
     const tagFilter = document.getElementById("tagFilter");
     tagFilter && tagFilter.addEventListener("change", () => {
-      const val = tagFilter ? tagFilter.value : "";
-      savePrefs({ ...loadPrefs(), tag_filter: val });
-      updateQueryNoReload("tag_filter", val);
-      applyClientFilters();
+      setFilter("tag_filter", tagFilter.value);
     });
 
     const applyRowState = (row, completeCb, inprogressCb) => {
@@ -720,7 +649,12 @@ html { scrollbar-gutter: stable; }
         const fd = new FormData();
         fd.append("host_id", cb.getAttribute("data-host-id"));
         fd.append("complete", cb.checked ? "1" : "0");
-        await fetch("/api/host/complete", { method: "POST", body: fd });
+        const res = await postForm("/api/host/complete", fd);
+        if (!res.ok) {
+          cb.checked = !cb.checked;
+          alert(res.data.error || "Failed to update complete status");
+          return;
+        }
         if (cb.checked && inprogressCb) {
           inprogressCb.checked = false;
         }
@@ -728,7 +662,12 @@ html { scrollbar-gutter: stable; }
           row.setAttribute("data-complete", cb.checked ? "1" : "0");
         }
         applyRowState(row, cb, inprogressCb);
-        applyClientFilters();
+        if (cb.checked) {
+          const hideCompletedCb = document.getElementById("hideCompleted");
+          if (hideCompletedCb && hideCompletedCb.checked) {
+            window.location.reload();
+          }
+        }
       });
     });
 
@@ -739,7 +678,13 @@ html { scrollbar-gutter: stable; }
         const fd = new FormData();
         fd.append("host_id", cb.getAttribute("data-host-id"));
         fd.append("inprogress", cb.checked ? "1" : "0");
-        await fetch("/api/host/inprogress", { method: "POST", body: fd });
+        const res = await postForm("/api/host/inprogress", fd);
+        if (!res.ok) {
+          cb.checked = !cb.checked;
+          applyRowState(row, completeCb, cb);
+          alert(res.data.error || "Failed to update in-progress status");
+          return;
+        }
         applyRowState(row, completeCb, cb);
       });
     });
@@ -749,7 +694,11 @@ html { scrollbar-gutter: stable; }
         const fd = new FormData();
         fd.append("host_id", cb.getAttribute("data-host-id"));
         fd.append("waf", cb.checked ? "1" : "0");
-        await fetch("/api/host/waf", { method: "POST", body: fd });
+        const res = await postForm("/api/host/waf", fd);
+        if (!res.ok) {
+          cb.checked = !cb.checked;
+          alert(res.data.error || "Failed to update WAF status");
+        }
       });
     });
 
@@ -783,17 +732,19 @@ html { scrollbar-gutter: stable; }
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ asset_id: assetId, hostname, ip }),
           });
-          const j = await r.json();
-          if (j.ok) {
+          const j = await r.json().catch(() => ({}));
+          if (r.ok) {
             btn.textContent = "\u2713";
             btn.title = "Already in topology";
             btn.classList.remove("topo-topo");
             btn.classList.add("topo-in");
-            btn.setAttribute("data-topo-node-id", j.node.id);
-            const row = btn.closest("tr");
-            if (row) row.setAttribute("data-topo-node-id", j.node.id);
+            if (j.node && j.node.id) {
+              btn.setAttribute("data-topo-node-id", j.node.id);
+              const row = btn.closest("tr");
+              if (row) row.setAttribute("data-topo-node-id", j.node.id);
+            }
           } else {
-            alert(j.error || "Failed to add to topology");
+            alert(j.detail || j.error || "Failed to add to topology");
             btn.textContent = "+";
             btn.disabled = false;
           }
@@ -814,27 +765,28 @@ html { scrollbar-gutter: stable; }
         fd.append("host_id", hostId);
         btn.disabled = true;
         btn.textContent = "...";
-        try {
-          const r = await fetch("/api/host/delete", { method: "POST", body: fd });
-          const j = await r.json();
-          if (j.ok) {
-            const row = btn.closest("tr");
-            if (row) row.style.display = "none";
-          } else {
-            alert(j.error || "Failed to delete");
-            btn.textContent = "\u2715";
-            btn.disabled = false;
-          }
-        } catch (e) {
-          alert("Error: " + e.message);
+        const res = await postForm("/api/host/delete", fd);
+        if (res.ok) {
+          window.location.reload();
+        } else {
+          alert(res.data.error || "Failed to delete");
           btn.textContent = "\u2715";
           btn.disabled = false;
         }
       });
     });
 
-    populateTagFilter();
-    applyClientFilters();
+    try {
+      const restoreHostId = sessionStorage.getItem("reconbubble.assets.detailHost");
+      if (restoreHostId) {
+        sessionStorage.removeItem("reconbubble.assets.detailHost");
+        const parsedRestoreId = parseInt(restoreHostId, 10);
+        if (parsedRestoreId > 0) {
+          const trigger = document.querySelector('.asset-row[data-id="' + parsedRestoreId + '"] [data-open-host]');
+          if (trigger) trigger.click();
+        }
+      }
+    } catch {}
   });
 </script>
 {% endblock %}

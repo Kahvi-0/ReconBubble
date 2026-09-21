@@ -140,15 +140,18 @@
     </div>
   </aside>
   <script>
-    if (localStorage.getItem("reconbubble.globalNotesPinned") === "1") {
-      var gnp = document.getElementById("globalNotesPanel");
-      gnp.classList.add("open", "no-transition");
-      gnp.setAttribute("aria-hidden", "false");
+    var gnpPinned = localStorage.getItem("reconbubble.globalNotesPinned") === "1";
+    if (gnpPinned) {
       var gnt = document.getElementById("globalNotesToggle");
       if (gnt) {
         gnt.textContent = "🔒";
         gnt.classList.add("locked");
         gnt.classList.remove("unlocked");
+      }
+      if (localStorage.getItem("reconbubble.globalNotesOpen") !== "0") {
+        var gnp = document.getElementById("globalNotesPanel");
+        gnp.classList.add("open", "no-transition");
+        gnp.setAttribute("aria-hidden", "false");
       }
     }
   </script>
@@ -166,7 +169,7 @@
   {% block scripts %}{% endblock %}
   <script src="/static/sidebar.js?v=11"></script>
   <script src="/static/jobs_indicator.js?v=1"></script>
-  <script src="/static/global_notes_panel.js?v=30"></script>
+  <script src="/static/global_notes_panel.js?v=31"></script>
   <script>
     const allDropdowns = [
       document.getElementById("perimeterDropdown"),

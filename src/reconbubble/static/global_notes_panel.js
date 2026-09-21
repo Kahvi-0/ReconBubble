@@ -22,6 +22,7 @@
   if (!panel || !handle || !toggleBtn || !text || !status) return;
 
   const PIN_KEY = "reconbubble.globalNotesPinned";
+  const OPEN_KEY = "reconbubble.globalNotesOpen";
   const SPRAY_KEY = "reconbubble.sprayActiveService";
   const TAB_KEY = "reconbubble.globalNotesTab";
   const VALID_TABS = ["quick", "table", "spray", "timeline"];
@@ -37,6 +38,9 @@
     if (!animate) panel.classList.add("no-transition");
     panel.classList.toggle("open", !!open);
     panel.setAttribute("aria-hidden", open ? "false" : "true");
+    if (pinned) {
+      localStorage.setItem(OPEN_KEY, open ? "1" : "0");
+    }
     if (!animate) {
       void panel.offsetWidth;
       requestAnimationFrame(() => panel.classList.remove("no-transition"));
@@ -47,7 +51,9 @@
     toggleBtn.textContent = pinned ? "\uD83D\uDD12" : "\uD83D\uDD13";
     toggleBtn.classList.toggle("unlocked", !pinned);
     toggleBtn.classList.toggle("locked", pinned);
-    if (pinned) setOpen(true, !initial);
+    if (initial && pinned) {
+      setOpen(localStorage.getItem(OPEN_KEY) !== "0", false);
+    }
   }
 
   function switchTab(tabName) {
@@ -648,6 +654,7 @@
 
   handle.addEventListener("mouseenter", () => {
     clearTimeout(hideTimer);
+    if (pinned) return;
     setOpen(true);
   });
 
@@ -674,10 +681,15 @@
   toggleBtn.addEventListener("click", () => {
     toggleBtn.classList.add("bounce");
     setTimeout(() => toggleBtn.classList.remove("bounce"), 300);
+    clearTimeout(hideTimer);
     pinned = !pinned;
     localStorage.setItem(PIN_KEY, pinned ? "1" : "0");
+    if (pinned) {
+      localStorage.setItem(OPEN_KEY, panel.classList.contains("open") ? "1" : "0");
+    } else {
+      localStorage.removeItem(OPEN_KEY);
+    }
     applyPinState();
-    // Don't close — let existing mouseleave logic handle it
   });
 
   text.addEventListener("input", queueSave);

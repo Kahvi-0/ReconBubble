@@ -103,6 +103,7 @@ class Service(Base):
     product: Mapped[str] = mapped_column(String(255), default="")
     version: Mapped[str] = mapped_column(String(255), default="")
     extra_info: Mapped[str] = mapped_column(String(255), default="")
+    inspected: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, index=True
     )

@@ -2,7 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 import asyncio, json, ipaddress, re, socket, uuid
 import html as html_lib
-from urllib.parse import quote_plus, urlsplit
+from urllib.parse import quote_plus, parse_qsl, urlencode, urlsplit
 from datetime import datetime
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, Query, Response
@@ -479,7 +479,7 @@ def create_app(
                     break
         return {ip: sorted(set(ports)) for ip, ports in result.items()}
 
-    def link_host_domain(s: Session, host_id: int, fqdn: str) -> None:
+    def link_host_domain(s: Session, host_id: int, fqdn: str, commit: bool = True) -> None:
         fqdn = fqdn.strip().lower().rstrip(".")
         if not fqdn or not DOMAIN_RE.match(fqdn):
             return
@@ -487,7 +487,7 @@ def create_app(
         if not sub:
             sub = Subdomain(fqdn=fqdn, root_domain=".".join(fqdn.split(".")[-2:]))
             s.add(sub)
-            s.commit()
+            s.flush()
             s.refresh(sub)
         s.execute(
             text(
@@ -496,7 +496,10 @@ def create_app(
             ),
             {"hid": host_id, "sid": sub.id, "ts": datetime.utcnow().isoformat()},
         )
-        s.commit()
+        if commit:
+            s.commit()
+        else:
+            s.flush()
 
     # ---- Pages ----
     @app.get("/", response_class=HTMLResponse)
@@ -1217,6 +1220,7 @@ def create_app(
         show_out = int(request.query_params.get("show_out", "0"))
         hide_completed = int(request.query_params.get("hide_completed", "0"))
         hide_zero_services = int(request.query_params.get("hide_zero_services", "0"))
+        tag_filter = request.query_params.get("tag_filter", "").strip().lower()
         row_limit_raw = (request.query_params.get("row_limit", "0") or "0").strip()
         try:
             row_limit = max(0, int(row_limit_raw))
@@ -1239,11 +1243,8 @@ def create_app(
                 scope_sets(s, sensitive_only=True)
             )
             scope_is_empty = not bool(ips or subnets or domains)
-            total_count = s.execute(
-                select(func.count(Host.id))
-            ).scalar()
+            total_hosts = s.execute(select(func.count(Host.id))).scalar() or 0
 
-            offset = (page - 1) * page_size if page_size > 0 else 0
             q = select(
                 Host.id,
                 Host.ip,
@@ -1255,14 +1256,10 @@ def create_app(
                 Host.tag,
                 func.count(Service.id).label("svc_count"),
             ).outerjoin(Service, Service.host_id == Host.id).group_by(Host.id).order_by(func.count(Service.id).desc(), Host.ip.asc())
-            if page_size > 0:
-                q = q.limit(page_size).offset(offset)
             rows = s.execute(q).all()
             all_host_domains = list_all_host_domains(s)
             domains_by_host = {r.id: all_host_domains.get(r.id, []) for r in rows}
-            # Fetch all IPs for accurate subnet stats, independent of pagination/row_limit
-            all_rows = s.execute(select(Host.id, Host.ip)).all()
-            all_ips = {r.id: r.ip for r in all_rows}
+            all_ips = {r.id: r.ip for r in rows}
         data = []
         for r in rows:
             ip_in = ip_in_scope(r.ip, ips, subnets, excluded)
@@ -1341,12 +1338,36 @@ def create_app(
                 except Exception:
                     pass
 
+        available_tags = sorted(
+            {
+                str(d.get("tag") or "").strip().lower()
+                for d in data
+                if str(d.get("tag") or "").strip()
+            }
+        )
         in_scope_data = [d for d in data if d.get("in_scope")]
         filtered_data = data if show_out == 1 else in_scope_data
         if hide_completed == 1:
             filtered_data = [d for d in filtered_data if int(d.get("complete", 0)) != 1]
         if hide_zero_services == 1:
             filtered_data = [d for d in filtered_data if int(d.get("svc_count", 0)) > 0]
+        if tag_filter:
+            filtered_data = [
+                d
+                for d in filtered_data
+                if str(d.get("tag") or "").strip().lower() == tag_filter
+            ]
+
+        filtered_total = len(filtered_data)
+        if row_limit == 0:
+            page_count = max(1, (filtered_total + page_size - 1) // page_size)
+            page = min(page, page_count)
+            offset = (page - 1) * page_size
+            page_rows = filtered_data[offset : offset + page_size]
+        else:
+            page_count = 1
+            page = 1
+            page_rows = filtered_data[:row_limit]
 
         sorted_subnets = sorted(subnets, key=subnet_sort_key)
         subnet_stats: dict[str, int] = {str(net): 0 for net in sorted_subnets}
@@ -1387,7 +1408,7 @@ def create_app(
                 inferred_stats[label] = inferred_stats.get(label, 0) + 1
 
         grouped: dict[str, list[dict]] = {}
-        for row in data:
+        for row in page_rows:
             group_name = "Unscoped / Other"
             label = classify_subnet_label(row.get("ip", ""), allow_infer=True)
             if label:
@@ -1412,20 +1433,6 @@ def create_app(
 
         grouped_ordered = {name: grouped[name] for name in ordered_group_names}
 
-        total_before_limit = sum(len(v) for v in grouped_ordered.values())
-        if row_limit > 0:
-            limited_grouped: dict[str, list[dict]] = {}
-            remaining = row_limit
-            for name in ordered_group_names:
-                if remaining <= 0:
-                    break
-                rows_in_group = grouped_ordered[name]
-                take = rows_in_group[:remaining]
-                if take:
-                    limited_grouped[name] = take
-                    remaining -= len(take)
-            grouped_ordered = limited_grouped
-
         subnet_stats_list = [{"subnet": k, "count": v} for k, v in subnet_stats.items()]
         for k in sorted(
             inferred_stats.keys(),
@@ -1436,6 +1443,18 @@ def create_app(
             subnet_stats_list.append({"subnet": k, "count": inferred_stats[k]})
 
         shown_count = sum(len(v) for v in grouped_ordered.values())
+
+        def page_url(p: int) -> str:
+            params = [
+                (k, v)
+                for k, v in parse_qsl(request.url.query, keep_blank_values=True)
+                if k != "page"
+            ]
+            p = max(1, int(p))
+            if p > 1:
+                params.append(("page", str(p)))
+            return ("?" + urlencode(params)) if params else ""
+
         return templates.TemplateResponse(
             "assets.html",
             {
@@ -1444,9 +1463,13 @@ def create_app(
                 "show_out": show_out,
                 "hide_completed": hide_completed,
                 "hide_zero_services": hide_zero_services,
+                "tag_filter": tag_filter,
+                "available_tags": available_tags,
                 "row_limit": row_limit,
                 "shown_count": shown_count,
-                "total_count": total_before_limit,
+                "total_count": filtered_total,
+                "page_count": page_count,
+                "page_url": page_url,
                 "subnet_stats": subnet_stats_list,
                 "in_scope_total": len(all_in_scope_ips),
                 "scope_is_empty": scope_is_empty,
@@ -1454,7 +1477,7 @@ def create_app(
                 "topology_asset_node_ids": topology_asset_node_ids,
                 "page": page,
                 "page_size": page_size,
-                "total_hosts": total_count,
+                "total_hosts": total_hosts,
             },
         )
 
@@ -1477,14 +1500,17 @@ def create_app(
                 return {"ok": False, "error": f"IP {ip} already exists as an asset."}
 
             try:
-                host = upsert_host(s, ip, hostname, "")
-                if tag:
-                    host.tag = tag
+                host = Host(ip=ip, hostname=hostname, os_guess="")
+                s.add(host)
+                s.flush()
+                host.tag = tag
+                for d in domains:
+                    if DOMAIN_RE.match(d):
+                        link_host_domain(s, host.id, d, commit=False)
+                s.commit()
             except Exception as e:
+                s.rollback()
                 return {"ok": False, "error": str(e)}
-            for d in domains:
-                if DOMAIN_RE.match(d):
-                    link_host_domain(s, host.id, d)
         return {"ok": True}
 
     # Sidebar APIs
@@ -1908,25 +1934,18 @@ def create_app(
             if not host:
                 return JSONResponse({"ok": False, "error": "Host not found"}, status_code=404)
 
-            # Check for duplicate IP on another host
-            if ip != host.ip:
-                clash = s.scalar(select(Host).where(Host.ip == ip, Host.id != host_id))
-                if clash:
-                    return {"ok": False, "error": f"IP {ip} already belongs to another host."}
+            try:
+                # Check for duplicate IP on another host
+                if ip != host.ip:
+                    clash = s.scalar(select(Host).where(Host.ip == ip, Host.id != host_id))
+                    if clash:
+                        return {"ok": False, "error": f"IP {ip} already belongs to another host."}
 
-            host.ip = ip
-            host.hostname = hostname
-            host.os_guess = os_guess
-            if tag:
+                host.ip = ip
+                host.hostname = hostname
+                host.os_guess = os_guess
                 host.tag = tag
 
-            try:
-                s.commit()
-            except Exception:
-                s.rollback()
-                return {"ok": False, "error": "Failed to save host (check for duplicate IP)."}
-
-            try:
                 existing_domains = list_host_domains(s, host.id)
                 # Remove domains no longer in the list
                 for d in existing_domains:
@@ -1937,13 +1956,15 @@ def create_app(
                             ),
                             {"hid": host.id, "fq": d},
                         )
-                s.commit()
                 # Add new domains
                 for d in domains:
                     if DOMAIN_RE.match(d):
-                        link_host_domain(s, host.id, d)
+                        link_host_domain(s, host.id, d, commit=False)
+
+                s.commit()
             except Exception as e:
-                return {"ok": True, "warning": f"Saved but failed to link domains: {e}"}
+                s.rollback()
+                return {"ok": False, "error": f"Failed to save host: {e}"}
 
         return {"ok": True}
 
@@ -7084,6 +7105,12 @@ def create_app(
             else:
                 row = s.scalar(select(AppSettings).where(AppSettings.key == "services_hide_completed"))
                 hide_completed = int(row.value) if row else 0
+            qs = request.query_params.get("show_out_of_scope", "")
+            if qs:
+                show_oos = int(qs)
+            else:
+                row = s.scalar(select(AppSettings).where(AppSettings.key == "services_show_out_of_scope"))
+                show_oos = int(row.value) if row else 0
             ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
 
             services = (
@@ -7103,8 +7130,10 @@ def create_app(
 
                 key = f"{svc.port}/{svc.proto}"
                 host_in = host_in_scope(
-                    host.ip, host.hostname or "", ips, subnets, domains, domain_all_subs
+                    host.ip, host.hostname or "", ips, subnets, domains, domain_all_subs, excluded
                 )
+                if not (host_in or show_oos):
+                    continue
 
                 if key not in service_map:
                     service_map[key] = {
@@ -7114,12 +7143,17 @@ def create_app(
                         "service_types": set(),
                         "products": set(),
                         "host_outputs": {},
+                        "tracked_service_ids": set(),
+                        "inspected_service_ids": set(),
                     }
 
                 if host_in:
                     service_map[key]["hosts"].append(
                         {"id": host.id, "ip": host.ip, "hostname": host.hostname or ""}
                     )
+                    service_map[key]["tracked_service_ids"].add(svc.id)
+                    if int(svc.inspected or 0) == 1:
+                        service_map[key]["inspected_service_ids"].add(svc.id)
 
                 if svc.service_name:
                     service_map[key]["service_types"].add(svc.service_name)
@@ -7129,12 +7163,25 @@ def create_app(
                         f"{svc.product} {svc.version}".strip()
                     )
 
-                host_label = host.hostname or host.ip
-                if host_label not in service_map[key]["host_outputs"]:
-                    service_map[key]["host_outputs"][host_label] = {
+                host_key = host.id
+                if host_key not in service_map[key]["host_outputs"]:
+                    service_map[key]["host_outputs"][host_key] = {
                         "host": {"id": host.id, "ip": host.ip, "hostname": host.hostname or ""},
                         "outputs": set(),
+                        "service_id": svc.id,
+                        "service_name": svc.service_name or "",
+                        "inspected": int(svc.inspected or 0),
+                        "counted": bool(host_in),
                     }
+                else:
+                    service_map[key]["host_outputs"][host_key].update(
+                        {
+                            "service_id": svc.id,
+                            "service_name": svc.service_name or "",
+                            "inspected": int(svc.inspected or 0),
+                            "counted": bool(host_in),
+                        }
+                    )
 
                 ev = (
                     s.execute(
@@ -7151,17 +7198,22 @@ def create_app(
                         cleaned = cleaned.replace(host.ip, "<IP>")
                         if host.hostname:
                             cleaned = cleaned.replace(host.hostname, "<HOST>")
-                        service_map[key]["host_outputs"][host_label]["outputs"].add(cleaned[:800])
+                        service_map[key]["host_outputs"][host_key]["outputs"].add(cleaned[:800])
 
             rows = []
             for key, data in service_map.items():
                 output_rows = []
                 for label, ho in data["host_outputs"].items():
-                    if ho["outputs"]:
-                        output_rows.append({
-                            "host": ho["host"],
-                            "outputs": list(ho["outputs"]),
-                        })
+                    output_rows.append({
+                        "host": ho["host"],
+                        "outputs": list(ho["outputs"]),
+                        "service_id": ho["service_id"],
+                        "service_name": ho["service_name"],
+                        "inspected": ho["inspected"],
+                        "counted": ho["counted"],
+                    })
+                tracked_count = len(data["tracked_service_ids"])
+                inspected_count = len(data["inspected_service_ids"])
                 if data["hosts"]:
                     rows.append(
                         {
@@ -7173,13 +7225,16 @@ def create_app(
                             "hosts": data["hosts"],
                             "outputs": [],
                             "host_outputs": output_rows,
+                            "tracked_count": tracked_count,
+                            "inspected_count": inspected_count,
+                            "port_complete": bool(tracked_count) and data["inspected_service_ids"] == data["tracked_service_ids"],
                         }
                     )
 
             rows.sort(key=lambda x: (x["port"], x["proto"]))
 
         return templates.TemplateResponse(
-             "services.html", {"request": request, "rows": rows, "hide_completed": hide_completed}
+             "services.html", {"request": request, "rows": rows, "hide_completed": hide_completed, "show_oos": show_oos}
          )
 
     @app.get("/profiling", response_class=HTMLResponse)
@@ -7486,6 +7541,16 @@ def create_app(
                 sub = Subdomain(fqdn=fq, root_domain=fq)
                 s.add(sub)
             sub.waf = 1 if int(waf) == 1 else 0
+            s.commit()
+        return {"ok": True}
+
+    @app.post("/api/service/inspected")
+    def api_service_inspected(service_id: int = Form(...), inspected: int = Form(...)):
+        with db() as s:
+            svc = s.scalar(select(Service).where(Service.id == service_id))
+            if not svc:
+                return JSONResponse({"ok": False}, status_code=404)
+            svc.inspected = 1 if int(inspected) == 1 else 0
             s.commit()
         return {"ok": True}
 

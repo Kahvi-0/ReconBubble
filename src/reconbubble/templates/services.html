@@ -3,37 +3,50 @@
 <h1>Services</h1>
 <p class="muted" style="margin-bottom:20px;">Unique in-scope open ports across all hosts.</p>
 
-<div style="margin-bottom:16px; display:flex; align-items:center; gap:10px;">
-  <label class="toggle-switch">
-    <input id="hideCompleted" type="checkbox" {% if hide_completed==1 %}checked{% endif %}/>
-    <span class="toggle-slider"></span>
-  </label>
-  <span style="font-size:14px; color:#aab;">Hide services from completed hosts</span>
+<div style="margin-bottom:16px; display:flex; align-items:center; gap:24px; flex-wrap:wrap;">
+  <div style="display:flex; align-items:center; gap:10px;">
+    <label class="toggle-switch">
+      <input id="hideCompleted" type="checkbox" {% if hide_completed==1 %}checked{% endif %}/>
+      <span class="toggle-slider"></span>
+    </label>
+    <span style="font-size:14px; color:#aab;">Hide services from completed hosts</span>
+  </div>
+  <div style="display:flex; align-items:center; gap:10px;">
+    <label class="toggle-switch">
+      <input id="showOutOfScope" type="checkbox" {% if show_oos==1 %}checked{% endif %}/>
+      <span class="toggle-slider"></span>
+    </label>
+    <span style="font-size:14px; color:#aab;">Show out-of-scope services</span>
+  </div>
 </div>
 
 <div class="card">
-  <table>
+  <table class="svc-table">
     <thead>
       <tr>
-        <th style="width:80px;">Port</th>
-        <th style="width:60px;">Proto</th>
+        <th style="width:120px;">Port</th>
         <th>Service</th>
         <th>Products</th>
-        <th style="width:80px;">Hosts</th>
+        <th style="width:110px;">Hosts</th>
       </tr>
     </thead>
     <tbody>
       {% for r in rows %}
-      <tr class="service-row" data-port="{{ r.port }}" data-proto="{{ r.proto }}">
-        <td><a href="#" class="service-link">{{ r.port }}</a></td>
-        <td>{{ r.proto }}</td>
-        <td>{{ r.service_types[0] if r.service_types else '-' }}</td>
-        <td>{{ r.products[0] if r.products else '-' }}</td>
-        <td><span class="host-count">{{ r.host_count }}</span></td>
+      <tr class="service-row" data-port="{{ r.port }}" data-proto="{{ r.proto }}" data-tracked-count="{{ r.tracked_count }}" data-inspected-count="{{ r.inspected_count }}">
+        <td><span class="port-badge">{{ r.port }}/{{ r.proto }}</span>{% if r.port_complete %}<span class="port-complete-tag">Completed</span>{% endif %}</td>
+        <td>
+          {{ r.service_types[0] if r.service_types else '-' }}
+          {% if r.service_types|length > 1 %}<span class="pill svc-more">+{{ r.service_types|length - 1 }} more</span>{% endif %}
+        </td>
+        <td>
+          {{ r.products[0] if r.products else '-' }}
+          {% if r.products|length > 1 %}<span class="pill svc-more">+{{ r.products|length - 1 }} versions</span>{% endif %}
+        </td>
+        <td><span class="pill host-pill">{{ r.host_count }} host{{ 's' if r.host_count != 1 }}</span></td>
       </tr>
       {% else %}
       <tr>
-        <td colspan="5" class="muted">No in-scope services found.</td>
+        <td colspan="4" class="svc-empty">No in-scope services found.</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -41,20 +54,20 @@
 </div>
 
 <div id="serviceOverlay" class="overlay hidden" style="cursor:pointer;">
-  <div id="servicePopup" style="max-width:650px; width:92vw; max-height:85vh; overflow:auto; background:#10161d; border:2px solid #fff; border-radius:8px; padding:20px; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-      <h2 id="popupTitle" style="margin:0;">Port</h2>
+  <div id="servicePopup" class="svc-modal">
+    <div class="svc-modal-head">
+      <h2 id="popupTitle">Port</h2>
       <button class="btn" id="popupClose">Close</button>
     </div>
     <div id="popupContent"></div>
   </div>
 </div>
 <div id="hostOverlay" class="overlay hidden" style="cursor:pointer;">
-  <div id="hostPopup" style="max-width:650px; width:92vw; max-height:85vh; overflow:auto; background:#10161d; border:2px solid #fff; border-radius:8px; padding:20px; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px;">
-      <div style="display:flex; gap:8px; align-items:center;">
-        <h2 id="hostPopupTitle" style="margin:0;"></h2>
-        <button class="btn" id="hostPopupBack" style="font-size:12px;">Back to service</button>
+  <div id="hostPopup" class="svc-modal">
+    <div class="svc-modal-head">
+      <div class="svc-modal-title-group">
+        <h2 id="hostPopupTitle"></h2>
+        <button class="btn btn-sm" id="hostPopupBack">Back to service</button>
       </div>
       <button class="btn" id="hostPopupClose">Close</button>
     </div>
@@ -63,29 +76,69 @@
 </div>
 
 <style>
-/* --- Toggle switch --- */
-.toggle-switch { position:relative; display:inline-block; width:40px; height:22px; }
-.toggle-switch input { opacity:0; width:0; height:0; position:absolute; }
-.toggle-slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#3a3f47; border-radius:22px; transition:background 0.25s ease; }
-.toggle-slider::before { content:""; position:absolute; height:16px; width:16px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:transform 0.25s ease; }
-.toggle-switch input:checked + .toggle-slider { background:#58a6ff; }
-.toggle-switch input:checked + .toggle-slider::before { transform:translateX(18px); }
-.toggle-switch input:focus-visible + .toggle-slider { box-shadow:0 0 0 2px #58a6ff44; }
-.service-row:hover td { background:#0f141b; }
-.service-link { color:#9ad; text-decoration:none; }
-.service-link:hover { text-decoration:underline; }
-.host-item { display:block; padding:6px 0; border-bottom:1px solid #222; }
+/* --- Table --- */
+.svc-table { width:100%; border-collapse:collapse; }
+.svc-table th, .svc-table td { text-align:left; padding:10px 12px; border-bottom:1px solid #1e2630; }
+.svc-table thead th { position:sticky; top:0; background:#10161d; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:#7f8a97; font-weight:600; z-index:1; }
+.svc-table tbody tr:nth-child(even) { background:rgba(255,255,255,.015); }
+.svc-table .service-row { cursor:pointer; }
+.svc-table .service-row:hover td { background:rgba(74,158,255,.08); }
+.svc-more { border-color:rgba(120,150,180,.35); color:#9fb2c8; background:rgba(120,150,180,.10); }
+.host-pill { border-color:rgba(80,200,120,.35); color:#bff2cf; background:rgba(80,200,120,.10); }
+.svc-empty { text-align:center; padding:32px 16px !important; color:#7f8a97; }
+.svc-inspect-check { display:inline-flex; align-items:center; margin-left:10px; cursor:pointer; }
+.svc-inspect-check input { width:16px; height:16px; margin:0; }
+.svc-complete-tag, .port-complete-tag {
+  display:inline-block;
+  margin-left:8px;
+  padding:1px 7px;
+  border-radius:999px;
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.3px;
+  vertical-align:middle;
+  background:rgba(34,197,94,.16);
+  border:1px solid rgba(34,197,94,.38);
+  color:#bbf7d0;
+}
+.svc-no-output { margin:8px 0; color:#7f8a97; font-size:12px; }
+.oos-tag {
+  display:inline-block;
+  margin-left:8px;
+  padding:1px 7px;
+  border-radius:999px;
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.3px;
+  vertical-align:middle;
+  background:rgba(245,158,11,.14);
+  border:1px solid rgba(245,158,11,.35);
+  color:#fde68a;
+}
+
+/* --- Modal --- */
+.svc-modal { max-width:650px; width:92vw; max-height:85vh; overflow:auto; background:#10161d; border:1px solid #1e2630; border-radius:14px; padding:20px; box-shadow:0 12px 40px rgba(0,0,0,.55); }
+.svc-modal-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; gap:12px; }
+.svc-modal-head h2 { margin:0; font-size:18px; }
+.svc-modal-title-group { display:flex; gap:8px; align-items:center; min-width:0; }
+.svc-modal-title-group h2 { margin:0; }
+.btn-sm { padding:5px 9px; font-size:12px; }
+
+/* --- Popup content --- */
+.chip-row { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
+.chip-row .pill { margin-bottom:0; }
+.host-item { display:block; padding:6px 0; border-bottom:1px solid #1e2630; }
 .host-item:last-child { border-bottom:none; }
 .host-item a { color:#9ad; }
-.section-header { font-weight:600; color:#aab; margin-top:15px; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #333; }
-.collapsible { cursor:pointer; padding:8px 12px; background:#1a1a1a; border-radius:6px; display:flex; justify-content:space-between; align-items:center; }
-.collapsible:hover { background:#222; }
+.section-header { font-weight:600; color:#aab; margin-top:15px; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #2a333d; }
+.scanner-output-header { display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
+.scan-out { white-space:pre-wrap; margin:8px 0; font-size:12px; line-height:1.4; color:#7ee0b8; background:#0b1210; border:1px solid #1c2a22; border-left:3px solid #2ea06a; border-radius:6px; padding:8px 10px; max-height:220px; overflow:auto; }
+.collapsible { cursor:pointer; padding:8px 12px; background:#161c24; border:1px solid #212b36; border-radius:6px; display:flex; justify-content:space-between; align-items:center; }
+.collapsible:hover { background:#1b232d; }
 .collapsible-content { display:none; padding:8px 0; }
 .collapsible-content.open { display:block; }
 .collapsible-arrow { transition:transform 0.2s; }
 .collapsible.open .collapsible-arrow { transform:rotate(90deg); }
-.service-list, .product-list { padding-left:20px; margin:4px 0; }
-.service-list li, .product-list li { margin:4px 0; }
 </style>
 
 <script>
@@ -141,22 +194,22 @@ function getServiceDetails(svc) {
   
   html += `<div class="section-header">Services (${svc.service_types.length})</div>`;
   if (svc.service_types && svc.service_types.length > 0) {
-    html += `<ul class="service-list">`;
+    html += `<div class="chip-row">`;
     for (const st of svc.service_types) {
-      html += `<li>${st}</li>`;
+      html += `<span class="pill">${st}</span>`;
     }
-    html += `</ul>`;
+    html += `</div>`;
   } else {
     html += `<p class="muted">-</p>`;
   }
-  
+
   html += `<div class="section-header">Products Found (${svc.products.length})</div>`;
   if (svc.products && svc.products.length > 0) {
-    html += `<ul class="product-list">`;
+    html += `<div class="chip-row">`;
     for (const p of svc.products) {
-      html += `<li>${p}</li>`;
+      html += `<span class="pill">${p}</span>`;
     }
-    html += `</ul>`;
+    html += `</div>`;
   } else {
     html += `<p class="muted">-</p>`;
   }
@@ -177,18 +230,89 @@ function getServiceDetails(svc) {
   
   if (svc.host_outputs && svc.host_outputs.length > 0) {
     for (const ho of svc.host_outputs) {
+      const hostLabel = ho.host.hostname ? `${ho.host.ip} (${ho.host.hostname})` : ho.host.ip;
+      const inspected = Number(ho.inspected || 0) === 1;
+      const outOfScope = ho.counted ? false : true;
+      const scopeTag = outOfScope ? '<span class="oos-tag">Out of scope</span>' : '';
+      const inspectControl = outOfScope ? '' : `<label class="svc-inspect-check" title="Mark service inspected"><input type="checkbox" class="svc-inspected-checkbox" data-service-id="${ho.service_id}" data-port="${svc.port}" data-proto="${svc.proto}" data-counted="${ho.counted ? '1' : '0'}" ${inspected ? 'checked' : ''} onclick="event.stopPropagation()"></label>${inspected ? '<span class="svc-complete-tag">Inspected</span>' : ''}`;
+      html += `<div class="section-header scanner-output-header">Scanner Output: ${hostLabel}${scopeTag}${inspectControl}</div>`;
       if (ho.outputs && ho.outputs.length > 0) {
-        const hostLabel = ho.host.hostname ? `${ho.host.ip} (${ho.host.hostname})` : ho.host.ip;
-        html += `<div class="section-header">Scanner Output: ${hostLabel}</div>`;
         for (const out of ho.outputs) {
-          html += `<pre class="evidence" style="margin:8px 0;">${out.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
+          html += `<pre class="scan-out">${out.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
         }
+      } else {
+        html += `<div class="svc-no-output">No scanner output captured.</div>`;
       }
     }
   }
   
   return html;
 }
+
+function updateServiceInspected(cb, checked) {
+  const svc = servicesData.find(
+    (x) => x.port === Number(cb.dataset.port) && x.proto === cb.dataset.proto
+  );
+  if (svc) {
+    const ho = svc.host_outputs.find((x) => x.service_id === Number(cb.dataset.serviceId));
+    if (ho) ho.inspected = checked ? 1 : 0;
+    if (cb.dataset.counted === "1") {
+      svc.inspected_count = Math.max(
+        0,
+        Math.min(svc.tracked_count, svc.inspected_count + (checked ? 1 : -1))
+      );
+    }
+    svc.port_complete = svc.tracked_count > 0 && svc.inspected_count >= svc.tracked_count;
+  }
+
+  const header = cb.closest(".scanner-output-header");
+  const tag = header ? header.querySelector(".svc-complete-tag") : null;
+  if (checked && !tag) {
+    cb.insertAdjacentHTML("afterend", '<span class="svc-complete-tag">Inspected</span>');
+  } else if (!checked && tag) {
+    tag.remove();
+  }
+
+  if (cb.dataset.counted !== "1") return;
+  const tr = document.querySelector(
+    `.service-row[data-port="${cb.dataset.port}"][data-proto="${cb.dataset.proto}"]`
+  );
+  if (!tr) return;
+  const tracked = parseInt(tr.dataset.trackedCount || "0", 10);
+  let inspected = parseInt(tr.dataset.inspectedCount || "0", 10);
+  inspected = Math.max(0, Math.min(tracked, inspected + (checked ? 1 : -1)));
+  tr.dataset.inspectedCount = String(inspected);
+  const complete = tracked > 0 && inspected >= tracked;
+  const portTag = tr.querySelector(".port-complete-tag");
+  if (complete && !portTag) {
+    const portBadge = tr.querySelector(".port-badge");
+    if (portBadge) {
+      portBadge.insertAdjacentHTML("afterend", '<span class="port-complete-tag">Completed</span>');
+    }
+  } else if (!complete && portTag) {
+    portTag.remove();
+  }
+}
+
+document.getElementById("popupContent").addEventListener("change", async (e) => {
+  const cb = e.target.closest(".svc-inspected-checkbox");
+  if (!cb) return;
+  cb.disabled = true;
+  const next = cb.checked;
+  try {
+    const fd = new FormData();
+    fd.append("service_id", cb.dataset.serviceId);
+    fd.append("inspected", next ? "1" : "0");
+    const resp = await fetch("/api/service/inspected", { method: "POST", body: fd });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok || !data.ok) throw new Error("Failed to save inspection state");
+    updateServiceInspected(cb, next);
+  } catch {
+    cb.checked = !next;
+  } finally {
+    cb.disabled = false;
+  }
+});
 
 let currentServicePopupService = null;
 
@@ -297,6 +421,25 @@ document.getElementById("hostOverlay").addEventListener("click", (e) => {
     } catch {}
     const url = new URL(window.location.href);
     url.searchParams.set("hide_completed", val);
+    window.location.href = url.toString();
+  });
+})();
+
+/* --- Show out-of-scope services toggle --- */
+(function() {
+  const cb = document.getElementById("showOutOfScope");
+  if (!cb) return;
+
+  cb.addEventListener("change", async () => {
+    const val = cb.checked ? "1" : "0";
+    try {
+      const fd = new FormData();
+      fd.append("key", "services_show_out_of_scope");
+      fd.append("value", val);
+      await fetch("/api/settings", { method: "POST", body: fd });
+    } catch {}
+    const url = new URL(window.location.href);
+    url.searchParams.set("show_out_of_scope", val);
     window.location.href = url.toString();
   });
 })();
