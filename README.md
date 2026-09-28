@@ -19,7 +19,7 @@ https://github.com/user-attachments/assets/2dfe0dc7-563c-4753-810b-720e26ad51e6
 === Run With UVX ===
 ```
 mkdir reconbubble && cd reconbubble
-uvx --from git+https://github.com/Kahvi-0/ReconBubble reconbubble --database bubbledb.sqlite --project "Client Pentest" run --port 5000
+uvx --from git+https://github.com/Kahvi-0/ReconBubble reconbubble --database bubbledb.sqlite --project "Client Pentest" run --port 5000 --install-browser
 ```
 === pip Install ===
 
@@ -38,10 +38,14 @@ reconbubble --database workspace.sqlite --project ProjectName run --port 5000
 --bind ADDRESS 	Bind address. Defaults to localhost only.
 --browser-dir PATH	  Workspace browser directory	Explicit Playwright browser directory.
 --listen-all  	Listen on all interfaces.
+
+# Headless browser used with some web features
+--install-browser		(recommneded) Install Playwright Chromium before starting if it is missing inside the workspace directory.
+--with-deps		Pass --with-deps to Playwright when installing Chromium. Only used with --install-browser.
 --ephemeral-browser		Use a temporary Playwright browser directory for this run.
 --ram-browser		Use a temporary RAM-backed browser directory when /dev/shm is available.
---install-browser		Install Playwright Chromium before starting if it is missing.
---with-deps		Pass --with-deps to Playwright when installing Chromium. Only used with --install-browser.
+
+
 --help	—	Show run help.
 
 Notes:
