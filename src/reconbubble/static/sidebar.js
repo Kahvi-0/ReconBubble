@@ -584,19 +584,22 @@ function bindTagHandlers() {
     if (!data.ok) return;
     const backBtnSub = document.getElementById("sidebarBack");
     if (backBtnSub) backBtnSub.style.display = "none";
-    title.textContent = `Subdomain ${data.fqdn}`;
-    body.innerHTML = `
+    const isIp = data.is_ip === true;
+    title.textContent = isIp ? `Asset ${data.fqdn}` : `Subdomain ${data.fqdn}`;
+    const resolutionCard = isIp ? "" : `
       <div class="card">
         <h2>Resolution</h2>
         <div><b>Scope:</b> ${data.in_scope ? '<span class="pill inscope">IN</span>' : '<span class="pill outscope">OUT</span>'}</div>
         <div><b>IPs:</b> ${(data.ips||[]).length ? (data.ips||[]).map(ip=>`<code>${esc(ip)}</code>`).join(" ") : '<span class="muted">none</span>'}</div>
-      </div>
+      </div>`;
+    body.innerHTML = `
+      ${resolutionCard}
       <div class="card">
         <h2>Linked assets</h2>
         ${(data.hosts||[]).length ? `
           <ul class="miniList">
             ${(data.hosts||[]).map(h=>`<li><a href="#" data-open-host="${h.id}">${esc(h.ip)}</a> <span class="muted">${esc(h.hostname||"")}</span></li>`).join("")}
-          </ul>` : `<div class="muted">No linked assets yet.</div>`}
+          </ul>` : `<div class="muted">${isIp ? "No host asset found for this IP." : "No linked assets yet."}</div>`}
       </div>
       <div class="card" id="sidebarScreenshotsCard">
         <h2>Screenshots &amp; HTTP Info</h2>

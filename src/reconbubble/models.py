@@ -486,6 +486,24 @@ class WebScreenshot(Base):
     )
 
 
+class WebProtocolProbe(Base):
+    __tablename__ = "web_protocol_probes"
+    __table_args__ = (
+        UniqueConstraint("fqdn", "port", "target_ip", name="uq_web_probe_target"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fqdn: Mapped[str] = mapped_column(String(255), index=True)
+    port: Mapped[int] = mapped_column(Integer, index=True)
+    target_ip: Mapped[str] = mapped_column(String(64), default="")
+    scheme: Mapped[str] = mapped_column(String(16), default="")
+    http_status: Mapped[int] = mapped_column(Integer, default=0)
+    https_status: Mapped[int] = mapped_column(Integer, default=0)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
 class ToolApiKey(Base):
     __tablename__ = "tool_api_keys"
     __table_args__ = (

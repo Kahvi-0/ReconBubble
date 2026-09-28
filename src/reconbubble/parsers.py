@@ -1,7 +1,7 @@
 from __future__ import annotations
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import re, json, mimetypes, subprocess, socket
+import re, json, mimetypes, subprocess, socket, ipaddress
 from datetime import datetime
 from xml.etree import ElementTree as ET
 from sqlalchemy.orm import Session
@@ -75,15 +75,15 @@ def resolve_ips_concurrent(
     return results
 
 
-def link_host_domain(session: Session, host_id: int, fqdn: str) -> None:
-    fqdn = fqdn.strip().lower().rstrip(".")
-    if not fqdn or not DOMAIN_RE.match(fqdn):
+def link_host_domain(session: Session, host_id: int, fqdn: str, commit: bool = True) -> None:
+    fqdn = hostname_as_domain(fqdn)
+    if not fqdn:
         return
     sub = session.scalar(select(Subdomain).where(Subdomain.fqdn == fqdn))
     if not sub:
         sub = Subdomain(fqdn=fqdn, root_domain=root_domain_guess(fqdn))
         session.add(sub)
-        session.commit()
+        session.flush()
         session.refresh(sub)
     session.execute(
         sql_text(
@@ -92,7 +92,10 @@ def link_host_domain(session: Session, host_id: int, fqdn: str) -> None:
         ),
         {"hid": host_id, "sid": sub.id, "ts": datetime.utcnow().isoformat()},
     )
-    session.commit()
+    if commit:
+        session.commit()
+    else:
+        session.flush()
 
 
 DOMAIN_RE = re.compile(
@@ -103,6 +106,22 @@ DOMAIN_RE = re.compile(
 def root_domain_guess(fqdn: str) -> str:
     parts = fqdn.strip(".").split(".")
     return ".".join(parts[-2:]) if len(parts) >= 2 else fqdn.strip(".")
+
+
+def hostname_as_domain(value: str) -> str:
+    v = (value or "").strip().lower().rstrip(".")
+    if not v or "." not in v:
+        return ""
+    try:
+        ipaddress.ip_address(v)
+        return ""
+    except ValueError:
+        pass
+    if v.endswith(".arpa"):
+        return ""
+    if not DOMAIN_RE.match(v):
+        return ""
+    return v
 
 
 def upsert_artifact(session: Session, type_: str, stored_path: Path) -> Artifact:
@@ -129,6 +148,10 @@ def upsert_host(
     if not db_host:
         db_host = Host(ip=ip, hostname=hostname, os_guess=os_guess)
         session.add(db_host)
+        session.flush()
+        hn_domain = hostname_as_domain(hostname)
+        if hn_domain:
+            link_host_domain(session, db_host.id, hn_domain, commit=False)
         session.commit()
         session.refresh(db_host)
         return db_host
@@ -138,6 +161,9 @@ def upsert_host(
         db_host.hostname = hostname
     if os_guess and not db_host.os_guess:
         db_host.os_guess = os_guess
+    hn_domain = hostname_as_domain(db_host.hostname or hostname)
+    if hn_domain:
+        link_host_domain(session, db_host.id, hn_domain, commit=False)
     session.commit()
     return db_host
 
@@ -492,10 +518,17 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
         ip = addr.get("addr", "")
         if not ip:
             continue
-        hostname = ""
-        hn = host.find("hostnames/hostname")
-        if hn is not None:
-            hostname = hn.get("name", "") or ""
+        raw_hostnames = []
+        for hn in host.findall("hostnames/hostname"):
+            hn_name = (hn.get("name") or "").strip()
+            if hn_name:
+                raw_hostnames.append(hn_name)
+        hostname = raw_hostnames[0] if raw_hostnames else ""
+        valid_hostnames = []
+        for hn_name in raw_hostnames:
+            hn_domain = hostname_as_domain(hn_name)
+            if hn_domain and hn_domain not in valid_hostnames:
+                valid_hostnames.append(hn_domain)
         os_guess = ""
         osmatch = host.find("os/osmatch")
         if osmatch is not None:
@@ -513,26 +546,10 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
             if os_guess and not db_host.os_guess:
                 db_host.os_guess = os_guess
 
-        # Link host to subdomains based on exact hostname match
-        if hostname:
+        # Link host to valid FQDN hostnames, creating subdomains when needed
+        for hn_domain in valid_hostnames:
             try:
-                sub = session.scalar(
-                    select(Subdomain).where(Subdomain.fqdn == hostname.lower())
-                )
-                if sub:
-                    exists = session.execute(
-                        sql_text(
-                            "SELECT 1 FROM host_subdomains WHERE host_id = :hid AND subdomain_id = :sid"
-                        ),
-                        {"hid": db_host.id, "sid": sub.id},
-                    ).fetchone()
-                    if not exists:
-                        session.execute(
-                            sql_text(
-                                "INSERT INTO host_subdomains (host_id, subdomain_id) VALUES (:hid, :sid)"
-                            ),
-                            {"hid": db_host.id, "sid": sub.id},
-                        )
+                link_host_domain(session, db_host.id, hn_domain, commit=False)
             except Exception as e:
                 print(f"[Nmap] Error linking host {ip} to subdomains: {e}")
 
@@ -1252,7 +1269,10 @@ def import_bbot(session: Session, artifact: Artifact, path: Path) -> dict:
 
                 if db_host.hostname == "" and host != ip:
                     db_host.hostname = host
-                    session.commit()
+
+                hn_domain = hostname_as_domain(host)
+                if hn_domain:
+                    link_host_domain(session, db_host.id, hn_domain, commit=False)
 
                 svc = session.scalar(
                     select(Service).where(
@@ -1356,7 +1376,10 @@ def import_bbot(session: Session, artifact: Artifact, path: Path) -> dict:
 
                     if db_host.hostname == "" and host != ip:
                         db_host.hostname = host
-                        session.commit()
+
+                    hn_domain = hostname_as_domain(host)
+                    if hn_domain:
+                        link_host_domain(session, db_host.id, hn_domain, commit=False)
 
                     svc = session.scalar(
                         select(Service).where(

@@ -1,9 +1,10 @@
 from __future__ import annotations
 from pathlib import Path
-import asyncio, json, ipaddress, re, socket, uuid
+import asyncio, json, ipaddress, os, re, shlex, socket, ssl, sys, tempfile, uuid
 import html as html_lib
 from urllib.parse import quote_plus, parse_qsl, urlencode, urlsplit
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, Query, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
@@ -44,6 +45,7 @@ from .models import (
     TimelineDay,
     TimelineEntry,
     WebScreenshot,
+    WebProtocolProbe,
     ServiceApiKey,
 )
 from .parsers import (
@@ -69,6 +71,8 @@ from .parsers import (
     import_smbmap,
     resolve_ips_concurrent,
     DOMAIN_RE,
+    hostname_as_domain,
+    link_host_domain as parser_link_host_domain,
 )
 from .tools import (
     build_tools,
@@ -101,17 +105,32 @@ _HTTP_HEADER_RE = re.compile(
 
 
 def _hostname_as_domain(value: str) -> str:
-    v = (value or "").strip().lower().strip(".")
-    if not v or "." not in v:
-        return ""
-    try:
-        ipaddress.ip_address(v)
-        return ""
-    except ValueError:
-        pass
-    if not DOMAIN_RE.match(v):
-        return ""
-    return v
+    return hostname_as_domain(value)
+
+
+def _backfill_host_hostname_subdomains(session: Session) -> int:
+    rows = session.execute(
+        select(Host.id, Host.hostname).where(
+            Host.hostname.isnot(None), Host.hostname != ""
+        )
+    ).all()
+    count = 0
+    for idx, (host_id, hostname) in enumerate(rows, 1):
+        fqdn = _hostname_as_domain(hostname)
+        if not fqdn:
+            continue
+        try:
+            parser_link_host_domain(session, host_id, fqdn, commit=False)
+            count += 1
+        except Exception as e:
+            session.rollback()
+            print(f"[Backfill] Error linking host {host_id} to {fqdn}: {e}")
+            continue
+        if idx % 500 == 0:
+            session.commit()
+    if count % 500 != 0:
+        session.commit()
+    return count
 
 
 def _web_url_host_from_domain(value: str) -> str:
@@ -155,6 +174,11 @@ def create_app(
     Base.metadata.create_all(engine)
     migrate_sqlite(engine)
     SessionLocal = make_session(engine)
+
+    with SessionLocal() as s:
+        linked = _backfill_host_hostname_subdomains(s)
+        if linked:
+            print(f"[Startup] Linked {linked} host hostname(s) to subdomains")
 
     app = FastAPI(title="ReconBubble", docs_url=None, redoc_url=None)
 
@@ -414,6 +438,12 @@ def create_app(
             {"fq": fqdn},
         ).fetchall()
         return [{"id": r[0], "ip": r[1], "hostname": r[2] or ""} for r in rows]
+
+    def list_hosts_by_ip(s: Session, ip: str) -> list[dict]:
+        rows = s.execute(
+            select(Host).where(Host.ip == ip).order_by(Host.id.asc())
+        ).scalars().all()
+        return [{"id": h.id, "ip": h.ip, "hostname": h.hostname or ""} for h in rows]
 
     def get_open_web_ports_by_ip(
         s: Session, ips: set[str] | list[str] | None = None
@@ -1493,6 +1523,9 @@ def create_app(
             for ln in (domains_raw or "").splitlines()
             if ln.strip() and not ln.strip().startswith("#")
         ]
+        hostname_domain = _hostname_as_domain(hostname)
+        if hostname_domain and hostname_domain not in domains:
+            domains.append(hostname_domain)
         with db() as s:
             # Check for duplicate IP
             existing = s.scalar(select(Host).where(Host.ip == ip))
@@ -1826,6 +1859,7 @@ def create_app(
                     "proto": sv.proto,
                     "state": sv.state,
                     "service_name": sv.service_name,
+                    "inspected": int(sv.inspected or 0),
                     "product": sv.product,
                     "version": sv.version,
                 }
@@ -1929,6 +1963,9 @@ def create_app(
             for ln in (domains_raw or "").splitlines()
             if ln.strip() and not ln.strip().startswith("#")
         ]
+        hostname_domain = _hostname_as_domain(hostname)
+        if hostname_domain and hostname_domain not in domains:
+            domains.append(hostname_domain)
         with db() as s:
             host = s.scalar(select(Host).where(Host.id == host_id))
             if not host:
@@ -2225,45 +2262,64 @@ def create_app(
     @app.get("/api/subdomain")
     def api_subdomain(fqdn: str = Query(...)):
         fq = fqdn.strip().lower().rstrip(".")
+        try:
+            ipaddress.ip_address(fq)
+            is_ip = True
+        except ValueError:
+            is_ip = False
         with db() as s:
             ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
             s_ips, s_subnets, s_domains, _, s_domain_all_subs, s_domain_subs_if_ip, s_excluded = (
                 scope_sets(s, sensitive_only=True)
             )
-            all_ips = list_all_subdomain_ips(s)
-            ips_found = all_ips.get(fq, [])
-            in_dom = domain_in_scope(
-                fq, domains, domain_all_subs, domain_subs_if_ip, ips_found, ips, subnets, excluded
-            )
-            in_ip = any(ip_in_scope(ip, ips, subnets, excluded) for ip in ips_found)
-            sensitive_dom = domain_in_scope(
-                fq,
-                s_domains,
-                s_domain_all_subs,
-                s_domain_subs_if_ip,
-                ips_found,
-                s_ips,
-                s_subnets,
-                s_excluded,
-            )
-            sensitive_ip = any(ip_in_scope(ip, s_ips, s_subnets, s_excluded) for ip in ips_found)
-            hosts = list_subdomain_hosts(s, fq)
-            ip_ports_map = get_open_web_ports_by_ip(s, ips_found)
-            sub_ports: dict[str, list[int]] = {}
-            for ip in ips_found:
-                if ip in ip_ports_map:
-                    sub_ports[ip] = sorted(set(ip_ports_map[ip]))
-            in_scope_ips_found = [
-                ip for ip in dict.fromkeys(ips_found)
-                if ip_in_scope(ip, ips, subnets, excluded)
-            ]
+            if is_ip:
+                ips_found = [fq]
+                in_scope = ip_in_scope(fq, ips, subnets, excluded)
+                sensitive = ip_in_scope(fq, s_ips, s_subnets, s_excluded)
+                hosts = list_hosts_by_ip(s, fq)
+                in_scope_ips_found = [fq] if in_scope else []
+                ip_ports_map = get_open_web_ports_by_ip(s, ips_found)
+                sub_ports: dict[str, list[int]] = {
+                    ip: sorted(set(ports)) for ip, ports in ip_ports_map.items()
+                }
+            else:
+                all_ips = list_all_subdomain_ips(s)
+                ips_found = all_ips.get(fq, [])
+                in_dom = domain_in_scope(
+                    fq, domains, domain_all_subs, domain_subs_if_ip, ips_found, ips, subnets, excluded
+                )
+                in_ip = any(ip_in_scope(ip, ips, subnets, excluded) for ip in ips_found)
+                in_scope = bool(in_dom or in_ip)
+                sensitive_dom = domain_in_scope(
+                    fq,
+                    s_domains,
+                    s_domain_all_subs,
+                    s_domain_subs_if_ip,
+                    ips_found,
+                    s_ips,
+                    s_subnets,
+                    s_excluded,
+                )
+                sensitive_ip = any(ip_in_scope(ip, s_ips, s_subnets, s_excluded) for ip in ips_found)
+                sensitive = bool(sensitive_dom or sensitive_ip)
+                hosts = list_subdomain_hosts(s, fq)
+                ip_ports_map = get_open_web_ports_by_ip(s, ips_found)
+                sub_ports = {}
+                for ip in ips_found:
+                    if ip in ip_ports_map:
+                        sub_ports[ip] = sorted(set(ip_ports_map[ip]))
+                in_scope_ips_found = [
+                    ip for ip in dict.fromkeys(ips_found)
+                    if ip_in_scope(ip, ips, subnets, excluded)
+                ]
         return {
             "ok": True,
             "fqdn": fq,
+            "is_ip": is_ip,
             "ips": ips_found,
-            "in_scope": bool(in_dom or in_ip),
+            "in_scope": bool(in_scope),
             "in_scope_ips": in_scope_ips_found,
-            "sensitive": bool(sensitive_dom or sensitive_ip),
+            "sensitive": bool(sensitive),
             "hosts": hosts,
             "ports": sub_ports,
         }
@@ -2273,6 +2329,9 @@ def create_app(
     app.state.screenshot_queue_ids = []
     app.state.screenshot_worker_task = None
     app.state.active_screenshot_job_id = None
+    app.state.web_probe_jobs = {}
+    app.state.active_web_probe_job_id = None
+    app.state.web_probe_lock = asyncio.Lock()
     app.state.tool_jobs = {}
     app.state.tool_active_task = None
     app.state.tool_queue = asyncio.Queue()
@@ -2281,6 +2340,146 @@ def create_app(
     app.state.active_tool_job_id = None
     app.state.tools_registry = build_tools(ws.bin_dir)
     app.state.process_providers = []
+
+    def _screenshot_browser_path() -> Path:
+        env_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+        if env_path:
+            return Path(env_path).expanduser().resolve()
+        return ws.browser_dir
+
+    def _screenshot_browser_mode() -> str:
+        if os.environ.get("RECONBUBBLE_CHROMIUM_EXECUTABLE", "").strip():
+            return "system-browser"
+        marker = os.environ.get("RECONBUBBLE_BROWSER_MODE", "").strip()
+        if marker in {"workspace", "custom", "ephemeral"}:
+            return marker
+        browser_path = _screenshot_browser_path()
+        if browser_path == ws.browser_dir:
+            return "workspace"
+        browser_path_str = str(browser_path)
+        tempdir_str = tempfile.gettempdir()
+        if (
+            browser_path_str.startswith(tempdir_str)
+            or "/dev/shm/" in browser_path_str
+            or browser_path_str.startswith("/dev/shm/")
+        ):
+            return "ephemeral"
+        return "custom"
+
+    def _screenshot_browser_install_command(with_deps: bool = False) -> str:
+        parts = [sys.executable, "-m", "playwright", "install", "chromium"]
+        if with_deps:
+            parts.append("--with-deps")
+        prefix = ""
+        browser_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "").strip()
+        if browser_path:
+            prefix = f"PLAYWRIGHT_BROWSERS_PATH={browser_path} "
+        return prefix + " ".join(parts)
+
+    def _screenshot_browser_uv_install_command(port: int | None = None, with_deps: bool = False) -> str:
+        if os.environ.get("RECONBUBBLE_CHROMIUM_EXECUTABLE", "").strip():
+            return ""
+        target = _screenshot_browser_path()
+        mode = _screenshot_browser_mode()
+        parts = [
+            "uvx",
+            "--from",
+            "git+https://github.com/Kahvi-0/ReconBubble",
+            "reconbubble",
+            "--database",
+            shlex.quote(str(ws.db_path)),
+        ]
+        if (project_name or "").strip():
+            parts.extend(["--project", shlex.quote(project_name.strip())])
+        if mode == "ephemeral":
+            parts.append("run")
+            parts.extend(["--port", str(port or 5000)])
+            parts.append("--ephemeral-browser")
+            parts.append("--install-browser")
+            if with_deps:
+                parts.append("--with-deps")
+        elif mode == "custom":
+            parts.extend(["install-browser", "--browser-dir", shlex.quote(str(target))])
+            if with_deps:
+                parts.append("--with-deps")
+        else:
+            parts.append("install-browser")
+            if with_deps:
+                parts.append("--with-deps")
+        return " ".join(parts)
+
+    def _screenshot_browser_options() -> dict:
+        executable = os.environ.get("RECONBUBBLE_CHROMIUM_EXECUTABLE", "").strip()
+        if not executable:
+            return {}
+        executable_path = Path(executable).expanduser().resolve()
+        if not executable_path.exists():
+            raise RuntimeError(
+                f"RECONBUBBLE_CHROMIUM_EXECUTABLE is set but the executable was not found: {executable_path}"
+            )
+        return {"executable_path": str(executable_path)}
+
+    def _screenshot_browser_launch_error(exc: Exception, port: int | None = None) -> RuntimeError:
+        message = str(exc)
+        if "Executable doesn't exist" in message or "playwright install" in message:
+            uv_command = _screenshot_browser_uv_install_command(port)
+            install_command = _screenshot_browser_install_command()
+            command_text = uv_command or install_command
+            if uv_command and install_command:
+                command_text = f"{uv_command}  (direct: {install_command})"
+            return RuntimeError(
+                "Playwright Chromium is not installed for this ReconBubble workspace. "
+                f"Run: {command_text}. Original error: {message[:250]}"
+            )
+        return RuntimeError(f"Failed to start Playwright Chromium: {message[:500]}")
+
+    async def _screenshot_browser_status(port: int | None = None) -> dict:
+        executable_override = os.environ.get("RECONBUBBLE_CHROMIUM_EXECUTABLE", "").strip()
+        if executable_override:
+            executable_path = Path(executable_override).expanduser().resolve()
+            exists = executable_path.exists()
+            return {
+                "ok": exists,
+                "mode": "system-browser",
+                "browser_path": "",
+                "executable_path": str(executable_path),
+                "exists": exists,
+                "env_executable": executable_override,
+                "install_command": "",
+                "install_command_uv": "",
+                "error": "" if exists else f"Executable not found: {executable_path}",
+            }
+
+        browser_path = _screenshot_browser_path()
+        try:
+            from playwright.async_api import async_playwright
+
+            async with async_playwright() as p:
+                executable_path = Path(p.chromium.executable_path)
+            exists = executable_path.exists()
+            return {
+                "ok": exists,
+                "mode": _screenshot_browser_mode(),
+                "browser_path": str(browser_path),
+                "executable_path": str(executable_path),
+                "exists": exists,
+                "env_executable": "",
+                "install_command": _screenshot_browser_install_command() if not exists else "",
+                "install_command_uv": _screenshot_browser_uv_install_command(port) if not exists else "",
+                "error": "" if exists else "Playwright Chromium executable is missing.",
+            }
+        except Exception as e:
+            return {
+                "ok": False,
+                "mode": _screenshot_browser_mode(),
+                "browser_path": str(browser_path),
+                "executable_path": "",
+                "exists": False,
+                "env_executable": "",
+                "install_command": _screenshot_browser_install_command(),
+                "install_command_uv": _screenshot_browser_uv_install_command(port),
+                "error": str(e)[:500],
+            }
 
     def _clean_screenshot_targets(targets: list) -> list[dict]:
         clean_targets: list[dict] = []
@@ -2378,7 +2577,14 @@ def create_app(
 
         async with async_playwright() as p:
             async def capture_targets(target_list: list[dict], launch_args: list[str] | None = None) -> list[dict]:
-                browser = await p.chromium.launch(headless=True, args=launch_args or [])
+                try:
+                    browser = await p.chromium.launch(
+                        headless=True,
+                        args=launch_args or [],
+                        **_screenshot_browser_options(),
+                    )
+                except Exception as e:
+                    raise _screenshot_browser_launch_error(e) from e
                 context = await browser.new_context(ignore_https_errors=True)
                 batch_results: list[dict] = []
 
@@ -2566,6 +2772,10 @@ def create_app(
             return
         app.state.screenshot_worker_task = asyncio.create_task(_screenshot_worker())
 
+    @app.get("/api/screenshot/browser-status")
+    async def api_screenshot_browser_status(request: Request):
+        return await _screenshot_browser_status(request.url.port)
+
     @app.post("/api/screenshot/jobs")
     async def api_screenshot_create_job(request: Request):
         body = await request.json()
@@ -2671,6 +2881,511 @@ def create_app(
         if not filepath.exists() or not filepath.is_file():
             return JSONResponse({"error": "Not found"}, status_code=404)
         return FileResponse(filepath, media_type="image/png")
+
+    # ---- Lightweight HTTP/HTTPS protocol probes ----
+    def _web_probe_public_job(job: dict) -> dict:
+        return {
+            "id": job["id"],
+            "status": job["status"],
+            "total": job["total"],
+            "completed": job["completed"],
+            "current_label": job["current_label"],
+            "results": job["results"],
+            "error": job["error"],
+            "created_at": job["created_at"],
+            "updated_at": job["updated_at"],
+            "finished_at": job["finished_at"].isoformat() if job.get("finished_at") else "",
+        }
+
+    def _get_active_web_probe_job() -> dict | None:
+        job_id = app.state.active_web_probe_job_id
+        job = app.state.web_probe_jobs.get(job_id) if job_id else None
+        if job and job["status"] in ("pending", "running"):
+            return job
+        return None
+
+    def _prune_web_probe_jobs() -> None:
+        now = datetime.utcnow()
+        for job_id in list(app.state.web_probe_jobs):
+            job = app.state.web_probe_jobs.get(job_id)
+            if not job or job["status"] in ("pending", "running"):
+                continue
+            finished_at = job.get("finished_at")
+            if not finished_at:
+                continue
+            if (now - finished_at).total_seconds() > 1800:
+                app.state.web_probe_jobs.pop(job_id, None)
+
+    def _is_ip_like(value: str) -> bool:
+        try:
+            ipaddress.ip_address(value)
+            return True
+        except Exception:
+            return False
+
+    def _probe_http_status_once(
+        addr: str, port: int, host_header: str, use_tls: bool, timeout: float = 5.0
+    ) -> tuple[int, str]:
+        try:
+            sock = socket.create_connection((addr, port), timeout=timeout)
+        except socket.timeout:
+            return 0, "timeout"
+        except OSError:
+            return 0, "connect-error"
+        try:
+            if use_tls:
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                server_hostname = None if _is_ip_like(host_header) else host_header
+                try:
+                    sock = ctx.wrap_socket(sock, server_hostname=server_hostname)
+                except ssl.SSLError:
+                    return 0, "tls-error"
+            request = (
+                f"GET / HTTP/1.1\r\n"
+                f"Host: {host_header}\r\n"
+                "User-Agent: ReconBubble/1.0\r\n"
+                "Connection: close\r\n"
+                "\r\n"
+            ).encode("utf-8", "replace")
+            sock.sendall(request)
+            data = b""
+            while b"\r\n\r\n" not in data and b"\n\n" not in data and len(data) < 8192:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                data += chunk
+            status = 0
+            for line in data.replace(b"\r\n", b"\n").split(b"\n"):
+                m = re.match(rb"HTTP/1\.[01]\s+(\d{3})", line)
+                if m:
+                    status = int(m.group(1))
+            if status:
+                return status, ""
+            return 0, "no-http-response"
+        except socket.timeout:
+            return 0, "timeout"
+        except ssl.SSLError:
+            return 0, "tls-error"
+        except OSError:
+            return 0, "socket-error"
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    def _probe_web_target_blocking(target: dict) -> dict:
+        fqdn = target["fqdn"]
+        port = int(target["port"])
+        target_ip = target.get("target_ip", "") or ""
+        host_header = target.get("host") or fqdn
+        addr = target_ip or fqdn
+        https_status, https_error = _probe_http_status_once(
+            addr, port, host_header, True
+        )
+        http_status, http_error = _probe_http_status_once(
+            addr, port, host_header, False
+        )
+        if https_status and http_status:
+            scheme = "both"
+        elif https_status:
+            scheme = "https"
+        elif http_status:
+            scheme = "http"
+        else:
+            scheme = "none"
+        error_parts = []
+        if not https_status:
+            error_parts.append(f"https:{https_error or 'no-response'}")
+        if not http_status:
+            error_parts.append(f"http:{http_error or 'no-response'}")
+        error = "; ".join(error_parts)[:500]
+        return {
+            "fqdn": fqdn,
+            "port": port,
+            "target_ip": target_ip,
+            "host": host_header,
+            "scheme": scheme,
+            "http_status": http_status,
+            "https_status": https_status,
+            "error": error,
+        }
+
+    def _save_web_probe_result(result: dict) -> None:
+        with SessionLocal() as s:
+            row = (
+                s.execute(
+                    select(WebProtocolProbe).where(
+                        WebProtocolProbe.fqdn == result["fqdn"],
+                        WebProtocolProbe.port == result["port"],
+                        WebProtocolProbe.target_ip == result.get("target_ip", ""),
+                    )
+                )
+                .scalars()
+                .first()
+            )
+            now = datetime.utcnow()
+            if row:
+                row.scheme = result["scheme"]
+                row.http_status = result["http_status"]
+                row.https_status = result["https_status"]
+                row.error = result["error"]
+                row.created_at = now
+            else:
+                s.add(
+                    WebProtocolProbe(
+                        fqdn=result["fqdn"],
+                        port=result["port"],
+                        target_ip=result.get("target_ip", ""),
+                        scheme=result["scheme"],
+                        http_status=result["http_status"],
+                        https_status=result["https_status"],
+                        error=result["error"],
+                        created_at=now,
+                    )
+                )
+            s.commit()
+
+    def _list_web_probe_targets(s: Session) -> list[dict]:
+        ips, subnets, _, _, _, _, excluded = scope_sets(s)
+        rows = (
+            s.execute(
+                select(Subdomain).order_by(
+                    Subdomain.root_domain.asc(), Subdomain.fqdn.asc()
+                )
+            )
+            .scalars()
+            .all()
+        )
+        all_ips_map = list_all_subdomain_ips(s)
+        web_ports_by_ip = get_open_web_ports_by_ip(s)
+        targets: list[dict] = []
+        seen: set[tuple[str, int, str]] = set()
+
+        def add_target(fqdn: str, ip: str, port: int) -> None:
+            fqdn = (fqdn or "").strip().lower().rstrip(".")
+            ip = (ip or "").strip()
+            try:
+                port = int(port)
+            except (TypeError, ValueError):
+                return
+            if not fqdn or not ip or not port:
+                return
+            key = (fqdn, port, ip)
+            if key in seen:
+                return
+            seen.add(key)
+            targets.append(
+                {"fqdn": fqdn, "port": port, "target_ip": ip, "host": fqdn}
+            )
+
+        for row in rows:
+            resolved = all_ips_map.get(row.fqdn, [])
+            prowl = [
+                ip.strip()
+                for ip in (row.prowl_ips or "").split(",")
+                if ip.strip()
+            ]
+            for ip in list(set(resolved) | set(prowl)):
+                if not ip_in_scope(ip, ips, subnets, excluded):
+                    continue
+                for port in web_ports_by_ip.get(ip, []):
+                    add_target(row.fqdn, ip, port)
+
+        for ip, ports in web_ports_by_ip.items():
+            if not ip_in_scope(ip, ips, subnets, excluded):
+                continue
+            for port in ports:
+                add_target(ip, ip, port)
+
+        return targets
+
+    def _export_probe_ips_for_host(host: str, provided_ips: list[str]) -> list[str]:
+        host = (host or "").strip().lower().rstrip(".")
+        cleaned = list(
+            dict.fromkeys(
+                (ip or "").strip() for ip in (provided_ips or []) if (ip or "").strip()
+            )
+        )
+        if not host:
+            return []
+        if _is_ip_like(host):
+            return cleaned or [host]
+        return cleaned or [""]
+
+    def _load_web_probe_map(s: Session) -> dict[tuple[str, int], list[dict]]:
+        rows = s.execute(select(WebProtocolProbe)).scalars().all()
+        probes: dict[tuple[str, int], list[dict]] = {}
+        for row in rows:
+            host = (row.fqdn or "").strip().lower().rstrip(".")
+            try:
+                port = int(row.port)
+            except (TypeError, ValueError):
+                continue
+            if not host or not port:
+                continue
+            probes.setdefault((host, port), []).append(
+                {
+                    "scheme": row.scheme or "none",
+                    "http_status": row.http_status or 0,
+                    "https_status": row.https_status or 0,
+                    "error": row.error or "",
+                    "target_ip": row.target_ip or "",
+                }
+            )
+        return probes
+
+    def _export_scheme_from_probe_results(results: list[dict]) -> str:
+        if any(
+            r.get("https_status") or r.get("scheme") in {"https", "both"}
+            for r in results
+        ):
+            return "https"
+        if any(r.get("http_status") or r.get("scheme") == "http" for r in results):
+            return "http"
+        return ""
+
+    def _export_scheme_for_bare_host(
+        host: str, probes: dict[tuple[str, int], list[dict]]
+    ) -> str:
+        if any(
+            r.get("https_status") or r.get("scheme") in {"https", "both"}
+            for r in probes.get((host, 443), [])
+        ):
+            return "https"
+        if any(
+            r.get("http_status") or r.get("scheme") in {"http", "both"}
+            for r in probes.get((host, 80), [])
+        ):
+            return "http"
+        return ""
+
+    def _collect_export_probe_tasks(
+        s: Session, entries: dict[tuple[str, int | None], set[str]]
+    ) -> tuple[
+        list[tuple[str, str, int]],
+        list[tuple[str, str, int, bool, str]],
+        dict[tuple[str, int], list[dict]],
+    ]:
+        probes = _load_web_probe_map(s)
+        existing = {
+            (host, port, item["target_ip"])
+            for (host, port), items in probes.items()
+            for item in items
+        }
+        explicit_tasks: list[tuple[str, str, int]] = []
+        default_tasks: list[tuple[str, str, int, bool, str]] = []
+        planned: set[tuple[str, int, str]] = set()
+        for (host, port), provided_ips in entries.items():
+            if port is None:
+                continue
+            probe_port = int(port)
+            for ip in _export_probe_ips_for_host(host, list(provided_ips)):
+                key = (host, probe_port, ip)
+                if key not in existing and key not in planned:
+                    explicit_tasks.append((host, ip, probe_port))
+                    planned.add(key)
+        for (host, port), provided_ips in entries.items():
+            if port is not None:
+                continue
+            for probe_port, use_tls, scheme_name in ((443, True, "https"), (80, False, "http")):
+                for ip in _export_probe_ips_for_host(host, list(provided_ips)):
+                    key = (host, probe_port, ip)
+                    if key not in existing and key not in planned:
+                        default_tasks.append((host, ip, probe_port, use_tls, scheme_name))
+                        planned.add(key)
+        return explicit_tasks, default_tasks, probes
+
+    def _run_export_probe_tasks(
+        explicit_tasks: list[tuple[str, str, int]],
+        default_tasks: list[tuple[str, str, int, bool, str]],
+    ) -> None:
+        if not explicit_tasks and not default_tasks:
+            return
+
+        def run_explicit(task: tuple[str, str, int]) -> None:
+            host, ip, port = task
+            try:
+                result = _probe_web_target_blocking(
+                    {"fqdn": host, "port": port, "target_ip": ip, "host": host}
+                )
+                _save_web_probe_result(result)
+            except Exception:
+                pass
+
+        def run_default(task: tuple[str, str, int, bool, str]) -> None:
+            host, ip, port, use_tls, scheme_name = task
+            try:
+                status, error = _probe_http_status_once(ip or host, port, host, use_tls)
+                if status:
+                    scheme = scheme_name
+                    http_status = status if scheme_name == "http" else 0
+                    https_status = status if scheme_name == "https" else 0
+                    error_text = ""
+                else:
+                    scheme = "none"
+                    http_status = 0
+                    https_status = 0
+                    error_text = f"{scheme_name}:{error or 'no-response'}"
+                _save_web_probe_result(
+                    {
+                        "fqdn": host,
+                        "port": port,
+                        "target_ip": ip,
+                        "scheme": scheme,
+                        "http_status": http_status,
+                        "https_status": https_status,
+                        "error": error_text[:500],
+                    }
+                )
+            except Exception:
+                pass
+
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            futures = [executor.submit(run_explicit, task) for task in explicit_tasks]
+            futures.extend(executor.submit(run_default, task) for task in default_tasks)
+            for future in as_completed(futures):
+                future.result()
+
+    def _export_url_for_scheme(host: str, port: int | None, scheme: str) -> str | None:
+        if not host or not scheme:
+            return None
+        host_part = f"[{host}]" if _is_ip_like(host) and ":" in host else host
+        if port is None:
+            return f"{scheme}://{host_part}"
+        if scheme == "https" and int(port) == 443:
+            return f"https://{host_part}"
+        if scheme == "http" and int(port) == 80:
+            return f"http://{host_part}"
+        return f"{scheme}://{host_part}:{int(port)}"
+
+    async def _run_web_probe_job(job_id: str) -> None:
+        job = app.state.web_probe_jobs.get(job_id)
+        if not job:
+            return
+        try:
+            job["status"] = "running"
+            job["updated_at"] = datetime.utcnow().isoformat()
+            targets = job.get("targets") or []
+            job["total"] = len(targets)
+            job["updated_at"] = datetime.utcnow().isoformat()
+
+            semaphore = asyncio.Semaphore(10)
+
+            async def process_target(target: dict) -> None:
+                async with semaphore:
+                    job["current_label"] = (
+                        f"{target['fqdn']}:{target['port']} → {target.get('target_ip') or 'dns'}"
+                    )
+                    job["updated_at"] = datetime.utcnow().isoformat()
+                    result = await asyncio.to_thread(_probe_web_target_blocking, target)
+                    job["completed"] += 1
+                    job["results"].append(result)
+                    job["updated_at"] = datetime.utcnow().isoformat()
+                    try:
+                        _save_web_probe_result(result)
+                    except Exception:
+                        pass
+
+            for i in range(0, len(targets), 50):
+                await asyncio.gather(
+                    *(process_target(t) for t in targets[i : i + 50])
+                )
+
+            job["status"] = "completed"
+            job["error"] = ""
+        except Exception as e:
+            job["status"] = "failed"
+            job["error"] = str(e)[:500]
+        finally:
+            job["finished_at"] = datetime.utcnow()
+            job["updated_at"] = datetime.utcnow().isoformat()
+            if app.state.active_web_probe_job_id == job_id:
+                app.state.active_web_probe_job_id = None
+
+    @app.post("/api/web-probe/jobs")
+    async def api_web_probe_create_job():
+        _prune_web_probe_jobs()
+        async with app.state.web_probe_lock:
+            active = _get_active_web_probe_job()
+            if active:
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": "Web protocol probe already running",
+                        "active_job": _web_probe_public_job(active),
+                    },
+                    status_code=409,
+                )
+            with SessionLocal() as s:
+                targets = _list_web_probe_targets(s)
+            job_id = uuid.uuid4().hex
+            now = datetime.utcnow()
+            if not targets:
+                job = {
+                    "id": job_id,
+                    "targets": [],
+                    "status": "completed",
+                    "total": 0,
+                    "completed": 0,
+                    "current_label": "No in-scope web ports found",
+                    "results": [],
+                    "error": "",
+                    "created_at": now.isoformat(),
+                    "updated_at": now.isoformat(),
+                    "finished_at": now,
+                }
+                app.state.web_probe_jobs[job_id] = job
+                return {
+                    "ok": True,
+                    "job": _web_probe_public_job(job),
+                    "message": "No in-scope web ports found",
+                }
+            job = {
+                "id": job_id,
+                "targets": targets,
+                "status": "pending",
+                "total": len(targets),
+                "completed": 0,
+                "current_label": "Starting...",
+                "results": [],
+                "error": "",
+                "created_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+                "finished_at": None,
+            }
+            app.state.web_probe_jobs[job_id] = job
+            app.state.active_web_probe_job_id = job_id
+        asyncio.create_task(_run_web_probe_job(job_id))
+        return {"ok": True, "job": _web_probe_public_job(job)}
+
+    @app.get("/api/web-probe/jobs/active")
+    def api_web_probe_jobs_active():
+        _prune_web_probe_jobs()
+        current = _get_active_web_probe_job()
+        last = None
+        for job in app.state.web_probe_jobs.values():
+            if job["status"] in ("pending", "running"):
+                continue
+            finished_at = job.get("finished_at")
+            if not finished_at:
+                continue
+            if last is None or finished_at > last.get("finished_at"):
+                last = job
+        return {
+            "ok": True,
+            "active_job": _web_probe_public_job(current) if current else None,
+            "last_job": _web_probe_public_job(last) if last else None,
+        }
+
+    @app.get("/api/web-probe/jobs/{job_id}")
+    def api_web_probe_job_status(job_id: str):
+        job = app.state.web_probe_jobs.get(job_id)
+        if not job:
+            return JSONResponse({"ok": False, "error": "Job not found"}, status_code=404)
+        return {"ok": True, "job": _web_probe_public_job(job)}
 
     # ---- External recon tools (subfinder, theHarvester) ----
     def _tool_queue_position(job_id: str) -> int:
@@ -6361,7 +7076,6 @@ def create_app(
                     subnets,
                     excluded,
                 )
-                in_scope = bool(in_dom)
                 sensitive_dom = domain_in_scope(
                     x.fqdn,
                     s_domains,
@@ -6378,6 +7092,7 @@ def create_app(
                 in_scope_ip_set = {
                     ip for ip in all_ips if ip_in_scope(ip, ips, subnets, excluded)
                 }
+                in_scope = bool(in_dom or in_scope_ip_set)
                 sensitive = bool(sensitive_dom or bool(sensitive_ip_set))
                 # Get RDAP info for root domain
                 rdap = rdap_info.get(x.root_domain, {}) if x.root_domain else {}
@@ -6395,6 +7110,24 @@ def create_app(
                     if ip in ip_ports_map:
                         sub_ports[ip] = sorted(set(ip_ports_map[ip]))
 
+                port_info: dict[int, dict[str, set[str]]] = {}
+                for ip in all_ips:
+                    for port in sub_ports.get(ip, []):
+                        info = port_info.setdefault(port, {"ips": set(), "in_scope_ips": set()})
+                        info["ips"].add(ip)
+                        if ip in in_scope_ip_set:
+                            info["in_scope_ips"].add(ip)
+                port_chips = [
+                    {
+                        "label": f"{x.fqdn}:{port}",
+                        "port": port,
+                        "ips": sorted(info["ips"]),
+                        "in_scope_ips": sorted(info["in_scope_ips"]),
+                        "in_scope": bool(in_dom or info["in_scope_ips"]),
+                    }
+                    for port, info in sorted(port_info.items())
+                ]
+
                 out.append(
                     {
                         "fqdn": x.fqdn,
@@ -6408,6 +7141,7 @@ def create_app(
                         "prowl": prowl,
                         "scope_override": None,
                         "ports": sub_ports,
+                        "port_chips": port_chips,
                         "complete": getattr(x, "complete", 0),
                         "inprogress": getattr(x, "inprogress", 0),
                         "waf": getattr(x, "waf", 0),
@@ -6416,26 +7150,8 @@ def create_app(
                 if x.root_domain and x.root_domain not in root_domains:
                     root_domains[x.root_domain] = rdap
 
-            # Standalone hosts: hosts with HTTP/HTTPS services NOT linked to any subdomain
-            all_linked_ips = set(all_ips_map.keys())
-            # Track which IPs are already displayed under in-scope subdomains
-            ips_covered_by_inscope_subs: set[str] = set()
-            for r in out:
-                if r.get("in_scope"):
-                    # Covered by in-scope IPs for this subdomain
-                    for ip in r.get("in_scope_ips", set()):
-                        ips_covered_by_inscope_subs.add(ip)
-                    # Also cover all resolved+prowl IPs (in or out of scope) since they're displayed under this row
-                    for ip in r.get("ips", []):
-                        ips_covered_by_inscope_subs.add(ip)
-                    prowl = r.get("prowl", {})
-                    if prowl and prowl.get("ips"):
-                        for ip in prowl["ips"].split(","):
-                            ip = ip.strip()
-                            if ip:
-                                ips_covered_by_inscope_subs.add(ip)
-
-            # Find ALL hosts with HTTP/HTTPS open services (linked or unlinked)
+            # Standalone hosts: all in-scope hosts with HTTP/HTTPS services,
+            # including hosts that are also linked to subdomains
             all_web_ips_ports = get_open_web_ports_by_ip(s)
 
             # All in-scope IPs with HTTP/HTTPS ports
@@ -6451,14 +7167,25 @@ def create_app(
                     {
                         "fqdn": ip,
                         "root_domain": "_standalone_ips",
-                        "ips": [],
+                        "ips": [ip],
                         "in_scope": True,
                         "sensitive": is_sensitive_ip,
                         "sensitive_ips": {ip} if is_sensitive_ip else set(),
+                        "in_scope_ips": {ip},
                         "rdap": {},
                         "prowl": {},
                         "scope_override": None,
                         "ports": {ip: sorted(set(ports))},
+                        "port_chips": [
+                            {
+                                "label": f"{ip}:{port}",
+                                "port": port,
+                                "ips": [ip],
+                                "in_scope_ips": [ip],
+                                "in_scope": True,
+                            }
+                            for port in sorted(set(ports))
+                        ],
                         "standalone_host": True,
                         "complete": 0,
                         "inprogress": 0,
@@ -6517,12 +7244,60 @@ def create_app(
                         "in_scope": True, "sensitive": False,
                         "sensitive_ips": set(), "in_scope_ips": set(),
                         "rdap": {}, "prowl": {}, "scope_override": None,
-                        "ports": {}, "url_count": 0,
+                        "ports": {}, "port_chips": [], "url_count": 0,
                         "complete": root_sub.complete if root_sub else 0,
                         "inprogress": root_sub.inprogress if root_sub else 0,
                         "waf": root_sub.waf if root_sub else 0,
                     })
                 grouped_filtered[rd] = {"subs": filtered, "rdap": data["rdap"]}
+
+        probe_rows = s.execute(select(WebProtocolProbe)).scalars().all()
+        probes_by_fqdn_port: dict[tuple[str, int], list[dict]] = {}
+        for p in probe_rows:
+            fq = (p.fqdn or "").strip().lower().rstrip(".")
+            try:
+                probe_port = int(p.port)
+            except (TypeError, ValueError):
+                continue
+            probes_by_fqdn_port.setdefault((fq, probe_port), []).append(
+                {
+                    "scheme": p.scheme or "none",
+                    "http_status": p.http_status or 0,
+                    "https_status": p.https_status or 0,
+                    "error": p.error or "",
+                    "target_ip": p.target_ip or "",
+                    "created_at": p.created_at.isoformat() if p.created_at else "",
+                }
+            )
+
+        def _aggregate_probe_scheme(results: list[dict]) -> str:
+            if not results:
+                return ""
+            schemes = {r.get("scheme", "none") for r in results}
+            if "both" in schemes:
+                return "both"
+            if "https" in schemes:
+                return "https"
+            if "http" in schemes:
+                return "http"
+            return "none"
+
+        for group in grouped_filtered.values():
+            for sub in group.get("subs", []):
+                sub_fqdn = (sub.get("fqdn") or "").strip().lower().rstrip(".")
+                for chip in sub.get("port_chips", []):
+                    try:
+                        chip_port = int(chip.get("port") or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    results = probes_by_fqdn_port.get((sub_fqdn, chip_port), [])
+                    chip["probe_results"] = sorted(
+                        results, key=lambda r: r.get("target_ip") or ""
+                    )
+                    chip["probe_scheme"] = _aggregate_probe_scheme(results)
+                    chip["probe_error"] = "; ".join(
+                        r.get("error", "") for r in results if r.get("error")
+                    )[:500]
 
         return templates.TemplateResponse(
             "subdomains.html",
@@ -7096,146 +7871,228 @@ def create_app(
             return {"port": r[0], "service": r[1], "url": r[2], "notes": r[3]}
         return {"port": port, "service": "", "url": "", "notes": ""}
 
-    @app.get("/services", response_class=HTMLResponse)
-    def services_page(request: Request):
-        with db() as s:
-            qs = request.query_params.get("hide_completed", "")
-            if qs:
-                hide_completed = int(qs)
-            else:
-                row = s.scalar(select(AppSettings).where(AppSettings.key == "services_hide_completed"))
-                hide_completed = int(row.value) if row else 0
-            qs = request.query_params.get("show_out_of_scope", "")
-            if qs:
-                show_oos = int(qs)
-            else:
-                row = s.scalar(select(AppSettings).where(AppSettings.key == "services_show_out_of_scope"))
-                show_oos = int(row.value) if row else 0
-            ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
+    def _service_page_flags(request: Request, s):
+        qs = request.query_params.get("hide_completed", "")
+        if qs:
+            hide_completed = int(qs)
+        else:
+            row = s.scalar(select(AppSettings).where(AppSettings.key == "services_hide_completed"))
+            hide_completed = int(row.value) if row else 0
+        qs = request.query_params.get("show_out_of_scope", "")
+        if qs:
+            show_oos = int(qs)
+        else:
+            row = s.scalar(select(AppSettings).where(AppSettings.key == "services_show_out_of_scope"))
+            show_oos = int(row.value) if row else 0
+        return hide_completed, show_oos
 
-            services = (
-                s.execute(select(Service).where(Service.state == "open"))
-                .scalars()
-                .all()
-            )
-
-            service_map = {}
-            for svc in services:
-                host = s.scalar(select(Host).where(Host.id == svc.host_id))
-                if not host:
-                    continue
-
-                if hide_completed and host.complete:
-                    continue
-
-                key = f"{svc.port}/{svc.proto}"
-                host_in = host_in_scope(
+    def _build_service_summary(s, hide_completed: bool, show_oos: bool):
+        ips, subnets, domains, _email_domains, domain_all_subs, _domain_subs_if_ip, excluded = scope_sets(s)
+        hosts_by_id = {host.id: host for host in s.execute(select(Host)).scalars()}
+        services = s.execute(select(Service).where(Service.state == "open")).scalars().all()
+        service_map = {}
+        scope_cache = {}
+        for svc in services:
+            host = hosts_by_id.get(svc.host_id)
+            if not host:
+                continue
+            if hide_completed and host.complete:
+                continue
+            if host.id not in scope_cache:
+                scope_cache[host.id] = host_in_scope(
                     host.ip, host.hostname or "", ips, subnets, domains, domain_all_subs, excluded
                 )
-                if not (host_in or show_oos):
-                    continue
+            host_in = scope_cache[host.id]
+            if not (host_in or show_oos):
+                continue
+            key = f"{svc.port}/{svc.proto}"
+            if key not in service_map:
+                service_map[key] = {
+                    "port": svc.port,
+                    "proto": svc.proto,
+                    "hosts": [],
+                    "service_types": set(),
+                    "products": set(),
+                    "tracked_service_ids": set(),
+                    "inspected_service_ids": set(),
+                }
+            data = service_map[key]
+            if host_in:
+                data["hosts"].append(
+                    {"id": host.id, "ip": host.ip, "hostname": host.hostname or ""}
+                )
+                data["tracked_service_ids"].add(svc.id)
+                if int(svc.inspected or 0) == 1:
+                    data["inspected_service_ids"].add(svc.id)
+            if svc.service_name:
+                data["service_types"].add(svc.service_name)
+            if svc.product:
+                data["products"].add(f"{svc.product} {svc.version}".strip())
+        rows = []
+        for data in service_map.values():
+            if not data["hosts"]:
+                continue
+            tracked_count = len(data["tracked_service_ids"])
+            inspected_count = len(data["inspected_service_ids"])
+            rows.append(
+                {
+                    "port": data["port"],
+                    "proto": data["proto"],
+                    "service_types": sorted(data["service_types"]),
+                    "products": sorted(data["products"]),
+                    "host_count": len(data["hosts"]),
+                    "tracked_count": tracked_count,
+                    "inspected_count": inspected_count,
+                    "port_complete": bool(tracked_count) and data["inspected_service_ids"] == data["tracked_service_ids"],
+                }
+            )
+        rows.sort(key=lambda x: (x["port"], x["proto"]))
+        return rows
 
-                if key not in service_map:
-                    service_map[key] = {
-                        "port": svc.port,
-                        "proto": svc.proto,
-                        "hosts": [],
-                        "service_types": set(),
-                        "products": set(),
-                        "host_outputs": {},
-                        "tracked_service_ids": set(),
-                        "inspected_service_ids": set(),
-                    }
-
-                if host_in:
-                    service_map[key]["hosts"].append(
-                        {"id": host.id, "ip": host.ip, "hostname": host.hostname or ""}
-                    )
-                    service_map[key]["tracked_service_ids"].add(svc.id)
-                    if int(svc.inspected or 0) == 1:
-                        service_map[key]["inspected_service_ids"].add(svc.id)
-
-                if svc.service_name:
-                    service_map[key]["service_types"].add(svc.service_name)
-
-                if svc.product:
-                    service_map[key]["products"].add(
-                        f"{svc.product} {svc.version}".strip()
-                    )
-
-                host_key = host.id
-                if host_key not in service_map[key]["host_outputs"]:
-                    service_map[key]["host_outputs"][host_key] = {
-                        "host": {"id": host.id, "ip": host.ip, "hostname": host.hostname or ""},
-                        "outputs": set(),
+    def _build_service_detail(s, hide_completed: bool, show_oos: bool, port: int, proto: str):
+        ips, subnets, domains, _email_domains, domain_all_subs, _domain_subs_if_ip, excluded = scope_sets(s)
+        hosts_by_id = {host.id: host for host in s.execute(select(Host)).scalars()}
+        services = (
+            s.execute(
+                select(Service).where(
+                    Service.state == "open",
+                    Service.port == port,
+                    Service.proto == proto,
+                )
+            )
+            .scalars()
+            .all()
+        )
+        key = f"{port}/{proto}"
+        service_map = {}
+        scope_cache = {}
+        service_host_by_id = {}
+        for svc in services:
+            host = hosts_by_id.get(svc.host_id)
+            if not host:
+                continue
+            if hide_completed and host.complete:
+                continue
+            if host.id not in scope_cache:
+                scope_cache[host.id] = host_in_scope(
+                    host.ip, host.hostname or "", ips, subnets, domains, domain_all_subs, excluded
+                )
+            host_in = scope_cache[host.id]
+            if not (host_in or show_oos):
+                continue
+            if key not in service_map:
+                service_map[key] = {
+                    "port": svc.port,
+                    "proto": svc.proto,
+                    "hosts": [],
+                    "service_types": set(),
+                    "products": set(),
+                    "host_outputs": {},
+                    "tracked_service_ids": set(),
+                    "inspected_service_ids": set(),
+                }
+            data = service_map[key]
+            if host_in:
+                data["hosts"].append(
+                    {"id": host.id, "ip": host.ip, "hostname": host.hostname or ""}
+                )
+                data["tracked_service_ids"].add(svc.id)
+                if int(svc.inspected or 0) == 1:
+                    data["inspected_service_ids"].add(svc.id)
+            if svc.service_name:
+                data["service_types"].add(svc.service_name)
+            if svc.product:
+                data["products"].add(f"{svc.product} {svc.version}".strip())
+            host_key = host.id
+            if host_key not in data["host_outputs"]:
+                data["host_outputs"][host_key] = {
+                    "host": {"id": host.id, "ip": host.ip, "hostname": host.hostname or ""},
+                    "outputs": set(),
+                    "service_id": svc.id,
+                    "service_name": svc.service_name or "",
+                    "inspected": int(svc.inspected or 0),
+                    "counted": bool(host_in),
+                }
+            else:
+                data["host_outputs"][host_key].update(
+                    {
                         "service_id": svc.id,
                         "service_name": svc.service_name or "",
                         "inspected": int(svc.inspected or 0),
                         "counted": bool(host_in),
                     }
-                else:
-                    service_map[key]["host_outputs"][host_key].update(
-                        {
-                            "service_id": svc.id,
-                            "service_name": svc.service_name or "",
-                            "inspected": int(svc.inspected or 0),
-                            "counted": bool(host_in),
-                        }
-                    )
-
-                ev = (
-                    s.execute(
-                        select(ServiceEvidence).where(
-                            ServiceEvidence.service_id == svc.id
-                        )
-                    )
-                    .scalars()
-                    .all()
                 )
-                for e in ev:
-                    if e.raw_output:
-                        cleaned = e.raw_output
-                        cleaned = cleaned.replace(host.ip, "<IP>")
-                        if host.hostname:
-                            cleaned = cleaned.replace(host.hostname, "<HOST>")
-                        service_map[key]["host_outputs"][host_key]["outputs"].add(cleaned[:800])
-
-            rows = []
-            for key, data in service_map.items():
-                output_rows = []
-                for label, ho in data["host_outputs"].items():
-                    output_rows.append({
-                        "host": ho["host"],
-                        "outputs": list(ho["outputs"]),
-                        "service_id": ho["service_id"],
-                        "service_name": ho["service_name"],
-                        "inspected": ho["inspected"],
-                        "counted": ho["counted"],
-                    })
-                tracked_count = len(data["tracked_service_ids"])
-                inspected_count = len(data["inspected_service_ids"])
-                if data["hosts"]:
-                    rows.append(
-                        {
-                            "port": data["port"],
-                            "proto": data["proto"],
-                            "service_types": list(data["service_types"]),
-                            "products": list(data["products"]),
-                            "host_count": len(data["hosts"]),
-                            "hosts": data["hosts"],
-                            "outputs": [],
-                            "host_outputs": output_rows,
-                            "tracked_count": tracked_count,
-                            "inspected_count": inspected_count,
-                            "port_complete": bool(tracked_count) and data["inspected_service_ids"] == data["tracked_service_ids"],
-                        }
+            service_host_by_id[svc.id] = (host.id, host.ip, host.hostname or "")
+        if key not in service_map or not service_map[key]["hosts"]:
+            return None
+        data = service_map[key]
+        evidence_service_ids = [ho["service_id"] for ho in data["host_outputs"].values()]
+        if evidence_service_ids:
+            evidence_rows = (
+                s.execute(
+                    select(ServiceEvidence).where(
+                        ServiceEvidence.service_id.in_(evidence_service_ids)
                     )
+                )
+                .scalars()
+                .all()
+            )
+            for e in evidence_rows:
+                if not e.raw_output:
+                    continue
+                host_info = service_host_by_id.get(e.service_id)
+                if not host_info:
+                    continue
+                host_id, host_ip, hostname = host_info
+                cleaned = e.raw_output.replace(host_ip, "<IP>")
+                if hostname:
+                    cleaned = cleaned.replace(hostname, "<HOST>")
+                data["host_outputs"][host_id]["outputs"].add(cleaned[:800])
+        output_rows = []
+        for ho in data["host_outputs"].values():
+            output_rows.append(
+                {
+                    "host": ho["host"],
+                    "outputs": list(ho["outputs"]),
+                    "service_id": ho["service_id"],
+                    "service_name": ho["service_name"],
+                    "inspected": ho["inspected"],
+                    "counted": ho["counted"],
+                }
+            )
+        tracked_count = len(data["tracked_service_ids"])
+        inspected_count = len(data["inspected_service_ids"])
+        return {
+            "port": data["port"],
+            "proto": data["proto"],
+            "service_types": sorted(data["service_types"]),
+            "products": sorted(data["products"]),
+            "host_count": len(data["hosts"]),
+            "hosts": data["hosts"],
+            "host_outputs": output_rows,
+            "tracked_count": tracked_count,
+            "inspected_count": inspected_count,
+            "port_complete": bool(tracked_count) and data["inspected_service_ids"] == data["tracked_service_ids"],
+        }
 
-            rows.sort(key=lambda x: (x["port"], x["proto"]))
+    @app.get("/services", response_class=HTMLResponse)
+    def services_page(request: Request):
+        with db() as s:
+            hide_completed, show_oos = _service_page_flags(request, s)
+            rows = _build_service_summary(s, hide_completed, show_oos)
 
         return templates.TemplateResponse(
              "services.html", {"request": request, "rows": rows, "hide_completed": hide_completed, "show_oos": show_oos}
-         )
+          )
+
+    @app.get("/api/service-port/{port}/{proto}")
+    def api_service_port(request: Request, port: int, proto: str):
+        with db() as s:
+            hide_completed, show_oos = _service_page_flags(request, s)
+            detail = _build_service_detail(s, hide_completed, show_oos, port, proto)
+        if not detail:
+            return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+        return {"ok": True, **detail}
 
     @app.get("/profiling", response_class=HTMLResponse)
     def profiling_page(request: Request):
@@ -7434,11 +8291,36 @@ def create_app(
             ips, subnets, domains, _, domain_all_subs, domain_subs_if_ip, excluded = scope_sets(s)
             rows = s.execute(select(Subdomain)).scalars().all()
             all_sub_ips = list_all_subdomain_ips(s)
-            out = []
+            all_web_ips_ports = get_open_web_ports_by_ip(s)
+            entries: dict[tuple[str, int | None], set[str]] = {}
+            covered_ip_ports: set[str] = set()
+
+            def add_entry(
+                host: str,
+                port: int | None,
+                entry_ips: set[str] | list[str] | None = None,
+            ) -> None:
+                normalized = (host or "").strip().lower().rstrip(".")
+                if not normalized:
+                    return
+                entries.setdefault((normalized, port), set())
+                for ip in entry_ips or []:
+                    cleaned = (ip or "").strip()
+                    if cleaned:
+                        entries[(normalized, port)].add(cleaned)
+
             for x in rows:
-                ips_found = all_sub_ips.get(x.fqdn, [])
+                fqdn = (x.fqdn or "").strip().lower().rstrip(".")
+                root_domain = (x.root_domain or "").strip().lower().rstrip(".")
+                ips_found = list(set(all_sub_ips.get(fqdn, [])))
+                prowl_ips_cleaned = [
+                    ip.strip()
+                    for ip in (x.prowl_ips or "").split(",")
+                    if ip.strip()
+                ]
+                all_ips = list(set(ips_found) | set(prowl_ips_cleaned))
                 in_dom = domain_in_scope(
-                    x.fqdn,
+                    fqdn,
                     domains,
                     domain_all_subs,
                     domain_subs_if_ip,
@@ -7447,20 +8329,58 @@ def create_app(
                     subnets,
                     excluded,
                 )
-                in_ip = any(ip_in_scope(ip, ips, subnets, excluded) for ip in ips_found)
-                if in_dom or in_ip:
-                    out.append(x.fqdn)
-                    if x.root_domain and x.root_domain not in out:
-                        out.append(x.root_domain)
+                in_scope_ip_set = {
+                    ip for ip in all_ips if ip_in_scope(ip, ips, subnets, excluded)
+                }
+                if not (in_dom or in_scope_ip_set):
+                    continue
+                bare_ips = set(all_ips) if in_dom else set(in_scope_ip_set)
+                add_entry(fqdn, None, bare_ips)
+                if root_domain:
+                    root_ips = set(all_sub_ips.get(root_domain, []))
+                    add_entry(root_domain, None, root_ips)
+                eligible_ips = set(all_ips) if in_dom else set(in_scope_ip_set)
+                for ip in eligible_ips:
+                    for port in sorted(set(all_web_ips_ports.get(ip, []))):
+                        add_entry(fqdn, port, {ip})
+                        covered_ip_ports.add(f"{ip}:{port}")
 
-            # Include standalone IPs with HTTP/HTTPS ports
-            all_web_ips_ports = get_open_web_ports_by_ip(s)
             for ip in all_web_ips_ports:
-                if ip_in_scope(ip, ips, subnets, excluded):
-                    for p in sorted(set(all_web_ips_ports[ip])):
-                        out.append(f"{ip}:{p}")
+                if not ip_in_scope(ip, ips, subnets, excluded):
+                    continue
+                for port in sorted(set(all_web_ips_ports[ip])):
+                    if f"{ip}:{port}" not in covered_ip_ports:
+                        add_entry(ip, port, {ip})
 
-        txt = "\n".join(sorted(set(out)))
+            explicit_tasks, default_tasks, _ = _collect_export_probe_tasks(s, entries)
+        _run_export_probe_tasks(explicit_tasks, default_tasks)
+        with db() as s:
+            probes = _load_web_probe_map(s)
+        urls = set()
+        for host, port in entries:
+            if port is None:
+                scheme = _export_scheme_for_bare_host(host, probes)
+            else:
+                scheme = _export_scheme_from_probe_results(probes.get((host, port), []))
+            url = _export_url_for_scheme(host, port, scheme)
+            if url:
+                urls.add(url)
+        https_default_hosts = set()
+        for url in urls:
+            parsed = urlsplit(url)
+            if parsed.scheme == "https" and parsed.port in (None, 443):
+                https_default_hosts.add(parsed.hostname or "")
+        final_urls = set()
+        for url in urls:
+            parsed = urlsplit(url)
+            if (
+                parsed.scheme == "http"
+                and parsed.port in (None, 80)
+                and (parsed.hostname or "") in https_default_hosts
+            ):
+                continue
+            final_urls.add(url)
+        txt = "\n".join(sorted(final_urls))
         return Response(
             content=txt,
             media_type="text/plain",

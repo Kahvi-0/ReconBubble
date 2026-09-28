@@ -11,6 +11,7 @@
   <p class="muted">Default hides out-of-scope.</p>
   <a class="btn" href="/subdomains/export">Export in-scope</a>
   <button class="btn" id="btnCaptureScreenshots" style="margin-left:8px;">📸 Capture Screenshots</button>
+  <button class="btn" id="btnProbeHttpHttps" style="margin-left:8px;">🌐 Probe HTTP/HTTPS</button>
 </div>
 <div id="screenshotProgress" class="hidden">
   <div class="progress-bar-container">
@@ -18,10 +19,17 @@
   </div>
   <p id="screenshotProgressText" class="muted">Preparing...</p>
 </div>
+<div id="screenshotBrowserWarning" class="hidden" style="margin:12px 0;padding:10px 12px;border:1px solid #ffb35c;background:#fff7ed;color:#9a3412;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;"></div>
 <details id="screenshotErrorLog" class="hidden" style="margin:12px 0;">
   <summary><span style="color:#ff6666;">⚠ Screenshot Errors</span> <span id="screenshotErrorCount" class="muted"></span></summary>
   <ul id="screenshotErrorList" class="screenshot-error-list"></ul>
 </details>
+<div id="webProbeProgress" class="hidden">
+  <div class="progress-bar-container">
+    <div id="webProbeProgressBar" class="progress-bar-fill" style="width:0%"></div>
+  </div>
+  <p id="webProbeProgressText" class="muted">Preparing...</p>
+</div>
 <div class="card">
   <h2>Subdomains by Domain</h2>
   {% if grouped %}
@@ -63,17 +71,15 @@
              <td>{% if s.prowl and s.prowl.ips %}{% for ip in s.prowl.ips.split(', ') %}{% if show_out == 1 or ip in s.in_scope_ips %}<span class="ip-with-scope"><span class="scope-dot {% if ip in s.in_scope_ips %}in{% else %}out{% endif %}" title="{% if ip in s.in_scope_ips %}In-scope{% else %}Out-of-scope{% endif %}">●</span><code class="ip-chip">{{ ip }}</code></span>{% if ip in s.sensitive_ips %}<span class="sensitive-banner">Sensitive</span>{% endif %}<br/>{% endif %}{% endfor %}{% else %}<span class="muted">-</span>{% endif %}</td>
              <td>{% if s.ips %}{% for ip in s.ips %}{% if show_out == 1 or ip in s.in_scope_ips %}<span class="ip-with-scope"><span class="scope-dot {% if ip in s.in_scope_ips %}in{% else %}out{% endif %}" title="{% if ip in s.in_scope_ips %}In-scope{% else %}Out-of-scope{% endif %}">●</span><code class="ip-chip">{{ ip }}</code></span>{% if ip in s.sensitive_ips %}<span class="sensitive-banner">Sensitive</span>{% endif %}<br/>{% endif %}{% endfor %}{% else %}<span class="muted">-</span>{% endif %}</td>
            {% endif %}
-            <td>
-              {% if s.ports %}
-                {% for ip, ports in s.ports.items() %}
-                  {% for port in ports %}
-                     <code class="port-chip" data-ip="{{ ip }}" data-port="{{ port }}" data-in-scope="{{ '1' if ip in s.in_scope_ips else '0' }}">{{ ip }}:{{ port }}</code><br/>
-                  {% endfor %}
-                {% endfor %}
-              {% else %}
-                <span class="muted">-</span>
-              {% endif %}
-            </td>
+             <td>
+               {% if s.port_chips %}
+                 {% for chip in s.port_chips %}
+                    <code class="port-chip" data-port="{{ chip.port }}" data-ips='{{ chip.ips | tojson }}' data-in-scope-ips='{{ chip.in_scope_ips | tojson }}' data-in-scope="{{ '1' if chip.in_scope else '0' }}" data-probe-scheme="{{ chip.probe_scheme or '' }}" data-probe-error="{{ chip.probe_error or '' }}">{{ chip.label }}{% if chip.probe_scheme %}<span class="probe-badge scheme-{{ chip.probe_scheme }}" title="{{ chip.probe_error or ('HTTP/HTTPS probe: ' ~ chip.probe_scheme) }}">{{ chip.probe_scheme }}</span>{% endif %}</code><br/>
+                 {% endfor %}
+               {% else %}
+                 <span class="muted">-</span>
+               {% endif %}
+             </td>
             {% if has_urls %}
            <td style="white-space:nowrap;">
              <button class="btn btn-sm url-toggle" data-fqdn="{{ s.fqdn }}" data-count="{{ url_count }}" data-target="{{ url_id }}" onclick="toggleUrls(this)">URLs ({{ url_count }})</button>
@@ -141,6 +147,11 @@
 .ip-with-scope { display: inline-flex; align-items: center; gap: 4px; margin: 2px 0; }
 .ip-with-scope .ip-chip { display: inline; margin: 0; }
 .port-chip { display: block; margin: 2px 0; font-size: 12px; color: #4a9eff; }
+.probe-badge { margin-left: 6px; padding: 1px 5px; border-radius: 3px; font-size: 10px; font-weight: 600; vertical-align: middle; }
+.probe-badge.scheme-https { background: rgba(0, 255, 0, 0.15); color: #00ff00; border: 1px solid rgba(0, 255, 0, 0.3); }
+.probe-badge.scheme-http { background: rgba(255, 170, 0, 0.15); color: #ffaa00; border: 1px solid rgba(255, 170, 0, 0.3); }
+.probe-badge.scheme-both { background: rgba(74, 158, 255, 0.18); color: #4a9eff; border: 1px solid rgba(74, 158, 255, 0.35); }
+.probe-badge.scheme-none { background: rgba(255, 51, 51, 0.15); color: #ff3333; border: 1px solid rgba(255, 51, 51, 0.3); }
 .standalone-label { font-weight: 600; color: #ffaa00; }
 .standalone-ip { color: #ffaa00; display: inline; margin: 0; }
 .standalone-ip-row { display: inline-flex; align-items: center; gap: 4px; }
@@ -375,6 +386,34 @@
       }
     };
 
+    const browserWarning = document.getElementById("screenshotBrowserWarning");
+
+    const checkScreenshotBrowser = async () => {
+      if (!browserWarning) return;
+      try {
+        const resp = await fetch("/api/screenshot/browser-status", { cache: "no-store" });
+        const data = await resp.json();
+        if (data.ok) {
+          browserWarning.textContent = "";
+          browserWarning.classList.add("hidden");
+          return;
+        }
+        const label = data.mode === "system-browser"
+          ? "System screenshot browser missing."
+          : "Screenshot browser missing.";
+        const detail = data.error || "Playwright Chromium is not available.";
+        const primaryCommand = data.install_command_uv || data.install_command || "";
+        const directCommand = data.install_command_uv && data.install_command ? data.install_command : "";
+        const command = primaryCommand ? ` Run: ${primaryCommand}` : "";
+        const direct = directCommand ? ` Direct: ${directCommand}` : "";
+        browserWarning.textContent = `${label} ${detail}${command}${direct}`;
+        browserWarning.classList.remove("hidden");
+      } catch {
+        browserWarning.classList.add("hidden");
+      }
+    };
+
+    checkScreenshotBrowser();
     restoreScreenshotJob();
     window.addEventListener("visibilitychange", () => {
       if (!document.hidden) restoreScreenshotJob();
@@ -383,6 +422,197 @@
     window.addEventListener("pageshow", (event) => {
       if (!event.persisted) restoreScreenshotJob();
     });
+
+    // Lightweight HTTP/HTTPS protocol probe
+    const btnProbe = document.getElementById("btnProbeHttpHttps");
+    const webProbeProgressContainer = document.getElementById("webProbeProgress");
+    const webProbeProgressBar = document.getElementById("webProbeProgressBar");
+    const webProbeProgressText = document.getElementById("webProbeProgressText");
+    const probeButtonLabel = btnProbe ? btnProbe.textContent : "🌐 Probe HTTP/HTTPS";
+
+    let webProbePollTimer = null;
+    let webProbePollInFlight = false;
+    let webProbeRestoreInFlight = false;
+
+    const setProbeButtonBusy = (busy, status = "running") => {
+      if (!btnProbe) return;
+      btnProbe.disabled = busy;
+      btnProbe.textContent = busy
+        ? (status === "pending" ? "🌐 Queued..." : "🌐 Probing...")
+        : probeButtonLabel;
+    };
+
+    const applyWebProbeResults = (results) => {
+      if (!Array.isArray(results) || results.length === 0) return;
+      const map = new Map();
+      for (const r of results) {
+        if (!r || !r.fqdn || !r.port) continue;
+        const key = `${r.fqdn}:${r.port}`;
+        if (!map.has(key)) map.set(key, []);
+        map.get(key).push(r);
+      }
+      const schemeForResults = (rs) => {
+        const schemes = new Set(rs.map((r) => r.scheme || "none"));
+        if (schemes.has("both")) return "both";
+        if (schemes.has("https")) return "https";
+        if (schemes.has("http")) return "http";
+        return "none";
+      };
+      document.querySelectorAll(".port-chip").forEach((chip) => {
+        const row = chip.closest(".sub-row");
+        const fqdn = row ? row.getAttribute("data-fqdn") : "";
+        const port = chip.getAttribute("data-port") || "";
+        if (!fqdn || !port) return;
+        const rs = map.get(`${fqdn}:${port}`);
+        if (!rs || rs.length === 0) return;
+        const scheme = schemeForResults(rs);
+        const error = rs.map((r) => r.error).filter(Boolean).join("; ").slice(0, 500);
+        let badge = chip.querySelector(".probe-badge");
+        if (!badge) {
+          badge = document.createElement("span");
+          chip.appendChild(badge);
+        }
+        badge.className = `probe-badge scheme-${scheme}`;
+        badge.textContent = scheme;
+        badge.title = error || `HTTP/HTTPS probe: ${scheme}`;
+        chip.dataset.probeScheme = scheme;
+        chip.dataset.probeError = error;
+      });
+    };
+
+    const updateWebProbeProgressFromJob = (job) => {
+      if (!webProbeProgressContainer || !webProbeProgressBar || !webProbeProgressText) return;
+      webProbeProgressContainer.classList.remove("hidden");
+      const pct = job.total > 0 ? Math.round((job.completed / job.total) * 100) : 0;
+      webProbeProgressBar.style.width = `${pct}%`;
+      if (job.status === "pending") {
+        webProbeProgressText.textContent = `Queued — ${job.current_label || "waiting"}`;
+      } else if (job.status === "running") {
+        webProbeProgressText.textContent = job.current_label
+          ? `Probing ${job.completed}/${job.total} — ${job.current_label}`
+          : `Probing ${job.completed}/${job.total}...`;
+      } else if (job.status === "completed") {
+        webProbeProgressText.textContent = `Done! ${job.completed}/${job.total} targets probed.`;
+      } else if (job.status === "failed") {
+        webProbeProgressText.textContent = `Error: ${job.error || "Web protocol probe failed"}`;
+      }
+    };
+
+    const stopWebProbePolling = () => {
+      if (webProbePollTimer) {
+        clearTimeout(webProbePollTimer);
+        webProbePollTimer = null;
+      }
+    };
+
+    const pollWebProbeJob = async (jobId) => {
+      if (webProbePollInFlight) return;
+      webProbePollInFlight = true;
+      try {
+        const resp = await fetch(`/api/web-probe/jobs/${encodeURIComponent(jobId)}`);
+        const data = await resp.json();
+        if (!data.ok || !data.job) {
+          throw new Error(data.error || "Web probe job not found");
+        }
+        updateWebProbeProgressFromJob(data.job);
+        applyWebProbeResults(data.job.results);
+        if (data.job.status === "pending" || data.job.status === "running") {
+          stopWebProbePolling();
+          setProbeButtonBusy(true, data.job.status);
+          webProbePollTimer = setTimeout(() => pollWebProbeJob(jobId), 700);
+        } else {
+          stopWebProbePolling();
+          setProbeButtonBusy(false);
+          if (data.job.status === "completed") {
+            setTimeout(() => webProbeProgressContainer && webProbeProgressContainer.classList.add("hidden"), 4000);
+          }
+        }
+      } catch (e) {
+        stopWebProbePolling();
+        setProbeButtonBusy(false);
+        if (webProbeProgressText) webProbeProgressText.textContent = `Error: ${e.message}`;
+      } finally {
+        webProbePollInFlight = false;
+      }
+    };
+
+    const startWebProbeJobPolling = (job) => {
+      if (!job || !job.id) return;
+      stopWebProbePolling();
+      updateWebProbeProgressFromJob(job);
+      applyWebProbeResults(job.results);
+      if (job.status === "pending" || job.status === "running") {
+        setProbeButtonBusy(true, job.status);
+        webProbePollTimer = setTimeout(() => pollWebProbeJob(job.id), 300);
+      }
+    };
+
+    const restoreWebProbeJob = async () => {
+      if (webProbeRestoreInFlight) return;
+      webProbeRestoreInFlight = true;
+      try {
+        const resp = await fetch("/api/web-probe/jobs/active", { cache: "no-store" });
+        const data = await resp.json();
+        if (!data.ok) return;
+        if (data.active_job) {
+          startWebProbeJobPolling(data.active_job);
+          return;
+        }
+        if (data.last_job) {
+          setProbeButtonBusy(false);
+          applyWebProbeResults(data.last_job.results);
+        }
+      } catch {
+        // Restore is best-effort.
+      } finally {
+        webProbeRestoreInFlight = false;
+      }
+    };
+
+    restoreWebProbeJob();
+    window.addEventListener("visibilitychange", () => {
+      if (!document.hidden) restoreWebProbeJob();
+    });
+    window.addEventListener("focus", () => restoreWebProbeJob());
+    window.addEventListener("pageshow", (event) => {
+      if (!event.persisted) restoreWebProbeJob();
+    });
+
+    if (btnProbe) {
+      btnProbe.addEventListener("click", async () => {
+        const portChips = document.querySelectorAll(".port-chip");
+        if (portChips.length === 0) {
+          alert("No ports found to probe.");
+          return;
+        }
+
+        setProbeButtonBusy(true, "pending");
+        if (webProbeProgressContainer) webProbeProgressContainer.classList.remove("hidden");
+        if (webProbeProgressBar) webProbeProgressBar.style.width = "0%";
+        if (webProbeProgressText) webProbeProgressText.textContent = "Building in-scope target list...";
+
+        try {
+          const resp = await fetch("/api/web-probe/jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({}),
+          });
+          const data = await resp.json();
+
+          if (resp.status === 409 && data.active_job) {
+            startWebProbeJobPolling(data.active_job);
+            return;
+          }
+          if (!data.ok || !data.job) {
+            throw new Error(data.error || "Could not start web protocol probe");
+          }
+          startWebProbeJobPolling(data.job);
+        } catch (e) {
+          setProbeButtonBusy(false);
+          if (webProbeProgressText) webProbeProgressText.textContent = `Error: ${e.message}`;
+        }
+      });
+    }
 
     if (btnCapture) {
       btnCapture.addEventListener("click", async () => {
@@ -397,23 +627,46 @@
         const forcedTargets = [];
         const forcedSeen = new Set();
 
+        const parseJsonList = (value, fallback = []) => {
+          try {
+            const parsed = JSON.parse(value || "[]");
+            return Array.isArray(parsed) ? parsed : fallback;
+          } catch {
+            return fallback;
+          }
+        };
+
         portChips.forEach(chip => {
           const row = chip.closest(".sub-row");
           const fqdn = row ? row.getAttribute("data-fqdn") : "";
           if (!fqdn) return;
 
-          let ip = chip.getAttribute("data-ip") || "";
           let portRaw = chip.getAttribute("data-port") || "";
-          if (!ip || !portRaw) {
-            const parts = chip.textContent.trim().split(":");
-            if (parts.length === 2) {
-              ip = parts[0];
-              portRaw = parts[1];
+          let ips = parseJsonList(chip.getAttribute("data-ips"), []);
+          if (!ips.length) {
+            const legacyIp = chip.getAttribute("data-ip") || "";
+            if (legacyIp) {
+              ips = [legacyIp];
+            } else {
+              const parts = chip.textContent.trim().split(":");
+              if (parts.length === 2) {
+                ips = [parts[0]];
+                if (!portRaw) portRaw = parts[1];
+              }
             }
+          }
+          if (!portRaw) {
+            const parts = chip.textContent.trim().split(":");
+            if (parts.length === 2) portRaw = parts[1];
           }
 
           const port = parseInt(portRaw, 10);
-          if (!ip || !Number.isFinite(port)) return;
+          if (!ips.length || !Number.isFinite(port)) return;
+
+          let inScopeIps = parseJsonList(chip.getAttribute("data-in-scope-ips"), []);
+          if (!inScopeIps.length && chip.getAttribute("data-in-scope") === "1") {
+            inScopeIps = [ips[0]];
+          }
 
           const autoKey = `${fqdn}:${port}`;
           if (!autoSeen.has(autoKey)) {
@@ -421,13 +674,13 @@
             autoTargets.push({ fqdn, port });
           }
 
-          if (chip.getAttribute("data-in-scope") === "1") {
+          inScopeIps.forEach(ip => {
             const forcedKey = `${fqdn}:${port}:${ip}`;
             if (!forcedSeen.has(forcedKey)) {
               forcedSeen.add(forcedKey);
               forcedTargets.push({ fqdn, port, ip });
             }
-          }
+          });
         });
 
         const targets = [...autoTargets, ...forcedTargets];

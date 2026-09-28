@@ -383,34 +383,64 @@
 
   function bindSprayEditRow(row, serviceId) {
     let timer = null;
-    const save = async () => {
+    const getAttempt = () => {
+      const svc = sprayServices.find(s => s.id === serviceId);
+      if (!svc) return null;
+      return svc.attempts.find(a => a.id === Number(row.dataset.attemptId)) || null;
+    };
+    const syncState = () => {
+      const attempt = getAttempt();
+      if (!attempt) return;
+      const inputs = row.querySelectorAll("input");
+      attempt.password = inputs[0].value.trim();
+      attempt.attempted_at = inputs[1].value.trim();
+      attempt.notes = inputs[2].value.trim();
+    };
+    const saveNow = async () => {
       const attemptId = row.dataset.attemptId;
       if (!attemptId) return;
       clearTimeout(timer);
-      timer = setTimeout(async () => {
-        const inputs = row.querySelectorAll("input");
-        try {
-          const fd = new FormData();
-          fd.append("password", inputs[0].value.trim());
-          fd.append("attempted_at", inputs[1].value.trim());
-          fd.append("notes", inputs[2].value.trim());
-          await fetch(`/api/password-spray/attempt/${attemptId}`, { method: "POST", body: fd });
-        } catch (_) {}
-      }, 400);
+      timer = null;
+      syncState();
+      const inputs = row.querySelectorAll("input");
+      try {
+        const fd = new FormData();
+        fd.append("password", inputs[0].value.trim());
+        fd.append("attempted_at", inputs[1].value.trim());
+        fd.append("notes", inputs[2].value.trim());
+        const res = await fetch(`/api/password-spray/attempt/${attemptId}`, { method: "POST", body: fd });
+        const data = await res.json();
+        if (data.ok) {
+          const attempt = getAttempt();
+          if (attempt) {
+            attempt.password = data.password || "";
+            attempt.attempted_at = data.attempted_at || "";
+            attempt.notes = data.notes || "";
+          }
+        }
+      } catch (_) {}
+    };
+    const save = () => {
+      clearTimeout(timer);
+      timer = setTimeout(saveNow, 400);
     };
     row.querySelectorAll("input").forEach(inp => {
-      inp.addEventListener("input", save);
-      inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); save(); } });
+      inp.addEventListener("input", () => { syncState(); save(); });
+      inp.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); syncState(); saveNow(); } });
+      inp.addEventListener("blur", () => { if (timer) { clearTimeout(timer); timer = null; saveNow(); } });
     });
   }
 
   function bindSprayInputRow(row, serviceId) {
+    let committing = false;
     const commit = async () => {
+      if (committing) return;
       const inputs = row.querySelectorAll("input");
       const password = inputs[0].value.trim();
       const attemptedAt = inputs[1].value.trim();
       const notes = inputs[2].value.trim();
       if (!password && !attemptedAt && !notes) return;
+      committing = true;
       try {
         const fd = new FormData();
         fd.append("service_id", serviceId);
@@ -421,10 +451,19 @@
         const data = await res.json();
         if (data.ok) {
           const svc = sprayServices.find(s => s.id === serviceId);
-          if (svc) svc.attempts.push(data);
+          if (svc) {
+            svc.attempts.push({
+              id: data.id,
+              password: data.password || "",
+              attempted_at: data.attempted_at || "",
+              notes: data.notes || "",
+            });
+          }
           renderSprayAttempts(serviceId);
         }
-      } catch (_) {}
+      } catch (_) {} finally {
+        committing = false;
+      }
     };
     row.querySelectorAll("input").forEach(inp => {
       inp.addEventListener("blur", commit);

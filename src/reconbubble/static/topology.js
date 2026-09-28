@@ -40,7 +40,8 @@
         id: nodeId,
         label: label,
         type: type,
-        color: n.color || "#1f6feb",
+        color: n.color || (type === "domain" ? "#16a34a" : "#1f6feb"),
+        domain_bg: n.domain_bg || (type === "domain" ? "#16a34a" : n.color || "#1f6feb"),
         notes: n.notes || "",
         floating_notes: Array.isArray(n.floating_notes) ? n.floating_notes : [],
         compromised: !!n.compromised,
@@ -120,10 +121,10 @@
         selector: 'node[type = "domain"]',
         style: {
           "shape": "ellipse",
-         "width": 76,
-           "height": 76,
-          "background-color": "#16a34a",
-          "border-color": "#14532d",
+          "width": 76,
+            "height": 76,
+           "background-color": "data(domain_bg)",
+           "border-color": "#14532d",
           "border-width": 3,
           "text-wrap": "wrap",
       "text-max-width": 400,
@@ -907,7 +908,8 @@
       id: n.id(),
       label: n.data("label") || "Node",
       type: n.data("type") || "computer",
-      color: n.data("color") || "#1f6feb",
+      color: n.data("color") || (n.data("type") === "domain" ? "#16a34a" : "#1f6feb"),
+      domain_bg: n.data("domain_bg") || (n.data("type") === "domain" ? "#16a34a" : n.data("color") || "#1f6feb"),
       notes: n.data("notes") || "",
       floating_notes: Array.isArray(n.data("floating_notes")) ? n.data("floating_notes") : [],
       compromised: !!n.data("compromised"),
@@ -1089,13 +1091,15 @@
     const label = type.charAt(0).toUpperCase() + type.slice(1);
     const icon = ICONS[type] || "📍";
     const isNote = type === "note";
+    const isDomain = type === "domain";
     const node = cy.add({
       group: "nodes",
       data: {
         id: `n${nextNodeId++}`,
         label: `${label} ${nextNodeId - 1}`,
         type: type,
-        color: "#1f6feb",
+        color: isDomain ? "#16a34a" : "#1f6feb",
+        domain_bg: isDomain ? "#16a34a" : "#1f6feb",
         notes: "",
         floating_notes: [],
         compromised: false,
@@ -1693,6 +1697,9 @@
 
     const isDomain = d.type === "domain";
     const isUser = d.type === "user";
+    const colorValue = isDomain
+      ? d.domain_bg || "#16a34a"
+      : d.color || "#1f6feb";
     const registrarSection = isDomain ? `
       <div style="margin-top:12px; padding-top:10px; border-top:1px solid #1e2630;">
         <label>ASN</label>
@@ -1718,7 +1725,7 @@
       <label>Label</label>
       <input id="topoLabel" value="${escapeHtml(d.label || "")}" />
       <label style="margin-top:8px;">Color</label>
-      <input id="topoColor" type="color" value="${escapeHtml(d.color || "#1f6feb")}" />
+      <input id="topoColor" type="color" value="${escapeHtml(colorValue)}" />
       <label class="checkbox-label" style="margin-top:10px;">
         <input id="topoCompromised" type="checkbox" ${d.compromised ? "checked" : ""} />
         Mark as compromised
@@ -1760,7 +1767,9 @@
       queueSave();
     });
     colorEl && colorEl.addEventListener("input", () => {
-      node.data("color", colorEl.value || "#1f6feb");
+      const value = colorEl.value || (isDomain ? "#16a34a" : "#1f6feb");
+      if (isDomain) node.data("domain_bg", value);
+      node.data("color", value);
       queueSave();
     });
     notesEl && notesEl.addEventListener("input", () => {

@@ -122,6 +122,7 @@
 .svc-modal-head h2 { margin:0; font-size:18px; }
 .svc-modal-title-group { display:flex; gap:8px; align-items:center; min-width:0; }
 .svc-modal-title-group h2 { margin:0; }
+#servicePopup, #hostPopup { overscroll-behavior: contain; }
 .btn-sm { padding:5px 9px; font-size:12px; }
 
 /* --- Popup content --- */
@@ -142,7 +143,26 @@
 </style>
 
 <script>
-const servicesData = {{ rows | tojson }};
+let currentServiceDetails = null;
+let scrollLocked = false;
+let prevBodyOverflow = "";
+let prevHtmlOverflow = "";
+
+function syncBodyScrollLock() {
+  const serviceOpen = !document.getElementById("serviceOverlay").classList.contains("hidden");
+  const hostOpen = !document.getElementById("hostOverlay").classList.contains("hidden");
+  if ((serviceOpen || hostOpen) && !scrollLocked) {
+    prevBodyOverflow = document.body.style.overflow || "";
+    prevHtmlOverflow = document.documentElement.style.overflow || "";
+    document.body.style.overflow = "hidden";
+    document.documentElement.style.overflow = "hidden";
+    scrollLocked = true;
+  } else if (!serviceOpen && !hostOpen && scrollLocked) {
+    document.body.style.overflow = prevBodyOverflow;
+    document.documentElement.style.overflow = prevHtmlOverflow;
+    scrollLocked = false;
+  }
+}
 
 document.querySelectorAll(".service-row").forEach(row => {
   row.addEventListener("click", (e) => {
@@ -154,39 +174,46 @@ document.querySelectorAll(".service-row").forEach(row => {
 });
 
 function showServicePopup(port, proto) {
-  const svc = servicesData.find(s => s.port === port && s.proto === proto);
-  if (!svc) return;
-  
   const overlay = document.getElementById("serviceOverlay");
   const title = document.getElementById("popupTitle");
   const content = document.getElementById("popupContent");
-  
+
   title.textContent = `Port ${port}/${proto}`;
-  
-  let html = ``;
-  
-  // Fetch research info
-  fetch(`/api/port-research/${port}`)
-    .then(r => r.json())
-    .then(research => {
-      if (research.url || research.notes) {
-        html += `<div class="section-header">Research</div>`;
-        if (research.notes) {
-          html += `<p style="margin:8px 0; font-size:13px;">${research.notes}</p>`;
-        }
-        if (research.url) {
-          html += `<p style="margin:8px 0;"><a href="${research.url}" target="_blank" class="btn">Open Research Page</a></p>`;
-        }
-        content.innerHTML = html + getServiceDetails(svc);
-      } else {
-        content.innerHTML = getServiceDetails(svc);
+  currentServiceDetails = null;
+  content.innerHTML = `<p class="muted">Loading service details...</p>`;
+  overlay.classList.remove("hidden");
+  syncBodyScrollLock();
+
+  const detailUrl = `/api/service-port/${port}/${proto}${window.location.search || ""}`;
+
+  Promise.all([
+    fetch(`/api/port-research/${port}`, { cache: "no-store" })
+      .then(r => r.ok ? r.json() : {})
+      .catch(() => ({})),
+    fetch(detailUrl, { cache: "no-store" })
+      .then(async r => {
+        if (!r.ok) throw new Error(`Failed to load service details (${r.status})`);
+        return r.json();
+      })
+  ]).then(([research, payload]) => {
+    if (!payload.ok) throw new Error(payload.error || "Failed to load service details");
+    currentServiceDetails = payload;
+
+    let html = ``;
+    if (research.url || research.notes) {
+      html += `<div class="section-header">Research</div>`;
+      if (research.notes) {
+        html += `<p style="margin:8px 0; font-size:13px;">${research.notes}</p>`;
       }
-      overlay.classList.remove("hidden");
-    })
-    .catch(() => {
-      content.innerHTML = getServiceDetails(svc);
-      overlay.classList.remove("hidden");
-    });
+      if (research.url) {
+        html += `<p style="margin:8px 0;"><a href="${research.url}" target="_blank" class="btn">Open Research Page</a></p>`;
+      }
+    }
+    content.innerHTML = html + getServiceDetails(currentServiceDetails);
+  }).catch(err => {
+    currentServiceDetails = null;
+    content.innerHTML = `<p class="muted">Failed to load service details: ${err.message}</p>`;
+  });
 }
 
 function getServiceDetails(svc) {
@@ -250,9 +277,7 @@ function getServiceDetails(svc) {
 }
 
 function updateServiceInspected(cb, checked) {
-  const svc = servicesData.find(
-    (x) => x.port === Number(cb.dataset.port) && x.proto === cb.dataset.proto
-  );
+  const svc = currentServiceDetails;
   if (svc) {
     const ho = svc.host_outputs.find((x) => x.service_id === Number(cb.dataset.serviceId));
     if (ho) ho.inspected = checked ? 1 : 0;
@@ -261,8 +286,8 @@ function updateServiceInspected(cb, checked) {
         0,
         Math.min(svc.tracked_count, svc.inspected_count + (checked ? 1 : -1))
       );
+      svc.port_complete = svc.tracked_count > 0 && svc.inspected_count >= svc.tracked_count;
     }
-    svc.port_complete = svc.tracked_count > 0 && svc.inspected_count >= svc.tracked_count;
   }
 
   const header = cb.closest(".scanner-output-header");
@@ -318,11 +343,13 @@ let currentServicePopupService = null;
 
 document.getElementById("popupClose").addEventListener("click", () => {
   document.getElementById("serviceOverlay").classList.add("hidden");
+  syncBodyScrollLock();
 });
 
 document.getElementById("serviceOverlay").addEventListener("click", (e) => {
   if (e.target.id === "serviceOverlay") {
     document.getElementById("serviceOverlay").classList.add("hidden");
+    syncBodyScrollLock();
   }
 });
 
@@ -333,6 +360,7 @@ async function openHostFromService(hostId, hostLabel) {
   document.getElementById("hostPopupTitle").textContent = hostLabel;
   document.getElementById("hostPopupContent").innerHTML = `<p class="muted">Loading host details...</p>`;
   document.getElementById("hostOverlay").classList.remove("hidden");
+  syncBodyScrollLock();
   
   try {
     const resp = await fetch(`/api/hosts/${hostId}`);
@@ -382,6 +410,7 @@ function renderHostPopupContent(host) {
 document.getElementById("hostPopupClose").addEventListener("click", () => {
   document.getElementById("hostOverlay").classList.add("hidden");
   currentServicePopupService = null;
+  syncBodyScrollLock();
 });
 
 document.getElementById("hostPopupBack").addEventListener("click", (e) => {
@@ -397,12 +426,14 @@ document.getElementById("hostPopupBack").addEventListener("click", (e) => {
     }
   }
   currentServicePopupService = null;
+  syncBodyScrollLock();
 });
 
 document.getElementById("hostOverlay").addEventListener("click", (e) => {
   if (e.target.id === "hostOverlay") {
     document.getElementById("hostOverlay").classList.add("hidden");
     currentServicePopupService = null;
+    syncBodyScrollLock();
   }
 });
 

@@ -796,6 +796,34 @@ def migrate_sqlite(engine) -> None:
                 )
             )
 
+        # web_protocol_probes table
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS web_protocol_probes (
+          id INTEGER PRIMARY KEY,
+          fqdn VARCHAR(255) NOT NULL,
+          port INTEGER NOT NULL,
+          target_ip VARCHAR(64) DEFAULT '',
+          scheme VARCHAR(16) DEFAULT '',
+          http_status INTEGER DEFAULT 0,
+          https_status INTEGER DEFAULT 0,
+          error TEXT DEFAULT '',
+          created_at DATETIME,
+          UNIQUE(fqdn, port, target_ip)
+        )
+        """)
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_web_protocol_probes_fqdn ON web_protocol_probes(fqdn)"
+            )
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_web_protocol_probes_port ON web_protocol_probes(port)"
+            )
+        )
+
         # smb_shares: add user_id column if missing
         try:
             if conn.execute(
@@ -831,6 +859,11 @@ def migrate_sqlite(engine) -> None:
                 conn.execute(
                     text(
                         "CREATE INDEX IF NOT EXISTS ix_services_inspected ON services(inspected)"
+                    )
+                )
+                conn.execute(
+                    text(
+                        "CREATE INDEX IF NOT EXISTS ix_services_state_port_proto ON services(state, port, proto)"
                     )
                 )
         except Exception:
