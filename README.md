@@ -38,10 +38,10 @@ reconbubble --database workspace.sqlite --project ProjectName run --port 5000
 --bind ADDRESS 	Bind address. Defaults to localhost only.
 --browser-dir PATH	  Workspace browser directory	Explicit Playwright browser directory.
 --listen-all  	Listen on all interfaces.
---ephemeral-browser	Off	Use a temporary Playwright browser directory for this run.
---ram-browser	Off	Use a temporary RAM-backed browser directory when /dev/shm is available.
---install-browser	Off	Install Playwright Chromium before starting if it is missing.
---with-deps	Off	Pass --with-deps to Playwright when installing Chromium. Only used with --install-browser.
+--ephemeral-browser		Use a temporary Playwright browser directory for this run.
+--ram-browser		Use a temporary RAM-backed browser directory when /dev/shm is available.
+--install-browser		Install Playwright Chromium before starting if it is missing.
+--with-deps		Pass --with-deps to Playwright when installing Chromium. Only used with --install-browser.
 --help	—	Show run help.
 
 Notes:
