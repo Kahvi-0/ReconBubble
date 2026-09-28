@@ -32,3 +32,20 @@ pip install -e .
 mkdir reconbubble && cd reconbubble
 reconbubble --database workspace.sqlite --project ProjectName run --port 5000
 ```
+
+```
+-p, --port	TCP port to listen on (Default 5000).
+--bind ADDRESS 	Bind address. Defaults to localhost only.
+--browser-dir PATH	  Workspace browser directory	Explicit Playwright browser directory.
+--listen-all  	Listen on all interfaces.
+--ephemeral-browser	Off	Use a temporary Playwright browser directory for this run.
+--ram-browser	Off	Use a temporary RAM-backed browser directory when /dev/shm is available.
+--install-browser	Off	Install Playwright Chromium before starting if it is missing.
+--with-deps	Off	Pass --with-deps to Playwright when installing Chromium. Only used with --install-browser.
+--help	—	Show run help.
+
+Notes:
+--browser-dir cannot be combined with --ephemeral-browser or --ram-browser.
+--bind 0.0.0.0 is refused unless --listen-all is used.
+Ephemeral browser directories are removed when the server exits.
+```
