@@ -16,6 +16,9 @@ from sqlalchemy.orm import Session
 
 from .db import make_engine, make_session, Base, migrate_sqlite
 from .workspace import Workspace
+from . import netproxy
+from . import nsecatalog
+from .nse import SEVERITY_RANK
 from .models import (
     Host,
     Service,
@@ -47,6 +50,8 @@ from .models import (
     WebScreenshot,
     WebProtocolProbe,
     ServiceApiKey,
+    NseResult,
+    ServiceFinding,
 )
 from .parsers import (
     upsert_artifact,
@@ -170,6 +175,17 @@ def create_app(
     db_path: Path, workspace_root: Path | None = None, project_name: str = ""
 ) -> FastAPI:
     ws = Workspace.from_db(db_path, workspace_root)
+    try:
+        netproxy.mirror_env()
+    except netproxy.ProxyConfigError as e:
+        # stderr: line-buffered, so the warning survives log redirection and
+        # signals a misconfiguration the user should notice (stdout prints are
+        # block-buffered and can be lost if the process is killed).
+        print(
+            f"[Startup] {netproxy.ENV_VAR} misconfigured ({e}); continuing without a proxy.",
+            file=sys.stderr,
+        )
+        os.environ.pop(netproxy.ENV_VAR, None)
     engine = make_engine(ws.db_path)
     Base.metadata.create_all(engine)
     migrate_sqlite(engine)
@@ -1907,7 +1923,14 @@ def create_app(
             services = s.execute(
                 select(Service).where(Service.host_id == host.id)
             ).scalars().all()
-            
+
+            host_findings = s.execute(
+                select(ServiceFinding).where(
+                    ServiceFinding.host_id == host.id,
+                    ServiceFinding.service_id.is_(None),
+                )
+            ).scalars().all()
+
             return {
                 "ok": True,
                 "host": {
@@ -1925,6 +1948,20 @@ def create_app(
                             "version": svc.version,
                         }
                         for svc in services
+                    ],
+                    "findings": [
+                        {
+                            "script": f.script_name,
+                            "kind": f.kind,
+                            "severity": f.severity,
+                            "title": f.title,
+                            "detail": f.detail,
+                            "cves": f.cves,
+                        }
+                        for f in sorted(
+                            host_findings,
+                            key=lambda f: (SEVERITY_RANK.get(f.severity, 99), f.title),
+                        )
                     ],
                     "tags": [t.strip() for t in host.tag.split(",") if t.strip()],
                 },
@@ -2419,6 +2456,16 @@ def create_app(
             )
         return {"executable_path": str(executable_path)}
 
+    def _screenshot_proxy_options() -> dict:
+        settings = netproxy.proxy_settings()
+        if not settings:
+            return {}
+        proxy = {"server": f"socks5://{settings['host']}:{settings['port']}"}
+        if settings["username"]:
+            proxy["username"] = settings["username"]
+            proxy["password"] = settings["password"]
+        return {"proxy": proxy}
+
     def _screenshot_browser_launch_error(exc: Exception, port: int | None = None) -> RuntimeError:
         message = str(exc)
         if "Executable doesn't exist" in message or "playwright install" in message:
@@ -2445,6 +2492,7 @@ def create_app(
                 "executable_path": str(executable_path),
                 "exists": exists,
                 "env_executable": executable_override,
+                "proxy": netproxy.describe(),
                 "install_command": "",
                 "install_command_uv": "",
                 "error": "" if exists else f"Executable not found: {executable_path}",
@@ -2464,6 +2512,7 @@ def create_app(
                 "executable_path": str(executable_path),
                 "exists": exists,
                 "env_executable": "",
+                "proxy": netproxy.describe(),
                 "install_command": _screenshot_browser_install_command() if not exists else "",
                 "install_command_uv": _screenshot_browser_uv_install_command(port) if not exists else "",
                 "error": "" if exists else "Playwright Chromium executable is missing.",
@@ -2476,6 +2525,7 @@ def create_app(
                 "executable_path": "",
                 "exists": False,
                 "env_executable": "",
+                "proxy": netproxy.describe(),
                 "install_command": _screenshot_browser_install_command(),
                 "install_command_uv": _screenshot_browser_uv_install_command(port),
                 "error": str(e)[:500],
@@ -2581,6 +2631,7 @@ def create_app(
                     browser = await p.chromium.launch(
                         headless=True,
                         args=launch_args or [],
+                        **_screenshot_proxy_options(),
                         **_screenshot_browser_options(),
                     )
                 except Exception as e:
@@ -2927,11 +2978,11 @@ def create_app(
         addr: str, port: int, host_header: str, use_tls: bool, timeout: float = 5.0
     ) -> tuple[int, str]:
         try:
-            sock = socket.create_connection((addr, port), timeout=timeout)
+            sock = netproxy.socks5_connect(addr, port, timeout=timeout)
         except socket.timeout:
             return 0, "timeout"
         except OSError:
-            return 0, "connect-error"
+            return 0, "proxy-error" if netproxy.proxy_settings() else "connect-error"
         try:
             if use_tls:
                 ctx = ssl.create_default_context()
@@ -7890,6 +7941,11 @@ def create_app(
         ips, subnets, domains, _email_domains, domain_all_subs, _domain_subs_if_ip, excluded = scope_sets(s)
         hosts_by_id = {host.id: host for host in s.execute(select(Host)).scalars()}
         services = s.execute(select(Service).where(Service.state == "open")).scalars().all()
+        findings_by_service = {}
+        for f in s.execute(
+            select(ServiceFinding).where(ServiceFinding.service_id.isnot(None))
+        ).scalars().all():
+            findings_by_service.setdefault(f.service_id, []).append(f)
         service_map = {}
         scope_cache = {}
         for svc in services:
@@ -7915,6 +7971,7 @@ def create_app(
                     "products": set(),
                     "tracked_service_ids": set(),
                     "inspected_service_ids": set(),
+                    "finding_sevs": [],
                 }
             data = service_map[key]
             if host_in:
@@ -7924,6 +7981,9 @@ def create_app(
                 data["tracked_service_ids"].add(svc.id)
                 if int(svc.inspected or 0) == 1:
                     data["inspected_service_ids"].add(svc.id)
+                data["finding_sevs"].extend(
+                    f.severity for f in findings_by_service.get(svc.id, ())
+                )
             if svc.service_name:
                 data["service_types"].add(svc.service_name)
             if svc.product:
@@ -7934,6 +7994,12 @@ def create_app(
                 continue
             tracked_count = len(data["tracked_service_ids"])
             inspected_count = len(data["inspected_service_ids"])
+            finding_sevs = data["finding_sevs"]
+            worst = (
+                min(finding_sevs, key=lambda x: SEVERITY_RANK.get(x, 99))
+                if finding_sevs
+                else None
+            )
             rows.append(
                 {
                     "port": data["port"],
@@ -7944,6 +8010,7 @@ def create_app(
                     "tracked_count": tracked_count,
                     "inspected_count": inspected_count,
                     "port_complete": bool(tracked_count) and data["inspected_service_ids"] == data["tracked_service_ids"],
+                    "findings": {"count": len(finding_sevs), "worst": worst},
                 }
             )
         rows.sort(key=lambda x: (x["port"], x["proto"]))
@@ -8048,8 +8115,20 @@ def create_app(
                 if hostname:
                     cleaned = cleaned.replace(hostname, "<HOST>")
                 data["host_outputs"][host_id]["outputs"].add(cleaned[:800])
+        findings_by_svc = {}
+        if service_host_by_id:
+            for f in s.execute(
+                select(ServiceFinding).where(
+                    ServiceFinding.service_id.in_(list(service_host_by_id.keys()))
+                )
+            ).scalars().all():
+                findings_by_svc.setdefault(f.service_id, []).append(f)
         output_rows = []
         for ho in data["host_outputs"].values():
+            f_list = sorted(
+                findings_by_svc.get(ho["service_id"], ()),
+                key=lambda f: (SEVERITY_RANK.get(f.severity, 99), f.title),
+            )
             output_rows.append(
                 {
                     "host": ho["host"],
@@ -8058,8 +8137,40 @@ def create_app(
                     "service_name": ho["service_name"],
                     "inspected": ho["inspected"],
                     "counted": ho["counted"],
+                    "findings": [
+                        {
+                            "script": f.script_name,
+                            "kind": f.kind,
+                            "severity": f.severity,
+                            "title": f.title,
+                            "detail": f.detail,
+                            "cves": f.cves,
+                        }
+                        for f in f_list
+                    ],
                 }
             )
+        suggestions = []
+        suggestion_command = ""
+        try:
+            cat = nsecatalog.get_catalog()
+            primary_type = sorted(data["service_types"])[0] if data["service_types"] else ""
+            suggested = cat.suggest(primary_type, data["port"], limit=8)
+            for sc in suggested:
+                desc = (sc.description or "").strip()
+                suggestions.append(
+                    {
+                        "name": sc.name,
+                        "description": desc.splitlines()[0][:200] if desc else "",
+                        "categories": sorted(sc.categories),
+                    }
+                )
+            if suggested:
+                suggestion_command = nsecatalog.render_nmap_command(
+                    suggested, data["port"], "<target>"
+                )
+        except Exception:
+            pass
         tracked_count = len(data["tracked_service_ids"])
         inspected_count = len(data["inspected_service_ids"])
         return {
@@ -8073,6 +8184,8 @@ def create_app(
             "tracked_count": tracked_count,
             "inspected_count": inspected_count,
             "port_complete": bool(tracked_count) and data["inspected_service_ids"] == data["tracked_service_ids"],
+            "suggestions": suggestions,
+            "suggestion_command": suggestion_command,
         }
 
     @app.get("/services", response_class=HTMLResponse)
@@ -9140,6 +9253,16 @@ def create_app(
     def api_rdap(domain: str):
         import urllib.request, json, socket
 
+        def _fetch(url: str, timeout: float = 10.0) -> str:
+            """HTTPS GET with verified TLS; tunnels via RECONBUBBLE_PROXY when set."""
+            if netproxy.proxy_settings():
+                return netproxy.https_get(
+                    url, timeout=timeout, headers={"User-Agent": "ReconBubble/1.0"}
+                )
+            req = urllib.request.Request(url, headers={"User-Agent": "ReconBubble/1.0"})
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", errors="ignore")
+
         domain = domain.lower().strip()
 
         out = {"domainName": domain}
@@ -9147,9 +9270,7 @@ def create_app(
 
         # Try whois first (port 43)
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(10)
-            s.connect(("whois.iana.org", 43))
+            s = netproxy.socks5_connect("whois.iana.org", 43, timeout=10.0)
             s.send(f"{domain}\r\n".encode())
             response = b""
             while True:
@@ -9214,12 +9335,8 @@ def create_app(
                 host = rdap_servers.get(tld, "rdap.org")
                 try:
                     url = f"https://{host}/domain/{domain}"
-                    req = urllib.request.Request(
-                        url, headers={"User-Agent": "ReconBubble/1.0"}
-                    )
-                    with urllib.request.urlopen(req, timeout=10) as resp:
-                        raw = resp.read().decode("utf-8", errors="ignore")
-                        data = json.loads(raw) if raw else {}
+                    raw = _fetch(url)
+                    data = json.loads(raw) if raw else {}
                     if isinstance(data, dict):
                         entities = {}
                         for e in data.get("entities", []):
@@ -9316,12 +9433,8 @@ def create_app(
             host = rdap_servers.get(tld, "rdap.org")
             try:
                 url = f"https://{host}/domain/{domain}"
-                req = urllib.request.Request(
-                    url, headers={"User-Agent": "ReconBubble/1.0"}
-                )
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    raw = resp.read().decode("utf-8", errors="ignore")
-                    data = json.loads(raw) if raw else {}
+                raw = _fetch(url)
+                data = json.loads(raw) if raw else {}
                 if not isinstance(data, dict):
                     error_msg = "Invalid RDAP response"
                     raise Exception(error_msg)

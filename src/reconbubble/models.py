@@ -126,6 +126,68 @@ class ServiceEvidence(Base):
     artifact: Mapped["Artifact"] = relationship()
 
 
+class NseResult(Base):
+    """Structured result of a single Nmap <script> element.
+
+    service_id is set for port-level <script> results; host_id (with
+    service_id NULL) is set for <hostscript> results.
+    """
+
+    __tablename__ = "nse_results"
+    __table_args__ = (
+        UniqueConstraint("service_id", "script_name", name="uq_nse_service_script"),
+    )
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    service_id: Mapped[int | None] = mapped_column(
+        ForeignKey("services.id"), nullable=True, index=True
+    )
+    host_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hosts.id"), nullable=True, index=True
+    )
+    artifact_id: Mapped[int] = mapped_column(ForeignKey("artifacts.id"), index=True)
+    script_name: Mapped[str] = mapped_column(String(128), index=True)
+    output: Mapped[str] = mapped_column(Text, default="")
+    data_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+    service: Mapped["Service | None"] = relationship()
+    host: Mapped["Host | None"] = relationship()
+
+
+class ServiceFinding(Base):
+    """A vulnerability or misconfiguration derived from an NSE script result.
+
+    Derived offline from stored scan data (Risk factor, script output); no
+    external lookups. service_id NULL + host_id set = host-level finding
+    (from <hostscript>).
+    """
+
+    __tablename__ = "service_findings"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    service_id: Mapped[int | None] = mapped_column(
+        ForeignKey("services.id"), nullable=True, index=True
+    )
+    host_id: Mapped[int | None] = mapped_column(
+        ForeignKey("hosts.id"), nullable=True, index=True
+    )
+    script_name: Mapped[str] = mapped_column(String(128), index=True)
+    kind: Mapped[str] = mapped_column(
+        String(16), index=True
+    )  # vulnerability | misconfiguration | info
+    severity: Mapped[str] = mapped_column(
+        String(16), default="info", index=True
+    )  # critical | high | medium | low | info
+    title: Mapped[str] = mapped_column(String(255), default="")
+    detail: Mapped[str] = mapped_column(Text, default="")
+    cves: Mapped[str] = mapped_column(String(255), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+    service: Mapped["Service | None"] = relationship()
+    host: Mapped["Host | None"] = relationship()
+
+
 class Document(Base):
     __tablename__ = "documents"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

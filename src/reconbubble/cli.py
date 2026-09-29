@@ -6,9 +6,26 @@ import typer, uvicorn
 from .workspace import Workspace
 from .db import make_engine, make_session, Base, migrate_sqlite
 from .parsers import upsert_artifact, import_nmap_xml, import_subdomains, import_emails, import_document
+from . import nsecatalog
+from .nse import reanalyze_artifact
+from .models import Artifact
 from .webapp import create_app
+from . import netproxy
 
-app = typer.Typer(add_completion=False, help="ReconBubble - local-only recon/OSINT workspace")
+app = typer.Typer(
+    add_completion=False,
+    help="ReconBubble - local-only recon/OSINT workspace",
+    epilog=(
+        "Environment variables:\n"
+        "  RECONBUBBLE_PROXY - socks5://user:pass@host:port - route all outbound traffic\n"
+        "    (screenshots, web probes, whois/RDAP, external tools) through a SOCKS5 proxy.\n"
+        "    Same as --proxy on run. No auth needed? Use socks5://host:port.\n"
+        "  RECONBUBBLE_BROWSER_DIR - explicit Playwright browser directory (server mode)\n"
+        "  RECONBUBBLE_CHROMIUM_EXECUTABLE - system Chromium to use instead of Playwright's\n"
+        "  RECONBUBBLE_DB / RECONBUBBLE_PROJECT - storage + project (server mode)\n"
+        "  PLAYWRIGHT_BROWSERS_PATH - browser location used by Playwright"
+    ),
+)
 
 def _browser_install_env(target: Path) -> dict:
     env = os.environ.copy()
@@ -128,6 +145,81 @@ def import_docs(ctx: typer.Context, path: Path):
             total += import_document(s, art, stored)
     typer.echo(f"Imported {total} document(s)")
 
+nse_app = typer.Typer(add_completion=False, help="NSE script catalog and finding analysis (local, no nmap needed)")
+app.add_typer(nse_app, name="nse")
+
+@nse_app.command("list")
+def nse_list(
+    ctx: typer.Context,
+    category: str = typer.Option("", "--category", "-c", help="Only show scripts with this category (vuln, safe, default, intrusive, ...)"),
+    limit: int = typer.Option(0, "--limit", "-n", help="Max number of scripts to show (0 = all)"),
+):
+    cat = nsecatalog.get_catalog()
+    if not cat.scripts:
+        typer.echo("NSE catalog not available (set RECONBUBBLE_NSE_DIR or install nmap scripts).")
+        raise typer.Exit(1)
+    names = sorted(cat.scripts)
+    if category:
+        c = category.lower()
+        names = [n for n in names if c in cat.scripts[n].categories]
+    shown = names[:limit] if limit > 0 else names
+    for n in shown:
+        sc = cat.scripts[n]
+        desc = (sc.description or "").strip().splitlines()
+        first = desc[0][:72] if desc else ""
+        typer.echo(f"{n}\t{','.join(sorted(sc.categories))}\t{first}")
+    typer.echo(f"{len(shown)} of {len(names)} script(s)")
+
+@nse_app.command("show")
+def nse_show(ctx: typer.Context, script: str):
+    cat = nsecatalog.get_catalog()
+    sc = cat.scripts.get(script)
+    if sc is None:
+        typer.echo(f"Script not found in catalog: {script}")
+        raise typer.Exit(1)
+    typer.echo(f"Name:        {sc.name}")
+    typer.echo(f"Categories:  {', '.join(sorted(sc.categories))}")
+    if sc.ports:
+        typer.echo(f"Ports:       {sorted(sc.ports)}")
+    if sc.services:
+        typer.echo(f"Services:    {', '.join(sorted(sc.services))}")
+    if sc.cves:
+        typer.echo(f"References:  {', '.join(sc.cves)}")
+    desc = (sc.description or "").strip()
+    if desc:
+        typer.echo("")
+        typer.echo(desc)
+    if sc.usage:
+        typer.echo("")
+        typer.echo(sc.usage.strip())
+
+@nse_app.command("reanalyze")
+def nse_reanalyze(ctx: typer.Context):
+    """Re-derive NSE script results and findings from stored nmap_xml artifacts.
+
+    Backfills projects imported before NSE analysis existed, or re-applies
+    derivation after catalog/heuristic changes.
+    """
+    from sqlalchemy import select
+    cfg = ctx.obj
+    ws = Workspace.from_db(cfg["database"], cfg["workspace"])
+    engine = make_engine(ws.db_path); Base.metadata.create_all(engine); migrate_sqlite(engine)
+    SessionLocal = make_session(engine)
+    with SessionLocal() as s:
+        arts = s.execute(
+            select(Artifact).where(Artifact.type == "nmap_xml").order_by(Artifact.id)
+        ).scalars().all()
+        if not arts:
+            typer.echo("No nmap_xml artifacts to reanalyze.")
+            return
+        total = 0
+        for art in arts:
+            n = reanalyze_artifact(s, art, art.stored_path)
+            total += n
+            typer.echo(f"artifact {art.id} ({art.filename}): {n} script result(s)")
+        s.commit()
+    typer.echo(f"Reanalyzed {len(arts)} artifact(s); {total} script result(s) stored.")
+
 @app.command()
 def install_browser(
     ctx: typer.Context,
@@ -151,6 +243,7 @@ def run(
     port: int = typer.Option(5000, "--port", "-p"),
     bind: str = typer.Option("127.0.0.1", "--bind", help="Bind address (default localhost only)"),
     listen_all: bool = typer.Option(False, "--listen-all", help="Listen on all interfaces (0.0.0.0) instead of localhost only"),
+    proxy: str = typer.Option("", "--proxy", help="Route outbound traffic (screenshots, web probes, whois/RDAP, external tools) through a SOCKS5 proxy, e.g. socks5://user:pass@127.0.0.1:1080"),
     browser_dir: Path | None = typer.Option(None, "--browser-dir", help="Explicit Playwright browser directory"),
     ephemeral_browser: bool = typer.Option(False, "--ephemeral-browser", help="Use a temporary Playwright browser directory for this run"),
     ram_browser: bool = typer.Option(False, "--ram-browser", help="Use a temporary RAM-backed Playwright browser directory when /dev/shm is available"),
@@ -162,6 +255,14 @@ def run(
     if bind == "0.0.0.0" and not listen_all:
         typer.echo("Refusing to bind to 0.0.0.0 (non-local). Use --listen-all to listen on all interfaces or --bind 127.0.0.1 for local-only.")
         raise typer.Exit(code=2)
+    if proxy:
+        try:
+            netproxy.parse_proxy_url(proxy)
+        except netproxy.ProxyConfigError as e:
+            typer.echo(f"Invalid --proxy value: {e}")
+            raise typer.Exit(code=2)
+        os.environ[netproxy.ENV_VAR] = proxy
+        typer.echo(f"Proxy: {netproxy.describe()}")
     if browser_dir and (ephemeral_browser or ram_browser):
         typer.echo("Use either --browser-dir or --ephemeral-browser/--ram-browser, not both.")
         raise typer.Exit(code=2)

@@ -27,6 +27,7 @@
         <th style="width:120px;">Port</th>
         <th>Service</th>
         <th>Products</th>
+        <th style="width:130px;">Findings</th>
         <th style="width:110px;">Hosts</th>
       </tr>
     </thead>
@@ -42,11 +43,12 @@
           {{ r.products[0] if r.products else '-' }}
           {% if r.products|length > 1 %}<span class="pill svc-more">+{{ r.products|length - 1 }} versions</span>{% endif %}
         </td>
+        <td>{% if r.findings and r.findings.count %}<span class="sev-pill sev-{{ r.findings.worst or 'info' }}" title="Worst severity: {{ r.findings.worst or 'info' }}">{{ r.findings.count }} finding{{ 's' if r.findings.count != 1 }}</span>{% else %}<span class="muted">-</span>{% endif %}</td>
         <td><span class="pill host-pill">{{ r.host_count }} host{{ 's' if r.host_count != 1 }}</span></td>
       </tr>
       {% else %}
       <tr>
-        <td colspan="4" class="svc-empty">No in-scope services found.</td>
+        <td colspan="5" class="svc-empty">No in-scope services found.</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -115,6 +117,34 @@
   border:1px solid rgba(245,158,11,.35);
   color:#fde68a;
 }
+
+/* --- Severity pills & finding cards --- */
+.sev-pill {
+  display:inline-block;
+  margin-left:8px;
+  padding:1px 8px;
+  border-radius:999px;
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:.3px;
+  vertical-align:middle;
+  border:1px solid;
+  white-space:nowrap;
+}
+.finding .sev-pill { margin-left:0; flex-shrink:0; }
+.sev-critical { background:rgba(239,68,68,.24); border-color:rgba(239,68,68,.60); color:#fecaca; }
+.sev-high { background:rgba(239,68,68,.14); border-color:rgba(239,68,68,.42); color:#fca5a5; }
+.sev-medium { background:rgba(245,158,11,.14); border-color:rgba(245,158,11,.42); color:#fde68a; }
+.sev-low { background:rgba(59,130,246,.14); border-color:rgba(59,130,246,.42); color:#bfdbfe; }
+.sev-info { background:rgba(148,163,184,.14); border-color:rgba(148,163,184,.38); color:#cbd5e1; }
+.finding { display:flex; gap:10px; padding:10px 12px; margin:8px 0; background:#141a22; border:1px solid #212b36; border-radius:8px; }
+.finding-body { min-width:0; flex:1; }
+.finding-title { font-size:13px; font-weight:600; color:#dde5ee; }
+.finding-meta { font-size:11px; color:#7f8a97; margin-top:2px; }
+.finding-detail { font-size:12px; color:#9fb2c8; margin-top:6px; line-height:1.45; }
+.cve-pill { border-color:rgba(239,68,68,.42); color:#fca5a5; background:rgba(239,68,68,.08); font-family:ui-monospace,SFMono-Regular,monospace; }
+.script-name { font-family:ui-monospace,SFMono-Regular,monospace; color:#9ad; font-size:12px; }
+.nmap-cmd { color:#cfe3f5; border-left-color:#4a7eb0; }
 
 /* --- Modal --- */
 .svc-modal { max-width:650px; width:92vw; max-height:85vh; overflow:auto; background:#10161d; border:1px solid #1e2630; border-radius:14px; padding:20px; box-shadow:0 12px 40px rgba(0,0,0,.55); }
@@ -216,6 +246,57 @@ function showServicePopup(port, proto) {
   });
 }
 
+function escHtml(s) {
+  return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function findingCard(f) {
+  const cves = f.cves ? String(f.cves).split(",").map(c => c.trim()).filter(Boolean) : [];
+  let h = `<div class="finding">`;
+  h += `<span class="sev-pill sev-${escHtml(f.severity)}">${escHtml(f.severity)}</span>`;
+  h += `<div class="finding-body">`;
+  h += `<div class="finding-title">${escHtml(f.title)}</div>`;
+  h += `<div class="finding-meta">[${escHtml(f.script)}] &middot; ${escHtml(f.kind)}</div>`;
+  if (f.detail) h += `<div class="finding-detail">${escHtml(f.detail)}</div>`;
+  if (cves.length) h += `<div class="chip-row" style="margin-top:6px;">${cves.map(c => `<span class="pill cve-pill">${escHtml(c)}</span>`).join("")}</div>`;
+  h += `</div></div>`;
+  return h;
+}
+
+function findingsSection(title, findings) {
+  if (!findings || findings.length === 0) return "";
+  let h = `<div class="section-header">${escHtml(title)} (${findings.length})</div>`;
+  for (const f of findings) h += findingCard(f);
+  return h;
+}
+
+function copyNmapCommand() {
+  const el = document.getElementById("nmapCmd");
+  const btn = document.getElementById("copyNmapBtn");
+  if (!el) return;
+  const text = el.textContent;
+  const done = () => {
+    if (!btn) return;
+    btn.textContent = "Copied!";
+    setTimeout(() => { btn.textContent = "Copy command"; }, 1500);
+  };
+  const fallback = () => {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); done(); } catch {}
+    ta.remove();
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(done).catch(fallback);
+  } else {
+    fallback();
+  }
+}
+
 function getServiceDetails(svc) {
   let html = ``;
   
@@ -240,7 +321,10 @@ function getServiceDetails(svc) {
   } else {
     html += `<p class="muted">-</p>`;
   }
-  
+
+  const allFindings = (svc.host_outputs || []).flatMap(ho => ho.findings || []);
+  html += findingsSection("Findings", allFindings);
+
   html += `<div class="section-header">Hosts (${svc.host_count})</div>`;
   html += `<div class="collapsible" onclick="this.classList.toggle('open'); this.nextElementSibling.classList.toggle('open');">`;
   html += `<span>Show ${svc.host_count} hosts</span>`;
@@ -272,7 +356,22 @@ function getServiceDetails(svc) {
       }
     }
   }
-  
+
+  if (svc.suggestions && svc.suggestions.length > 0) {
+    html += `<div class="section-header">Suggested NSE Scripts</div>`;
+    html += `<p class="svc-no-output">Safe scripts from the local Nmap catalog worth running against this service. Intrusive, brute, exploit and DoS scripts are excluded.</p>`;
+    for (const sc of svc.suggestions) {
+      const cats = sc.categories && sc.categories.length ? ` <span class="pill svc-more">${sc.categories.join(", ")}</span>` : "";
+      html += `<div class="host-item"><span class="script-name">${escHtml(sc.name)}</span>${cats}`;
+      if (sc.description) html += `<div class="finding-meta">${escHtml(sc.description)}</div>`;
+      html += `</div>`;
+    }
+    if (svc.suggestion_command) {
+      html += `<pre class="scan-out nmap-cmd" id="nmapCmd">${escHtml(svc.suggestion_command)}</pre>`;
+      html += `<button class="btn btn-sm" id="copyNmapBtn" onclick="copyNmapCommand()">Copy command</button>`;
+    }
+  }
+
   return html;
 }
 
@@ -382,7 +481,9 @@ function renderHostPopupContent(host) {
   html += `<p><strong>Hostname:</strong> ${host.hostname || '-'}</p>`;
   html += `<p><strong>OS:</strong> ${host.os || '-'}</p>`;
   html += `<p><strong>Status:</strong> ${host.status || '-'}</p>`;
-  
+
+  html += findingsSection("Host-level Findings", host.findings);
+
   if (host.services && host.services.length > 0) {
     html += `<div class="section-header">Services (${host.services.length})</div>`;
     html += `<div class="collapsible" onclick="this.classList.toggle('open'); this.nextElementSibling.classList.toggle('open');">`;

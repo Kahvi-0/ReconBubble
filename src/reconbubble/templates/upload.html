@@ -4,7 +4,7 @@
 <div class="card" style="border:1px solid #c33;">
   <h2 style="margin-top:0;">Upload error</h2>
   <p>{{ error }}</p>
-  <p class="muted">Tip: generate XML with <code>nmap -sV -oX scan.xml TARGET</code> (or <code>-oA name</code> and upload <code>name.xml</code>).</p>
+  <p class="muted">Tip: generate XML with <code>nmap -sV -sC --script vuln -oX scan.xml TARGET</code> (or <code>-oA name</code> and upload <code>name.xml</code>). NSE <code>&lt;script&gt;</code> results are analyzed locally to surface vulnerabilities and misconfigurations; suggested NSE scripts appear on the Services page.</p>
 </div>
 {% endif %}
 

@@ -19,6 +19,8 @@ from pathlib import Path
 
 import yaml
 
+from . import netproxy
+
 # Strict target validation: lowercase FQDN, labels start alphanumeric,
 # never begins with "-" so the target can't be parsed as an option.
 TARGET_RE = re.compile(
@@ -929,11 +931,21 @@ def run_web_sources(target: str) -> dict:
     any_success = False
     for name, url in sources.items():
         try:
-            req = urllib.request.Request(
-                url, headers={"User-Agent": "Mozilla/5.0 (ReconBubble)"}
-            )
-            with urllib.request.urlopen(req, timeout=_WEB_SOURCE_TIMEOUT) as resp:
-                text = resp.read(_WEB_SOURCE_READ_CAP).decode("utf-8", "ignore")
+            if netproxy.proxy_settings():
+                text = netproxy.https_get(
+                    url,
+                    timeout=_WEB_SOURCE_TIMEOUT,
+                    headers={"User-Agent": "Mozilla/5.0 (ReconBubble)"},
+                    max_bytes=_WEB_SOURCE_READ_CAP,
+                )
+            else:
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": "Mozilla/5.0 (ReconBubble)"}
+                )
+                with urllib.request.urlopen(
+                    req, timeout=_WEB_SOURCE_TIMEOUT
+                ) as resp:
+                    text = resp.read(_WEB_SOURCE_READ_CAP).decode("utf-8", "ignore")
             found = extract_fqdns(text, target)
             all_found.extend(found)
             any_success = True

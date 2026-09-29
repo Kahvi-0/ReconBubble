@@ -23,6 +23,7 @@ from .models import (
     DocExtractedSoftware,
     SmbShare,
 )
+from .nse import upsert_script_result
 from .workspace import sha256_file
 
 
@@ -508,7 +509,7 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
             "Upload the file nmap wrote with -oX."
         )
     total_hosts = len(root.findall("host"))
-    host_count = service_count = evidence_count = 0
+    host_count = service_count = evidence_count = nse_count = 0
     batch = 50
     processed = 0
     for host in root.findall("host"):
@@ -602,6 +603,9 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
                 out = script.get("output", "") or ""
                 if sid or out:
                     outputs.append(f"[{sid}] {out}".strip())
+                nse_count += upsert_script_result(
+                    session, db_host.id, db_svc.id, artifact.id, script
+                )
 
             header = f"{db_host.ip} {portid}/{proto} {state_s} {service_name} {product} {version} {extrainfo}".strip()
             raw = header + ("\n" + "\n".join(outputs) if outputs else "")
@@ -613,6 +617,14 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
                 )
                 evidence_count += 1
 
+        # Host-level <hostscript> results attach to the host with
+        # service_id NULL.
+        for hscript in host.findall("hostscript"):
+            for script in hscript.findall("script"):
+                nse_count += upsert_script_result(
+                    session, db_host.id, None, artifact.id, script
+                )
+
         processed += 1
         if processed % batch == 0:
             session.commit()
@@ -622,6 +634,7 @@ def import_nmap_xml(session: Session, artifact: Artifact, path: Path) -> dict:
         "services_added": service_count,
         "evidence_added": evidence_count,
         "total_hosts": total_hosts,
+        "nse_results": nse_count,
     }
     if note:
         result["notice"] = note
