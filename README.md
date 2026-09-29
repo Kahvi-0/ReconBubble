@@ -38,6 +38,7 @@ reconbubble --database workspace.sqlite --project ProjectName run --port 5000
 --bind ADDRESS 	Bind address. Defaults to localhost only.
 --browser-dir PATH	  Workspace browser directory	Explicit Playwright browser directory.
 --listen-all  	Listen on all interfaces.
+--proxy address:port   SOCKs proxy 
 
 # Headless browser used with some web features
 --install-browser		(recommneded) Install Playwright Chromium before starting if it is missing inside the workspace directory.
