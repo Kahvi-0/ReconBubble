@@ -93,10 +93,11 @@ pre.evidence, pre.note { white-space: pre-wrap; margin: 0; font-size: 12px; line
 }
 .topbar-right { display:flex; align-items:center; gap:12px; margin-left:auto; }
 .firegif-right { margin-right:12px; }
-.jobs-indicator { display:inline-flex; align-items:center; gap:8px; padding:4px 12px; border-radius:999px; background:#0f141b; border:1px solid #2a3a4a; color:#e8e8e8; font-size:12px; cursor:pointer; max-width:360px; }
-.jobs-indicator:hover { border-color:#4a9eff; }
+.jobs-indicator { position:relative; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; padding:0; border-radius:50%; background:#0f141b; border:1px solid #2a3a4a; cursor:pointer; outline-offset:2px; }
+.jobs-indicator:hover, .jobs-indicator:focus-visible { border-color:#4a9eff; }
 .jobs-indicator[hidden] { display:none; }
-#jobsIndicatorLabel { white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.jobs-tooltip { position:absolute; top:calc(100% + 8px); right:0; display:none; z-index:1000; min-width:120px; max-width:340px; padding:8px 10px; background:#0f141b; border:1px solid #2a3a4a; border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.5); font-size:12px; line-height:1.5; color:#e8e8e8; white-space:pre-line; pointer-events:none; }
+.jobs-indicator:hover .jobs-tooltip, .jobs-indicator:focus-visible .jobs-tooltip { display:block; }
 .jobs-spinner { width:12px; height:12px; flex:0 0 auto; border:2px solid #2a3a4a; border-top-color:#49dcb1; border-radius:50%; animation:jobsSpin .8s linear infinite; }
 @keyframes jobsSpin { to { transform:rotate(360deg); } }
 

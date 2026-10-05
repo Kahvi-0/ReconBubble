@@ -33,9 +33,10 @@ def resolve_ips(fqdn: str, timeout: float = 5.0) -> list[str]:
     try:
         for fam in (socket.AF_INET, socket.AF_INET6):
             try:
+                # NB: getaddrinfo() takes no timeout argument; a hung lookup
+                # blocks this worker only (concurrency is bounded by the pool).
                 infos = socket.getaddrinfo(
                     fqdn, None, family=fam, type=socket.SOCK_STREAM,
-                    timeout=timeout,
                 )
             except Exception:
                 continue

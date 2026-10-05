@@ -120,7 +120,7 @@ def migrate_sqlite(engine) -> None:
         except Exception:
             pass
 
-        # subdomains: add prowl columns if missing
+        # subdomains: add prowl, complete, inprogress, and waf columns if missing
         try:
             if conn.execute(
                 text(
@@ -144,6 +144,18 @@ def migrate_sqlite(engine) -> None:
                         text(
                             "ALTER TABLE subdomains ADD COLUMN prowl_netblocks TEXT DEFAULT ''"
                         )
+                    )
+                if not _has_column(conn, "subdomains", "complete"):
+                    conn.execute(
+                        text("ALTER TABLE subdomains ADD COLUMN complete INTEGER DEFAULT 0")
+                    )
+                if not _has_column(conn, "subdomains", "inprogress"):
+                    conn.execute(
+                        text("ALTER TABLE subdomains ADD COLUMN inprogress INTEGER DEFAULT 0")
+                    )
+                if not _has_column(conn, "subdomains", "waf"):
+                    conn.execute(
+                        text("ALTER TABLE subdomains ADD COLUMN waf INTEGER DEFAULT 0")
                     )
         except Exception:
             pass

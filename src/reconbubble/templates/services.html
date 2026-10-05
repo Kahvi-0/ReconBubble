@@ -33,7 +33,7 @@
     </thead>
     <tbody>
       {% for r in rows %}
-      <tr class="service-row" data-port="{{ r.port }}" data-proto="{{ r.proto }}" data-tracked-count="{{ r.tracked_count }}" data-inspected-count="{{ r.inspected_count }}">
+      <tr class="service-row{% if r.port_complete %} row-complete{% endif %}" data-port="{{ r.port }}" data-proto="{{ r.proto }}" data-tracked-count="{{ r.tracked_count }}" data-inspected-count="{{ r.inspected_count }}">
         <td><span class="port-badge">{{ r.port }}/{{ r.proto }}</span>{% if r.port_complete %}<span class="port-complete-tag">Completed</span>{% endif %}</td>
         <td>
           {{ r.service_types[0] if r.service_types else '-' }}
@@ -85,6 +85,9 @@
 .svc-table tbody tr:nth-child(even) { background:rgba(255,255,255,.015); }
 .svc-table .service-row { cursor:pointer; }
 .svc-table .service-row:hover td { background:rgba(74,158,255,.08); }
+.svc-table tbody tr.row-complete { background:rgba(34,197,94,.05); }
+.svc-table .service-row.row-complete:hover td { background:rgba(34,197,94,.10); }
+.svc-table tbody tr.row-complete td:first-child { box-shadow:inset 2px 0 0 rgba(34,197,94,.35); }
 .svc-more { border-color:rgba(120,150,180,.35); color:#9fb2c8; background:rgba(120,150,180,.10); }
 .host-pill { border-color:rgba(80,200,120,.35); color:#bff2cf; background:rgba(80,200,120,.10); }
 .svc-empty { text-align:center; padding:32px 16px !important; color:#7f8a97; }
@@ -120,29 +123,40 @@
 
 /* --- Severity pills & finding cards --- */
 .sev-pill {
-  display:inline-block;
+  display:inline-flex;
+  align-items:center;
+  gap:4px;
   margin-left:8px;
-  padding:1px 8px;
+  padding:0 7px 0 5px;
   border-radius:999px;
-  font-size:10px;
-  font-weight:700;
-  letter-spacing:.3px;
+  font-size:9px;
+  font-weight:600;
+  letter-spacing:.04em;
   vertical-align:middle;
   border:1px solid;
   white-space:nowrap;
 }
+.sev-pill::before {
+  content:"";
+  width:5px;
+  height:5px;
+  border-radius:50%;
+  background:currentColor;
+  flex-shrink:0;
+}
 .finding .sev-pill { margin-left:0; flex-shrink:0; }
-.sev-critical { background:rgba(239,68,68,.24); border-color:rgba(239,68,68,.60); color:#fecaca; }
-.sev-high { background:rgba(239,68,68,.14); border-color:rgba(239,68,68,.42); color:#fca5a5; }
-.sev-medium { background:rgba(245,158,11,.14); border-color:rgba(245,158,11,.42); color:#fde68a; }
-.sev-low { background:rgba(59,130,246,.14); border-color:rgba(59,130,246,.42); color:#bfdbfe; }
-.sev-info { background:rgba(148,163,184,.14); border-color:rgba(148,163,184,.38); color:#cbd5e1; }
+.sev-critical { background:rgba(239,68,68,.12); border-color:rgba(239,68,68,.42); color:#fca5a5; }
+.sev-high { background:rgba(239,68,68,.07); border-color:rgba(239,68,68,.32); color:#fca5a5; }
+.sev-medium { background:rgba(245,158,11,.08); border-color:rgba(245,158,11,.32); color:#fde68a; }
+.sev-low { background:rgba(59,130,246,.08); border-color:rgba(59,130,246,.32); color:#bfdbfe; }
+.sev-info { background:rgba(148,163,184,.08); border-color:rgba(148,163,184,.30); color:#cbd5e1; }
 .finding { display:flex; gap:10px; padding:10px 12px; margin:8px 0; background:#141a22; border:1px solid #212b36; border-radius:8px; }
 .finding-body { min-width:0; flex:1; }
 .finding-title { font-size:13px; font-weight:600; color:#dde5ee; }
 .finding-meta { font-size:11px; color:#7f8a97; margin-top:2px; }
 .finding-detail { font-size:12px; color:#9fb2c8; margin-top:6px; line-height:1.45; }
 .cve-pill { border-color:rgba(239,68,68,.42); color:#fca5a5; background:rgba(239,68,68,.08); font-family:ui-monospace,SFMono-Regular,monospace; }
+.svc-findings-sub { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; color:#7f8a97; margin:10px 0 4px; }
 .script-name { font-family:ui-monospace,SFMono-Regular,monospace; color:#9ad; font-size:12px; }
 .nmap-cmd { color:#cfe3f5; border-left-color:#4a7eb0; }
 
@@ -322,9 +336,6 @@ function getServiceDetails(svc) {
     html += `<p class="muted">-</p>`;
   }
 
-  const allFindings = (svc.host_outputs || []).flatMap(ho => ho.findings || []);
-  html += findingsSection("Findings", allFindings);
-
   html += `<div class="section-header">Hosts (${svc.host_count})</div>`;
   html += `<div class="collapsible" onclick="this.classList.toggle('open'); this.nextElementSibling.classList.toggle('open');">`;
   html += `<span>Show ${svc.host_count} hosts</span>`;
@@ -353,6 +364,10 @@ function getServiceDetails(svc) {
         }
       } else {
         html += `<div class="svc-no-output">No scanner output captured.</div>`;
+      }
+      if (ho.findings && ho.findings.length > 0) {
+        html += `<div class="svc-findings-sub">Findings (${ho.findings.length})</div>`;
+        for (const f of ho.findings) html += findingCard(f);
       }
     }
   }
@@ -413,8 +428,10 @@ function updateServiceInspected(cb, checked) {
     if (portBadge) {
       portBadge.insertAdjacentHTML("afterend", '<span class="port-complete-tag">Completed</span>');
     }
+    tr.classList.add("row-complete");
   } else if (!complete && portTag) {
     portTag.remove();
+    tr.classList.remove("row-complete");
   }
 }
 

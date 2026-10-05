@@ -84,6 +84,7 @@ from .tools import (
     find_tool,
     run_tool,
     run_cero,
+    run_vhost_socket,
     run_builtin,
     _CERO_DEFAULT_PORTS,
     keys_for_tool,
@@ -92,9 +93,29 @@ from .tools import (
     tool_config_preview,
     tool_version,
     validate_target,
+    validate_wordlist,
+    validate_socket,
+    validate_ip,
+    validate_resolvers,
+    run_rev_dns,
+    REVDNS_RESOLVERS,
+    REVDNS_MAX_IPS,
+    _materialize_wordlist,
 )
 
 _WEB_PORTS = frozenset({80, 443, 8080, 8443, 8000, 8888})
+# Ports commonly serving HTTP(S) -- the default vhost-bruteforce socket set.
+_VHOST_SOCKET_PORTS = frozenset(
+    {
+        80, 443, 3000, 3001, 4000, 4443, 5000, 5001, 5080, 6443,
+        7000, 7001, 7443, 8000, 8001, 8002, 8008, 8009, 8010, 8025,
+        8080, 8081, 8082, 8083, 8084, 8085, 8086, 8087, 8088, 8089,
+        8090, 8091, 8092, 8093, 8094, 8095, 8096, 8097, 8098, 8099,
+        8118, 8180, 8181, 8222, 8443, 8500, 8880, 8888, 8899, 9000,
+        9001, 9080, 9090, 9091, 9200, 9443, 9999, 10000, 10443, 15672,
+        18080, 20080,
+    }
+)
 _WEB_SERVICE_NAME_RE = re.compile(r"(?i)(?:^|[^a-z])https?(?=$|[^a-z])")
 _WEB_PRODUCT_RE = re.compile(
     r"(?i)(?:apache|httpd|net/http|waitress|gunicorn|werkzeug|nginx|caddy|envoy|\biis\b)"
@@ -3607,6 +3628,195 @@ def create_app(
                         job["current_label"] += " · error (see log)"
                 return
 
+            if spec.name == "gobuster_vhost":
+                # VHost brute-force: one gobuster vhost pass per ip:port socket;
+                # catch-all responses are filtered and SHA-256 verified in-process
+                # (see run_vhost_socket). One artifact per socket.
+                sockets = [x for x in (job.get("sockets") or targets) if x]
+                job["current_label"] = f"Brute-forcing vhosts on {len(sockets)} socket(s)..."
+                job["updated_at"] = datetime.utcnow().isoformat()
+                wl_path = ""
+                used_discovered = False
+                try:
+                    wl = (job.get("wordlist") or "").strip()
+                    used_discovered = job.get("wordlist_source") == "discovered"
+                    if not used_discovered and not wl:
+                        # Default: brute-force the subdomains already discovered
+                        # in the database; fall back to the tool's generic
+                        # wordlist only when nothing has been discovered yet.
+                        with SessionLocal() as s:
+                            used_discovered = (
+                                s.scalar(select(func.count()).select_from(Subdomain)) > 0
+                            )
+                    if used_discovered:
+                        with SessionLocal() as s:
+                            fqdns = [
+                                f for f in s.execute(
+                                    select(Subdomain.fqdn).order_by(Subdomain.fqdn)
+                                ).scalars().all() if f
+                            ]
+                        fd, wl_path = tempfile.mkstemp(prefix="vhost_discovered_", suffix=".txt")
+                        try:
+                            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                                fh.write("\n".join(fqdns) + ("\n" if fqdns else ""))
+                        except Exception:
+                            os.close(fd)
+                            raise
+                        wl_desc = f"discovered({len(fqdns)})"
+                    else:
+                        wl = wl or spec.wordlist_default or ""
+                        if wl.lower().startswith(("http://", "https://")):
+                            wl_path = await asyncio.to_thread(_materialize_wordlist, wl)
+                        else:
+                            wl_path = wl
+                        wl_desc = wl
+                    for i, sock in enumerate(sockets, 1):
+                        n = len(sockets)
+                        job["current_label"] = (
+                            f"VHost {sock} ({i}/{n})..." if n > 1 else f"VHost {sock}..."
+                        )
+                        job["updated_at"] = datetime.utcnow().isoformat()
+                        result = await asyncio.to_thread(
+                            run_vhost_socket, spec, sock, wl_path, ws.bin_dir
+                        )
+                        lines = result.get("lines") or []
+                        header = (
+                            f"# tool=vhost target={sock} wordlist={wl_desc} job={job_id} "
+                            f"ts={datetime.utcnow().isoformat()}"
+                        )
+                        fname = f"vhost_{sock.replace(':', '_')}_{job_id[:8]}.txt"
+                        tail = ""
+                        if lines:
+                            total_found += len(lines)
+                            stored = ws.store_text(
+                                header + "\n" + "\n".join(lines) + "\n",
+                                fname, prefix="tool_run",
+                            )
+                            with SessionLocal() as s:
+                                art = upsert_artifact(s, "subdomains_tool", stored)
+                                added = import_subdomains(s, art, stored)
+                                last_artifact_id = art.id
+                            total_added += added
+                            tail = f"# done found={len(lines)} added={added}\n"
+                            if not result.get("ok"):
+                                err_text = result.get("error") or "vhost error"
+                                target_errors.append(f"{sock}: {err_text[:300]}")
+                                tail += (
+                                    f"# error={sock}: {err_text.replace(chr(10), ' | ')[:500]}\n"
+                                )
+                        else:
+                            if not result.get("ok"):
+                                err_text = (result.get("error") or "no vhost hits")
+                                target_errors.append(f"{sock}: {err_text[:300]}")
+                                tail = (
+                                    f"# error={sock}: {err_text.replace(chr(10), ' | ')[:500]}\n"
+                                )
+                            tail += "# done found=0 added=0\n"
+                            stored = ws.store_text(header + "\n", fname, prefix="tool_run")
+                            with SessionLocal() as s:
+                                upsert_artifact(s, "subdomains_tool", stored)
+                        logs = _log_lines(result)
+                        if tail or logs:
+                            with stored.open("a", encoding="utf-8") as fh:
+                                fh.write(tail)
+                                if logs:
+                                    fh.write("\n".join(logs) + "\n")
+                finally:
+                    # Only unlink the discovered-subdomain temp list; wordlists
+                    # materialized from URLs are cached and reused by other jobs.
+                    if used_discovered and wl_path:
+                        try:
+                            os.unlink(wl_path)
+                        except OSError:
+                            pass
+                job["found"] = total_found
+                job["added"] = total_added
+                job["skipped"] = max(0, total_found - total_added)
+                job["artifact_id"] = last_artifact_id
+                if target_errors and total_found == 0:
+                    job["status"] = "failed"
+                    job["error"] = target_errors[0][:500]
+                    job["current_label"] = "Failed"
+                else:
+                    job["status"] = "completed"
+                    job["error"] = ""
+                    if total_found:
+                        job["current_label"] = (
+                            f"Done: {total_added} new, {total_found - total_added} already known"
+                        )
+                    else:
+                        job["current_label"] = "Done: no vhosts found"
+                    if target_errors:
+                        job["current_label"] += f" · {len(target_errors)} socket(s) failed (see log)"
+                return
+
+            if spec.name == "dnsx_reverse":
+                # Reverse DNS: one dnsx -ptr pass over all selected IPs
+                # (stdin), single run against the resolver set. Found FQDNs
+                # are imported directly; a zero-hit run is a legitimate
+                # "no PTR records" completion, not a failure.
+                ips = [x for x in (job.get("ips") or targets) if x]
+                resolvers = (job.get("resolvers") or ",".join(REVDNS_RESOLVERS)).strip()
+                job["current_label"] = f"Resolving PTR records for {len(ips)} IP(s)..."
+                job["updated_at"] = datetime.utcnow().isoformat()
+                result = await asyncio.to_thread(run_rev_dns, spec, ips, resolvers, ws.bin_dir)
+                lines = result.get("lines") or []
+                header = (
+                    f"# tool=revdns target={len(ips)} "
+                    f"resolvers={len(resolvers.split(','))} "
+                    f"job={job_id} ts={datetime.utcnow().isoformat()}"
+                )
+                fname = f"revdns_{job_id[:8]}.txt"
+                if lines:
+                    total_found += len(lines)
+                    stored = ws.store_text(header + "\n" + "\n".join(lines) + "\n", fname, prefix="tool_run")
+                    with SessionLocal() as s:
+                        art = upsert_artifact(s, "subdomains_tool", stored)
+                        added = import_subdomains(s, art, stored)
+                        last_artifact_id = art.id
+                    total_added += added
+                    tail = f"# done found={len(lines)} added={added}\n"
+                    if not result.get("ok"):
+                        err_text = result.get("error") or "revdns error"
+                        target_errors.append(f"revdns: {err_text[:300]}")
+                        tail += f"# error=revdns: {err_text.replace(chr(10), ' | ')[:500]}\n"
+                else:
+                    if not result.get("ok"):
+                        err_text = result.get("error") or "no PTR records found"
+                        target_errors.append(f"revdns: {err_text[:300]}")
+                        tail = f"# error=revdns: {err_text.replace(chr(10), ' | ')[:500]}\n"
+                    else:
+                        tail = ""
+                    tail += "# done found=0 added=0\n"
+                    stored = ws.store_text(header + "\n", fname, prefix="tool_run")
+                    with SessionLocal() as s:
+                        upsert_artifact(s, "subdomains_tool", stored)
+                logs = _log_lines(result)
+                if tail or logs:
+                    with stored.open("a", encoding="utf-8") as fh:
+                        fh.write(tail)
+                        if logs:
+                            fh.write("\n".join(logs) + "\n")
+                job["found"] = total_found
+                job["added"] = total_added
+                job["skipped"] = max(0, total_found - total_added)
+                job["artifact_id"] = last_artifact_id
+                if target_errors and total_found == 0:
+                    job["status"] = "failed"
+                    job["error"] = target_errors[0][:500]
+                    job["current_label"] = "Failed"
+                else:
+                    job["status"] = "completed"
+                    job["error"] = ""
+                    if total_found:
+                        job["current_label"] = (
+                            f"Done: {total_added} new, {total_found - total_added} already known"
+                        )
+                    else:
+                        job["current_label"] = "Done: no PTR records found"
+                return
+
+            wordlist_note = f" wordlist={job['wordlist']}" if job.get("wordlist") else ""
             for i, tgt in enumerate(targets, 1):
                 n = len(targets)
                 current_target = tgt
@@ -3619,7 +3829,9 @@ def create_app(
                 if spec.builtin:
                     result = await asyncio.to_thread(run_builtin, spec, tgt)
                 else:
-                    result = await asyncio.to_thread(run_tool, spec, tgt, ws.bin_dir, keys)
+                    result = await asyncio.to_thread(
+                        run_tool, spec, tgt, ws.bin_dir, keys, job.get("wordlist")
+                    )
                 if not result.get("fqdns"):
                     if result.get("ok"):
                         # Tool ran fine but found nothing: a valid result, not an error.
@@ -3629,7 +3841,7 @@ def create_app(
                     target_errors.append(f"{tgt}: {target_error[:300]}")
                     err_text = target_error.replace("\n", " | ")[:500]
                     header = (
-                        f"# tool={job['tool']} target={tgt} job={job_id} "
+                        f"# tool={job['tool']} target={tgt}{wordlist_note} job={job_id} "
                         f"ts={datetime.utcnow().isoformat()}"
                     )
                     body = (
@@ -3646,7 +3858,7 @@ def create_app(
                         upsert_artifact(s, "subdomains_tool", stored)
                     continue
                 header = (
-                    f"# tool={job['tool']} target={tgt} job={job_id} "
+                    f"# tool={job['tool']} target={tgt}{wordlist_note} job={job_id} "
                     f"ts={datetime.utcnow().isoformat()}"
                 )
                 body = "\n".join([header, *result["fqdns"]]) + "\n"
@@ -3765,6 +3977,8 @@ def create_app(
                         "input_mode": spec.input_mode,
                         "network_note": spec.network_note,
                         "install_commands": spec.install_commands,
+                        "repo_url": spec.repo_url,
+                        "wordlist_default": spec.wordlist_default,
                     }
                 )
                 continue
@@ -3780,6 +3994,8 @@ def create_app(
                     "input_mode": spec.input_mode,
                     "network_note": spec.network_note,
                     "install_commands": spec.install_commands,
+                    "repo_url": spec.repo_url,
+                    "wordlist_default": spec.wordlist_default,
                 }
             )
         return {"ok": True, "bin_dir": str(ws.bin_dir), "tools": out}
@@ -3823,6 +4039,68 @@ def create_app(
             "ok": True,
             "hosts": sub_hosts + ip_hosts,
             "default_ports": _CERO_DEFAULT_PORTS,
+        }
+
+    @app.get("/api/tools/vhost/sockets")
+    def api_tools_vhost_sockets():
+        """Open TCP ip:port sockets on web-ish ports, selectable as vhost targets."""
+        with db() as s:
+            rows = s.execute(
+                select(Host.ip, Service.port, Service.service_name)
+                .join(Service, Service.host_id == Host.id)
+                .where(Service.proto == "tcp", Service.state == "open")
+                .order_by(Host.ip, Service.port)
+            ).all()
+            items = []
+            seen = set()
+            for ip, port, svc in rows:
+                ip = (ip or "").strip()
+                if not ip or port is None:
+                    continue
+                if port not in _VHOST_SOCKET_PORTS:
+                    continue
+                key = f"{ip}:{port}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                items.append({
+                    "label": key + (f" ({svc})" if svc else ""),
+                    "value": key,
+                    "port": int(port),
+                })
+            discovered = s.scalar(select(func.count()).select_from(Subdomain))
+        return {"ok": True, "sockets": items, "discovered_count": int(discovered or 0)}
+
+    @app.get("/api/tools/revdns/ips")
+    def api_tools_revdns_ips():
+        """IPs from the hosts table, selectable as reverse-DNS targets."""
+        with db() as s:
+            rows = s.execute(
+                select(Host.ip, Host.hostname, Host.tag).order_by(Host.ip)
+            ).all()
+            items = []
+            seen = set()
+            for ip, hostname, tag in rows:
+                ip = (ip or "").strip()
+                if not ip or ip in seen:
+                    continue
+                try:
+                    canon = validate_ip(ip)
+                except ValueError:
+                    continue  # skip non-literal entries (defensive)
+                if canon in seen:
+                    continue
+                seen.add(canon)
+                label = canon
+                if hostname:
+                    label = f"{canon} ({hostname})"
+                elif tag:
+                    label = f"{canon} ({tag})"
+                items.append({"label": label, "value": canon})
+        return {
+            "ok": True,
+            "ips": items,
+            "default_resolvers": ",".join(REVDNS_RESOLVERS),
         }
 
     @app.post("/api/tools/run")
@@ -3898,6 +4176,149 @@ def create_app(
             app.state.tool_queue.put_nowait(job_id)
             _ensure_tool_worker()
             return {"ok": True, "job": _tool_public_job(job), "queue_position": _tool_queue_position(job_id)}
+        if spec.name == "gobuster_vhost":
+            raw_sockets = body.get("sockets")
+            if not isinstance(raw_sockets, list):
+                return JSONResponse({"ok": False, "error": "sockets must be a list"}, status_code=400)
+            sockets: list = []
+            for v in raw_sockets:
+                try:
+                    sock = validate_socket(str(v or ""))
+                except ValueError:
+                    return JSONResponse({"ok": False, "error": "invalid socket in list"}, status_code=400)
+                if sock not in sockets:
+                    sockets.append(sock)
+            if not sockets:
+                return JSONResponse({"ok": False, "error": "select at least one socket"}, status_code=400)
+            if len(sockets) > 20:
+                return JSONResponse(
+                    {"ok": False, "error": "too many sockets (max 20 per run)"}, status_code=400
+                )
+            wordlist = str(body.get("wordlist") or "").strip()
+            wordlist_source = str(body.get("wordlist_source") or "").strip()
+            if wordlist_source not in ("", "discovered"):
+                return JSONResponse({"ok": False, "error": "invalid wordlist_source"}, status_code=400)
+            if wordlist_source == "discovered":
+                with db() as s:
+                    fq_count = s.scalar(select(func.count()).select_from(Subdomain))
+                if not fq_count:
+                    return JSONResponse(
+                        {"ok": False, "error": "no discovered subdomains to use as a wordlist"},
+                        status_code=400,
+                    )
+                wordlist = ""  # discovered source overrides any pasted wordlist
+            elif wordlist:
+                try:
+                    wordlist = validate_wordlist(wordlist)
+                except ValueError as e:
+                    return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+            if not find_tool(spec.name, spec, ws.bin_dir):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": f"{spec.label} is not installed — see the Tools page for install commands.",
+                    },
+                    status_code=400,
+                )
+            _prune_tool_jobs()
+            if len(app.state.tool_queue_ids) >= 5:
+                return JSONResponse(
+                    {"ok": False, "error": "Tool run queue is full (max 5 waiting)"},
+                    status_code=409,
+                )
+            job_id = uuid.uuid4().hex
+            now = datetime.utcnow()
+            job = {
+                "id": job_id,
+                "tool": spec.name,
+                "target": f"{len(sockets)} socket(s)",
+                "targets": sockets,
+                "sockets": sockets,
+                "wordlist": wordlist,
+                "wordlist_source": wordlist_source,
+                "status": "pending",
+                "current_label": "Queued...",
+                "keys_applied": sorted(_tool_keys_for(spec.name).keys()),
+                "found": 0,
+                "added": 0,
+                "skipped": 0,
+                "artifact_id": None,
+                "error": "",
+                "created_at": now,
+                "updated_at": now,
+                "finished_at": None,
+            }
+            app.state.tool_jobs[job_id] = job
+            app.state.tool_queue_ids.append(job_id)
+            app.state.tool_queue.put_nowait(job_id)
+            _ensure_tool_worker()
+            return {"ok": True, "job": _tool_public_job(job), "queue_position": _tool_queue_position(job_id)}
+        if spec.name == "dnsx_reverse":
+            raw_ips = body.get("ips")
+            if not isinstance(raw_ips, list):
+                return JSONResponse({"ok": False, "error": "ips must be a list"}, status_code=400)
+            ips: list = []
+            for v in raw_ips:
+                try:
+                    ip = validate_ip(str(v or ""))
+                except ValueError:
+                    return JSONResponse(
+                        {"ok": False, "error": "invalid IP in list (IPv4/IPv6 literals only)"},
+                        status_code=400,
+                    )
+                if ip not in ips:
+                    ips.append(ip)
+            if not ips:
+                return JSONResponse({"ok": False, "error": "select at least one IP"}, status_code=400)
+            if len(ips) > REVDNS_MAX_IPS:
+                return JSONResponse(
+                    {"ok": False, "error": f"too many IPs (max {REVDNS_MAX_IPS} per run)"},
+                    status_code=400,
+                )
+            try:
+                resolvers = validate_resolvers(str(body.get("resolvers") or ""))
+            except ValueError as e:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+            if not find_tool(spec.name, spec, ws.bin_dir):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": f"{spec.label} is not installed — see the Tools page for install commands.",
+                    },
+                    status_code=400,
+                )
+            _prune_tool_jobs()
+            if len(app.state.tool_queue_ids) >= 5:
+                return JSONResponse(
+                    {"ok": False, "error": "Tool run queue is full (max 5 waiting)"},
+                    status_code=409,
+                )
+            job_id = uuid.uuid4().hex
+            now = datetime.utcnow()
+            job = {
+                "id": job_id,
+                "tool": spec.name,
+                "target": f"{len(ips)} IP(s)",
+                "targets": ips,
+                "ips": ips,
+                "resolvers": resolvers,
+                "status": "pending",
+                "current_label": "Queued...",
+                "keys_applied": sorted(_tool_keys_for(spec.name).keys()),
+                "found": 0,
+                "added": 0,
+                "skipped": 0,
+                "artifact_id": None,
+                "error": "",
+                "created_at": now,
+                "updated_at": now,
+                "finished_at": None,
+            }
+            app.state.tool_jobs[job_id] = job
+            app.state.tool_queue_ids.append(job_id)
+            app.state.tool_queue.put_nowait(job_id)
+            _ensure_tool_worker()
+            return {"ok": True, "job": _tool_public_job(job), "queue_position": _tool_queue_position(job_id)}
         tokens = [t for t in re.split(r"[,\s]+", target_raw) if t]
         if not tokens:
             return JSONResponse({"ok": False, "error": "target is required"}, status_code=400)
@@ -3914,6 +4335,12 @@ def create_app(
         except ValueError as e:
             return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
         target = " ".join(targets)
+        wordlist = str(body.get("wordlist") or "").strip()
+        if wordlist:
+            try:
+                wordlist = validate_wordlist(wordlist)
+            except ValueError as e:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
         if not spec.builtin and not find_tool(spec.name, spec, ws.bin_dir):
             return JSONResponse(
                 {
@@ -3935,6 +4362,7 @@ def create_app(
             "tool": spec.name,
             "target": target,
             "targets": targets,
+            "wordlist": wordlist,
             "status": "pending",
             "current_label": "Queued...",
             "keys_applied": sorted(_tool_keys_for(spec.name).keys()),

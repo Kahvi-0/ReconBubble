@@ -1,6 +1,9 @@
 // Global "running processes" indicator (top right of every page).
 // Polls /api/jobs/active, which aggregates every registered long-running
 // process (tool runs, screenshot jobs, and anything added in the future).
+//
+// Renders a bare spinner; the running jobs are shown in a tooltip on hover
+// (and via aria-label for screen readers).
 (function () {
   const POLL_MS = 2500;
 
@@ -11,8 +14,7 @@
   const box = el("globalJobsIndicator");
   if (!box) return;
 
-  const icon = el("jobsIndicatorIcon");
-  const label = el("jobsIndicatorLabel");
+  const tip = el("jobsIndicatorTip");
 
   let timer = null;
   let inFlight = false;
@@ -21,17 +23,19 @@
   function render() {
     if (!lastJobs.length) {
       box.hidden = true;
-      box.removeAttribute("title");
+      if (tip) tip.textContent = "";
+      box.setAttribute("aria-label", "");
       return;
     }
     box.hidden = false;
-    if (lastJobs.length === 1) {
-      label.textContent = lastJobs[0].label;
-      box.setAttribute("title", lastJobs[0].label);
-    } else {
-      label.textContent = lastJobs.length + " running";
-      box.setAttribute("title", lastJobs.map((j) => j.label).join("\n"));
-    }
+    const lines = lastJobs.map((j) => j.label);
+    if (tip) tip.textContent = lines.join("\n");
+    box.setAttribute(
+      "aria-label",
+      lines.length === 1
+        ? lines[0]
+        : lines.length + " jobs running: " + lines.join(", ")
+    );
   }
 
   function onClick() {
@@ -66,5 +70,11 @@
   }
 
   box.addEventListener("click", onClick);
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      onClick();
+    }
+  });
   start();
 })();

@@ -28,6 +28,10 @@
     <p class="muted">Target domains for <span id="toolTargetToolName2"></span>. In-scope domains are pre-filled, one per line — edit to keep the ones you want, or type any domain. Ctrl/Cmd+Enter to run.</p>
     <textarea id="toolTargetInput" rows="6" placeholder="one domain per line, e.g.&#10;example.com&#10;api.example.com" style="width:100%; box-sizing:border-box; min-height:150px; resize:vertical; font-family:inherit; line-height:1.6;"></textarea>
     <div id="toolTargetCount" class="muted" style="font-size:11px; margin-top:4px;"></div>
+    <div id="toolWordlistWrap" style="display:none; margin-top:10px;">
+      <label class="muted" for="toolWordlistInput" style="font-size:11px; display:block; margin-bottom:4px;">Wordlist &mdash; local file path or HTTP(S) URL (URL lists are downloaded automatically). Leave blank to use the default list.</label>
+      <input type="text" id="toolWordlistInput" spellcheck="false" autocomplete="off" style="width:100%; box-sizing:border-box; font-family:monospace; font-size:12px;" />
+    </div>
     <label class="checkbox-label" style="margin-top:10px;">
       <input type="checkbox" id="includeDiscovered" />
       Include already-discovered subdomains (<span id="discoveredCount">0</span>)
@@ -71,9 +75,83 @@
   </div>
 </div>
 
+<div id="vhostModal" class="overlay hidden" style="cursor:pointer;" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="card" style="max-width:680px; cursor:default;" onclick="event.stopPropagation()">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h2 style="margin:0;">Run gobuster (VHost)</h2>
+      <button class="btn" onclick="document.getElementById('vhostModal').classList.add('hidden')">X</button>
+    </div>
+    <p class="muted">Brute-force virtual hosts on open <code>ip:port</code> sockets &mdash; for vhosts that may not have public DNS records. Catch-all responses are filtered and every hit is verified (status + body hash vs a random Host).</p>
+    <div style="display:flex; gap:8px; margin:8px 0; align-items:center;">
+      <input type="text" id="vhostFilter" placeholder="Filter sockets…" style="flex:1; box-sizing:border-box;" />
+      <label class="checkbox-label" style="white-space:nowrap; font-size:12px;">
+        <input type="checkbox" id="vhostSelectAll" /> Select all
+      </label>
+    </div>
+    <div id="vhostSocketList" style="max-height:220px; overflow:auto; border:1px solid #d0d7de; border-radius:4px; padding:6px 8px; font-size:12px; background:#f6f8fa;"></div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; flex-wrap:wrap; gap:8px;">
+      <div class="muted" style="font-size:11px;"><span id="vhostCount">0</span> selected (max 20 per run)</div>
+      <p class="muted" style="font-size:11px; margin:0;">Sockets come from open TCP services on web-ish ports.</p>
+    </div>
+    <div style="margin-top:10px;">
+      <label class="muted" for="vhostExtraInput" style="font-size:11px; display:block; margin-bottom:4px;">Extra sockets &mdash; optional, <code>ip:port</code> one per line (merged with the selection above; use for ports outside the web set).</label>
+      <textarea id="vhostExtraInput" rows="2" placeholder="10.0.0.5:8443&#10;[2001:db8::1]:8080" style="width:100%; box-sizing:border-box; min-height:60px; resize:vertical; font-family:monospace; font-size:12px;"></textarea>
+    </div>
+    <div style="margin-top:10px;">
+      <label class="checkbox-label" style="display:block; font-size:12px;">
+        <input type="checkbox" id="vhostUseDiscovered" checked />
+        Use discovered subdomains as the wordlist (<span id="vhostDiscoveredCount">&hellip;</span>) &mdash; tries every FQDN in the database against each selected socket
+      </label>
+      <div id="vhostWordlistWrap" style="margin-top:8px;">
+        <label class="muted" for="vhostWordlistInput" style="font-size:11px; display:block; margin-bottom:4px;">Custom wordlist &mdash; local file path or HTTP(S) URL (URL lists are downloaded automatically). Used when the option above is off; leave blank to fall back to discovered subdomains (or the generic list if none are stored).</label>
+        <input type="text" id="vhostWordlistInput" spellcheck="false" autocomplete="off" style="width:100%; box-sizing:border-box; font-family:monospace; font-size:12px;" />
+      </div>
+    </div>
+    <div style="display:flex; gap:8px; margin-top:12px;">
+      <button class="btn" id="btnVhostGo">Run VHost</button>
+      <button class="btn" onclick="document.getElementById('vhostModal').classList.add('hidden')">Cancel</button>
+    </div>
+    <p id="vhostError" style="color:#ff6666; margin-top:8px; display:none;"></p>
+  </div>
+</div>
+
+<div id="revModal" class="overlay hidden" style="cursor:pointer;" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="card" style="max-width:680px; cursor:default;" onclick="event.stopPropagation()">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h2 style="margin:0;">Run Reverse DNS (dnsx)</h2>
+      <button class="btn" onclick="document.getElementById('revModal').classList.add('hidden')">X</button>
+    </div>
+    <p class="muted">Look up PTR (reverse DNS) records for in-scope IPs with <code>dnsx -ptr</code>. Found FQDNs are imported as discovered subdomains. IPs without a PTR record are skipped silently &mdash; a zero-hit run is a normal result.</p>
+    <div style="display:flex; gap:8px; margin:8px 0; align-items:center;">
+      <input type="text" id="revFilter" placeholder="Filter IPs…" style="flex:1; box-sizing:border-box;" />
+      <label class="checkbox-label" style="white-space:nowrap; font-size:12px;">
+        <input type="checkbox" id="revSelectAll" /> Select all
+      </label>
+    </div>
+    <div id="revIpList" style="max-height:220px; overflow:auto; border:1px solid #d0d7de; border-radius:4px; padding:6px 8px; font-size:12px; background:#f6f8fa;"></div>
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; flex-wrap:wrap; gap:8px;">
+      <div class="muted" style="font-size:11px;"><span id="revCount">0</span> selected (max 100 per run)</div>
+      <p class="muted" style="font-size:11px; margin:0;">IPs come from your scan results (hosts table).</p>
+    </div>
+    <div style="margin-top:10px;">
+      <label class="muted" for="revExtraInput" style="font-size:11px; display:block; margin-bottom:4px;">Extra IPs &mdash; optional, one per line (merged with the selection above; IPv4/IPv6 literals only).</label>
+      <textarea id="revExtraInput" rows="2" placeholder="203.0.113.7&#10;2001:db8::1" style="width:100%; box-sizing:border-box; min-height:60px; resize:vertical; font-family:monospace; font-size:12px;"></textarea>
+    </div>
+    <div style="margin-top:10px;">
+      <label class="muted" for="revResolversInput" style="font-size:11px; display:block; margin-bottom:4px;">Resolvers &mdash; comma-separated IP list (blank = built-in public set: Cloudflare, Google, Quad9, OpenDNS, AdGuard, Hetzner).</label>
+      <input type="text" id="revResolversInput" spellcheck="false" autocomplete="off" style="width:100%; box-sizing:border-box; font-family:monospace; font-size:12px;" />
+    </div>
+    <div style="display:flex; gap:8px; margin-top:12px;">
+      <button class="btn" id="btnRevGo">Run Reverse DNS</button>
+      <button class="btn" onclick="document.getElementById('revModal').classList.add('hidden')">Cancel</button>
+    </div>
+    <p id="revError" style="color:#ff6666; margin-top:8px; display:none;"></p>
+  </div>
+</div>
+
 <div class="card" style="margin-top:20px;">
   <h2>Discovery Log</h2>
-  <p class="muted">Every tool run and what it found, grouped by tool, newest first. Results merge into the <a href="/subdomains">Web Apps</a> table.</p>
+  <p class="muted">Discovered subdomains by scope, with the full per-tool run history below. Results merge into the <a href="/subdomains">Web Apps</a> table.</p>
   <div style="display:flex; gap:8px; margin:8px 0;" id="toolScopeToggles">
     <button class="btn btn-sm tool-scope-toggle" data-filter="in">In scope</button>
     <button class="btn btn-sm tool-scope-toggle" data-filter="out">Out of scope</button>
@@ -86,15 +164,41 @@
  .tool-scope-toggle.active { background:#2f5d8f; border-color:#4a9eff; }
  .scope-dot.in { color: #00ff00; }
  .scope-dot.out { color: #ff3333; }
- .tool-run-summary { cursor:pointer; list-style:none; font-size:13px; }
- .tool-run-summary::-webkit-details-marker { display:none; }
- .tool-run-arrow { display:inline-block; margin-right:4px; transition:transform .1s ease; }
- .tool-run[open] > .tool-run-summary .tool-run-arrow { transform:rotate(90deg); }
- .tool-run-body { padding:8px 2px 2px 20px; }
- .tool-targets { margin:0 0 8px; padding:0; list-style:none; font-size:12px; }
- .tool-targets li { margin:1px 0; }
- .tool-subs { list-style:none; padding:0; margin:0; max-height:320px; overflow:auto; }
+ #toolDiscoveryLog code { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; background:#0b0d10; border:1px solid #1e2630; border-radius:6px; padding:1px 6px; color:#d8e1ea; white-space:nowrap; }
+ .tool-run-arrow { display:inline-block; margin-right:2px; flex:none; transition:transform .1s ease; }
+ .dl-run[open] > .dl-run-head .tool-run-arrow { transform:rotate(90deg); }
+ .tool-subs { list-style:none; padding:0; margin:0; max-height:360px; overflow:auto; display:grid; grid-template-columns:1fr 1fr; column-gap:32px; }
  .tool-subs li { margin:3px 0; font-size:13px; }
+ @media (max-width: 900px) { .tool-subs { grid-template-columns:1fr; } }
+ /* Discovery log — run history */
+ .dl-tool { margin:10px 0; }
+ .dl-tool-head { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; border-bottom:1px solid #1e2630; padding-bottom:6px; }
+ .dl-count { font-size:11px; color:#9aa6b2; background:#0f141b; border:1px solid #2a3a4a; border-radius:999px; padding:1px 8px; line-height:16px; white-space:nowrap; }
+ .dl-run { margin:6px 0; }
+ .dl-run-head { display:flex; align-items:center; gap:8px; cursor:pointer; list-style:none; font-size:13px; padding:7px 10px; border:1px solid #1e2630; border-radius:8px; background:#0f141b; }
+ .dl-run-head::-webkit-details-marker { display:none; }
+ .dl-run:hover .dl-run-head { border-color:#2a3a4a; }
+ .dl-run[open] .dl-run-head { border-color:#2a3a4a; border-radius:8px 8px 0 0; }
+ .dl-status { font-size:12px; line-height:1; flex:none; }
+ .dl-status.ok { color:#49dcb1; }
+ .dl-status.fail { color:#f87171; }
+ .dl-time { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; color:#9aa6b2; white-space:nowrap; }
+ .dl-target { font-size:12px; min-width:0; }
+ .dl-fail-hint { font-size:12px; color:#f87171; opacity:.85; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:40%; }
+ .dl-spacer { flex:1; }
+ .dl-chip { font-size:11px; border-radius:999px; padding:1px 8px; line-height:16px; white-space:nowrap; flex:none; }
+ .dl-chip.new { background:rgba(80,200,120,0.15); border:1px solid rgba(80,200,120,0.35); color:#bff2cf; }
+ .dl-chip.known { background:transparent; border:1px solid #2a3a4a; color:#9aa6b2; }
+ .dl-chip.fail { background:rgba(255,120,120,0.12); border:1px solid rgba(255,120,120,0.30); color:#ffd1d1; }
+ .dl-run-body { padding:10px 12px 8px; border:1px solid #2a3a4a; border-top:none; border-radius:0 0 8px 8px; background:#0f141b; }
+ .dl-label { font-size:11px; color:#aab; text-transform:uppercase; letter-spacing:.4px; margin:10px 0 4px; }
+ .dl-run-body .dl-label:first-child { margin-top:2px; }
+ .dl-target-chips { display:flex; flex-wrap:wrap; gap:4px; margin:0; padding:0; list-style:none; }
+ .dl-box { margin:0; padding:8px 10px; border-radius:8px; font-size:12px; line-height:1.4; white-space:pre-wrap; word-break:break-word; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+ .dl-box.err { background:rgba(248,113,113,0.08); border:1px solid rgba(248,113,113,0.35); color:#ffb4b4; }
+ .dl-box.warn { background:rgba(255,213,77,0.07); border:1px solid rgba(255,213,77,0.30); color:#ffe08a; }
+ .dl-log-pre { margin:4px 0 0; padding:8px 10px; background:#0b0d10; border:1px solid #1e2630; border-radius:8px; font-size:11px; line-height:1.4; white-space:pre-wrap; word-break:break-word; max-height:320px; overflow:auto; color:#9aa6b2; }
+ @media (max-width: 800px) { .dl-fail-hint { display:none; } }
 </style>
 {% endblock %}
 
@@ -114,6 +218,8 @@
   const toolTargetModal = document.getElementById("toolTargetModal");
   const toolTargetInput = document.getElementById("toolTargetInput");
   const toolTargetError = document.getElementById("toolTargetError");
+  const toolWordlistWrap = document.getElementById("toolWordlistWrap");
+  const toolWordlistInput = document.getElementById("toolWordlistInput");
   const btnToolTargetGo = document.getElementById("btnToolTargetGo");
   const inScopeDomains = {{ in_scope_domains | tojson }};
   const discoveredSubs = {{ discovered_subdomains | tojson }};
@@ -138,6 +244,31 @@
   const btnCeroGo = document.getElementById("btnCeroGo");
   let ceroHosts = [];
   let ceroDeselected = new Set();
+  const vhostModal = document.getElementById("vhostModal");
+  const vhostFilter = document.getElementById("vhostFilter");
+  const vhostSelectAll = document.getElementById("vhostSelectAll");
+  const vhostSocketList = document.getElementById("vhostSocketList");
+  const vhostCount = document.getElementById("vhostCount");
+  const vhostExtraInput = document.getElementById("vhostExtraInput");
+  const vhostWordlistWrap = document.getElementById("vhostWordlistWrap");
+  const vhostWordlistInput = document.getElementById("vhostWordlistInput");
+  const vhostUseDiscovered = document.getElementById("vhostUseDiscovered");
+  const vhostDiscoveredCount = document.getElementById("vhostDiscoveredCount");
+  const vhostError = document.getElementById("vhostError");
+  const btnVhostGo = document.getElementById("btnVhostGo");
+  let vhostSockets = [];
+  let vhostDeselected = new Set();
+  const revModal = document.getElementById("revModal");
+  const revFilter = document.getElementById("revFilter");
+  const revSelectAll = document.getElementById("revSelectAll");
+  const revIpList = document.getElementById("revIpList");
+  const revCount = document.getElementById("revCount");
+  const revExtraInput = document.getElementById("revExtraInput");
+  const revResolversInput = document.getElementById("revResolversInput");
+  const revError = document.getElementById("revError");
+  const btnRevGo = document.getElementById("btnRevGo");
+  let revIps = [];
+  let revDeselected = new Set();
 
   const toolSpecByName = (name) => toolsData.tools.find((t) => t.name === name) || {};
 
@@ -182,9 +313,12 @@
         btn.classList.add("btn--disabled");
         btn.title = installHint(t);
       }
-      btn.addEventListener("click", () =>
-        t.input_mode === "hosts_ports" ? openCeroModal(t) : openToolTargetModal(t)
-      );
+      btn.addEventListener("click", () => {
+        if (t.input_mode === "hosts_ports") return openCeroModal(t);
+        if (t.input_mode === "sockets") return openVhostModal(t);
+        if (t.input_mode === "ips") return openRevModal(t);
+        return openToolTargetModal(t);
+      });
       toolButtonsWrap.appendChild(btn);
     }
   };
@@ -269,6 +403,14 @@
     discoveredWrap.style.display = includeDiscovered.checked ? "flex" : "none";
     toolTargetInput.value = inScopeDomains.join("\n");
     updateTargetCount();
+    const wlDefault = (t.wordlist_default || "").trim();
+    if (wlDefault) {
+      toolWordlistWrap.style.display = "";
+      toolWordlistInput.value = wlDefault;
+    } else {
+      toolWordlistWrap.style.display = "none";
+      toolWordlistInput.value = "";
+    }
     toolTargetModal.classList.remove("hidden");
     setTimeout(() => toolTargetInput.focus(), 50);
   };
@@ -369,6 +511,248 @@
     if (ceroSelectAll.checked) ceroDeselected = new Set();
     else for (const h of ceroHosts) ceroDeselected.add(h.value);
     renderCeroHostList();
+  });
+
+  const selectedVhostSockets = () =>
+    vhostSockets.map((s) => s.value).filter((v) => !vhostDeselected.has(v));
+
+  const updateVhostCount = () => {
+    const n = selectedVhostSockets().length;
+    vhostCount.textContent = String(n);
+    vhostCount.style.color = n > 20 ? "#ff6666" : "";
+    if (vhostSelectAll) {
+      vhostSelectAll.checked =
+        vhostSockets.length > 0 && selectedVhostSockets().length === vhostSockets.length;
+    }
+  };
+
+  const renderVhostSocketList = () => {
+    const q = (vhostFilter.value || "").trim().toLowerCase();
+    vhostSocketList.innerHTML = "";
+    if (!vhostSockets.length) {
+      vhostSocketList.innerHTML =
+        '<span class="muted">No open sockets on web-ish ports yet. Run a port scan first &mdash; or add sockets in the box below.</span>';
+      updateVhostCount();
+      return;
+    }
+    let shown = 0;
+    for (const s of vhostSockets) {
+      if (q && !s.value.toLowerCase().includes(q)) continue;
+      shown++;
+      const row = document.createElement("label");
+      row.className = "checkbox-label";
+      row.style.cssText = "display:block; margin:2px 0; font-size:12px; cursor:pointer;";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = s.value;
+      cb.checked = !vhostDeselected.has(s.value);
+      cb.addEventListener("change", () => {
+        if (cb.checked) vhostDeselected.delete(s.value);
+        else vhostDeselected.add(s.value);
+        updateVhostCount();
+      });
+      row.appendChild(cb);
+      row.appendChild(document.createTextNode(" "));
+      const code = document.createElement("code");
+      code.textContent = s.label;
+      row.appendChild(code);
+      vhostSocketList.appendChild(row);
+    }
+    if (!shown) {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.textContent = "No sockets match the filter.";
+      vhostSocketList.appendChild(empty);
+    }
+    updateVhostCount();
+  };
+
+  const openVhostModal = async (t) => {
+    if (!t || !t.available) return;
+    activeToolName = t.name;
+    vhostError.style.display = "none";
+    vhostError.textContent = "";
+    btnVhostGo.disabled = false;
+    vhostFilter.value = "";
+    vhostExtraInput.value = "";
+    vhostSockets = [];
+    vhostDeselected = new Set();
+    vhostSocketList.innerHTML = '<span class="muted">Loading open sockets…</span>';
+    vhostDiscoveredCount.textContent = "…";
+    vhostUseDiscovered.checked = true;
+    vhostUseDiscovered.disabled = true; // until the count is known
+    vhostWordlistInput.value = (t.wordlist_default || "").trim();
+    syncVhostWordlist();
+    updateVhostCount();
+    vhostModal.classList.remove("hidden");
+    try {
+      const resp = await fetch("/api/tools/vhost/sockets", { cache: "no-store" });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "Could not load sockets");
+      vhostSockets = data.sockets || [];
+      vhostDiscoveredCount.textContent = String(data.discovered_count || 0);
+      vhostUseDiscovered.disabled = !(data.discovered_count > 0);
+      // Default: brute-force the subdomains already discovered in the database.
+      vhostUseDiscovered.checked = data.discovered_count > 0;
+      syncVhostWordlist();
+      renderVhostSocketList();
+    } catch (e) {
+      vhostSockets = [];
+      vhostUseDiscovered.checked = false;
+      vhostUseDiscovered.disabled = true;
+      syncVhostWordlist();
+      renderVhostSocketList();
+      vhostError.textContent = e.message;
+      vhostError.style.display = "";
+    }
+  };
+
+  vhostFilter.addEventListener("input", () => {
+    if (activeToolName === "gobuster_vhost") renderVhostSocketList();
+  });
+
+  vhostSelectAll.addEventListener("change", () => {
+    if (vhostSelectAll.checked) vhostDeselected = new Set();
+    else for (const s of vhostSockets) vhostDeselected.add(s.value);
+    renderVhostSocketList();
+  });
+
+  // Hide the custom wordlist box while "discovered subdomains" is the active source.
+  const syncVhostWordlist = () => {
+    const usingDiscovered = vhostUseDiscovered.checked && !vhostUseDiscovered.disabled;
+    vhostWordlistWrap.style.display = usingDiscovered ? "none" : "";
+  };
+
+  vhostUseDiscovered.addEventListener("change", () => syncVhostWordlist());
+
+  const selectedRevIps = () =>
+    revIps.map((s) => s.value).filter((v) => !revDeselected.has(v));
+
+  const updateRevCount = () => {
+    const n = selectedRevIps().length;
+    revCount.textContent = String(n);
+    revCount.style.color = n > 100 ? "#ff6666" : "";
+    if (revSelectAll) {
+      revSelectAll.checked =
+        revIps.length > 0 && selectedRevIps().length === revIps.length;
+    }
+  };
+
+  const renderRevIpList = () => {
+    const q = (revFilter.value || "").trim().toLowerCase();
+    revIpList.innerHTML = "";
+    if (!revIps.length) {
+      revIpList.innerHTML =
+        '<span class="muted">No IPs in the hosts table yet. Run a port scan first &mdash; or add IPs in the box below.</span>';
+      updateRevCount();
+      return;
+    }
+    let shown = 0;
+    for (const s of revIps) {
+      if (q && !s.value.toLowerCase().includes(q)) continue;
+      shown++;
+      const row = document.createElement("label");
+      row.className = "checkbox-label";
+      row.style.cssText = "display:block; margin:2px 0; font-size:12px; cursor:pointer;";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = s.value;
+      cb.checked = !revDeselected.has(s.value);
+      cb.addEventListener("change", () => {
+        if (cb.checked) revDeselected.delete(s.value);
+        else revDeselected.add(s.value);
+        updateRevCount();
+      });
+      row.appendChild(cb);
+      row.appendChild(document.createTextNode(" "));
+      const code = document.createElement("code");
+      code.textContent = s.label;
+      row.appendChild(code);
+      revIpList.appendChild(row);
+    }
+    if (!shown) {
+      const empty = document.createElement("div");
+      empty.className = "muted";
+      empty.textContent = "No IPs match the filter.";
+      revIpList.appendChild(empty);
+    }
+    updateRevCount();
+  };
+
+  const openRevModal = async (t) => {
+    if (!t || !t.available) return;
+    activeToolName = t.name;
+    revError.style.display = "none";
+    revError.textContent = "";
+    btnRevGo.disabled = false;
+    revFilter.value = "";
+    revExtraInput.value = "";
+    revResolversInput.value = "";
+    revIps = [];
+    revDeselected = new Set();
+    revIpList.innerHTML = '<span class="muted">Loading in-scope IPs…</span>';
+    updateRevCount();
+    revModal.classList.remove("hidden");
+    try {
+      const resp = await fetch("/api/tools/revdns/ips", { cache: "no-store" });
+      const data = await resp.json();
+      if (!data.ok) throw new Error(data.error || "Could not load IPs");
+      revIps = data.ips || [];
+      if (data.default_resolvers) revResolversInput.value = data.default_resolvers;
+      renderRevIpList();
+    } catch (e) {
+      revIps = [];
+      renderRevIpList();
+      revError.textContent = e.message;
+      revError.style.display = "";
+    }
+  };
+
+  revFilter.addEventListener("input", () => {
+    if (activeToolName === "dnsx_reverse") renderRevIpList();
+  });
+
+  revSelectAll.addEventListener("change", () => {
+    if (revSelectAll.checked) revDeselected = new Set();
+    else for (const s of revIps) revDeselected.add(s.value);
+    renderRevIpList();
+  });
+
+  btnRevGo.addEventListener("click", async () => {
+    const picked = selectedRevIps();
+    const extra = (revExtraInput.value || "").split(/[,\s]+/).filter(Boolean);
+    const ips = [...picked, ...extra];
+    if (!ips.length) {
+      revError.textContent = "Select at least one IP.";
+      revError.style.display = "";
+      return;
+    }
+    if (ips.length > 100) {
+      revError.textContent = `Too many IPs: ${ips.length} selected, max 100 per run.`;
+      revError.style.display = "";
+      return;
+    }
+    if (!activeToolName) return;
+    btnRevGo.disabled = true;
+    revError.style.display = "none";
+    try {
+      const body = { tool: activeToolName, ips };
+      const resolvers = (revResolversInput.value || "").trim();
+      if (resolvers) body.resolvers = resolvers;
+      const resp = await fetch("/api/tools/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (!data.ok || !data.job) throw new Error(data.error || "Could not start Reverse DNS");
+      revModal.classList.add("hidden");
+      startToolJobPolling(data.job);
+    } catch (e) {
+      revError.textContent = e.message;
+      revError.style.display = "";
+      btnRevGo.disabled = false;
+    }
   });
 
   const updateToolProgressFromJob = (job, queuedCount = 0) => {
@@ -486,10 +870,15 @@
     btnToolTargetGo.disabled = true;
     toolTargetError.style.display = "none";
     try {
+      const body = { tool: activeToolName, target };
+      if (toolWordlistWrap.style.display !== "none") {
+        const wl = toolWordlistInput.value.trim();
+        if (wl) body.wordlist = wl;
+      }
       const resp = await fetch("/api/tools/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tool: activeToolName, target }),
+        body: JSON.stringify(body),
       });
       const data = await resp.json();
       if (!data.ok || !data.job) throw new Error(data.error || "Could not start tool");
@@ -535,8 +924,62 @@
     }
   });
 
+  btnVhostGo.addEventListener("click", async () => {
+    const picked = selectedVhostSockets();
+    const extra = (vhostExtraInput.value || "").split(/[,\s]+/).filter(Boolean);
+    const sockets = [...picked, ...extra];
+    if (!sockets.length) {
+      vhostError.textContent = "Select at least one ip:port socket.";
+      vhostError.style.display = "";
+      return;
+    }
+    if (sockets.length > 20) {
+      vhostError.textContent = `Too many sockets: ${sockets.length} selected, max 20 per run.`;
+      vhostError.style.display = "";
+      return;
+    }
+    if (!activeToolName) return;
+    btnVhostGo.disabled = true;
+    vhostError.style.display = "none";
+    try {
+      const body = { tool: activeToolName, sockets };
+      if (vhostUseDiscovered.checked && !vhostUseDiscovered.disabled) {
+        body.wordlist_source = "discovered";
+      } else if (vhostWordlistWrap.style.display !== "none") {
+        const wl = (vhostWordlistInput.value || "").trim();
+        if (wl) body.wordlist = wl;
+      }
+      const resp = await fetch("/api/tools/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (!data.ok || !data.job) throw new Error(data.error || "Could not start VHost run");
+      vhostModal.classList.add("hidden");
+      startToolJobPolling(data.job);
+    } catch (e) {
+      vhostError.textContent = e.message;
+      vhostError.style.display = "";
+      btnVhostGo.disabled = false;
+    }
+  });
+
+  vhostWordlistInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
+      ev.preventDefault();
+      btnVhostGo.click();
+    }
+  });
+
   toolTargetInput.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) {
+      ev.preventDefault();
+      btnToolTargetGo.click();
+    }
+  });
+  toolWordlistInput.addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") {
       ev.preventDefault();
       btnToolTargetGo.click();
     }
@@ -567,26 +1010,51 @@
         '<span class="muted">No tool runs yet. Use the tool buttons above — install tools on the <a href="/tools">Tools page</a>.</span>';
       return;
     }
+    const subs = discoverySubs.filter((x) =>
+      discoveryFilter === "out" ? !x.in_scope : x.in_scope
+    );
+    const subsHtml = subs.length
+      ? `<ul class="tool-subs">${subs.map((x) =>
+          `<li><span class="scope-dot ${x.in_scope ? "in" : "out"}">●</span> <code>${escHtml(x.fqdn)}</code><span class="muted" style="font-size:11px; margin-left:6px;">via ${firstTools(x.runs).map(escHtml).join(", ")}</span></li>`
+        ).join("")}</ul>`
+      : '<span class="muted" style="font-size:12px;">No subdomains in this category.</span>';
+    const scopeHeading = discoveryFilter === "out" ? "Out-of-scope subdomains" : "In-scope subdomains";
+
     const toolsHtml = discoveryTools
       .map((t) => {
         const runsHtml = t.runs
           .map((r) => {
-            const targetText =
-              r.targets.length === 1 ? escHtml(r.targets[0]) : `${r.targets.length} targets`;
-            const targetsList = r.targets.length > 1
-              ? (r.targets.length > 8
-                  ? `<details style="margin:0 0 8px 0;"><summary class="muted" style="cursor:pointer; font-size:12px;">${r.targets.length} targets</summary><ul class="tool-targets">${r.targets.map((x) => `<li><code>${escHtml(x)}</code></li>`).join("")}</ul></details>`
-                  : `<ul class="tool-targets">${r.targets.map((x) => `<li><code>${escHtml(x)}</code></li>`).join("")}</ul>`)
-              : `<span class="muted" style="font-size:12px;">target <code>${escHtml(r.targets[0])}</code></span>`;
             const runErrors = r.errors || [];
-            const firstErr = runErrors.length
-              ? (runErrors[0].length > 140 ? runErrors[0].slice(0, 140) + "…" : runErrors[0])
+            const failed = runErrors.length > 0;
+            const firstErr = failed
+              ? (runErrors[0].length > 160 ? runErrors[0].slice(0, 160) + "…" : runErrors[0])
               : "";
-            const failSummary = runErrors.length
-              ? ` <span style="color:#ff6666;">Failed: ${escHtml(firstErr)}</span>`
+            const targets = r.targets || [];
+            const targetChip =
+              targets.length === 1
+                ? `<code>${escHtml(targets[0])}</code>`
+                : `<span class="muted">${targets.length} targets</span>`;
+            const found = r.found || 0;
+            const newCount = r.new_count != null ? r.new_count : 0;
+            let resultChips;
+            if (failed) {
+              resultChips = '<span class="dl-chip fail">Failed</span>';
+            } else if (r.added != null) {
+              const known = Math.max(0, found - r.added);
+              resultChips = `<span class="dl-chip new">+${newCount} new</span>` +
+                (known > 0 ? ` <span class="dl-chip known">${known} known</span>` : "");
+            } else {
+              resultChips = `<span class="dl-chip new">+${newCount} new</span>` +
+                (found > 0 ? ` <span class="dl-chip known">${found} found</span>` : "");
+            }
+            const failHint = failed
+              ? `<span class="dl-fail-hint" title="${escHtml(firstErr)}">${escHtml(firstErr)}</span>`
+              : "";
+            const targetsChips = targets.length
+              ? `<div class="dl-label">Targets</div><ul class="dl-target-chips">${targets.map((x) => `<li><code>${escHtml(x)}</code></li>`).join("")}</ul>`
               : "";
             const errorBox = runErrors.length
-              ? `<pre style="margin:8px 0 0; padding:8px; background:#fff0f0; border:1px solid #ff6666; border-radius:4px; color:#8b0000; font-size:12px; white-space:pre-wrap; word-break:break-word;">${runErrors.map(escHtml).join("\n---\n")}</pre>`
+              ? `<div class="dl-label">Errors (${runErrors.length})</div><pre class="dl-box err">${runErrors.map(escHtml).join("\n---\n")}</pre>`
               : "";
             const runLogs = r.logs || [];
             const allLogLines = [];
@@ -595,47 +1063,50 @@
             const isZeroStat = (ln) => /\b0 errors\b/.test(ln) || /"errors"\s*:\s*0\b/.test(ln);
             const errLines = allLogLines.filter((ln) => ERR_LINE_RE.test(ln) && !isZeroStat(ln));
             const errLineBox = errLines.length
-              ? `<pre style="margin:8px 0 0; padding:8px; background:#fff8e6; border:1px solid #e6a23c; border-radius:4px; color:#8a5a00; font-size:12px; white-space:pre-wrap; word-break:break-word;">${errLines.slice(0, 200).map(escHtml).join("\n")}</pre>`
+              ? `<div class="dl-label">Log warnings (${errLines.length})</div><pre class="dl-box warn">${errLines.slice(0, 200).map(escHtml).join("\n")}</pre>`
               : "";
             const logDetails = runLogs.length
-              ? `<details class="tool-log" style="margin:8px 0 0;"><summary style="cursor:pointer; font-size:12px; color:#666;">Tool log (${allLogLines.length} lines)</summary>${runLogs.map((b) => `<div style="margin-top:6px;"><span class="muted" style="font-size:11px;">${escHtml(b.target || "run")}</span><pre style="margin:4px 0 0; padding:8px; background:#f6f8fa; color:#1f2328; border-radius:4px; font-size:11px; white-space:pre-wrap; word-break:break-word; max-height:320px; overflow:auto;">${b.lines.map(escHtml).join("\n")}</pre></div>`).join("")}</details>`
+              ? `<div class="dl-label">Full tool log</div><details><summary class="muted" style="cursor:pointer; font-size:12px; margin:0 0 4px;">Show ${allLogLines.length} line${allLogLines.length === 1 ? "" : "s"}</summary>${runLogs.map((b) => `<div style="margin-top:6px;"><span class="label">${escHtml(b.target || "run")}</span><pre class="dl-log-pre">${b.lines.map(escHtml).join("\n")}</pre></div>`).join("")}</details>`
               : "";
-            const summary =
-              r.added != null
-                ? `${r.new_count} new subdomains discovered, ${Math.max(0, (r.found || 0) - r.added)} already in database`
-                : `${r.new_count} new subdomains discovered (of ${r.found} found)`;
-            return `<details class="tool-run" style="margin:6px 0;">
-  <summary class="tool-run-summary"><span class="tool-run-arrow">▸</span> ${fmtTs(r.created_at)} <span class="muted">· ${targetText} · ${summary}</span>${failSummary}</summary>
-  <div class="tool-run-body">${targetsList}${errorBox}${errLineBox}${logDetails}</div>
+            return `<details class="dl-run">
+  <summary class="dl-run-head">
+    <span class="dl-status ${failed ? "fail" : "ok"}">${failed ? "✕" : "✓"}</span>
+    <span class="dl-time">${fmtTs(r.created_at)}</span>
+    <span class="dl-target">${targetChip}</span>
+    ${failHint}
+    <span class="dl-spacer"></span>
+    ${resultChips}
+    <span class="tool-run-arrow">▸</span>
+  </summary>
+  <div class="dl-run-body">${targetsChips}${errorBox}${errLineBox}${logDetails}</div>
 </details>`;
           })
           .join("");
-        return `<div style="margin:14px 0;">
-  <div style="display:flex; align-items:baseline; gap:8px; border-bottom:1px solid #e5e5e5; padding-bottom:6px;">
+        return `<div class="dl-tool">
+  <div class="dl-tool-head">
     <h3 style="margin:0;">${escHtml(t.name)}</h3>
-    <span class="muted" style="font-size:12px;">${t.runs.length} run${t.runs.length === 1 ? "" : "s"} · ${t.unique} unique subdomain${t.unique === 1 ? "" : "s"}</span>
+    <span class="dl-count">${t.runs.length} run${t.runs.length === 1 ? "" : "s"}</span>
+    <span class="dl-count">${t.unique} unique subdomain${t.unique === 1 ? "" : "s"}</span>
   </div>
   ${runsHtml}
 </div>`;
       })
       .join("");
-    const subs = discoverySubs.filter((x) =>
-      discoveryFilter === "out" ? !x.in_scope : x.in_scope
-    );
-    const subsHtml = subs.length
-      ? `<ul class="tool-subs" style="max-height:420px;">${subs.map((x) =>
-          `<li><span class="scope-dot ${x.in_scope ? "in" : "out"}">●</span> <code>${escHtml(x.fqdn)}</code><span class="muted" style="font-size:11px; margin-left:6px;">via ${firstTools(x.runs).map(escHtml).join(", ")}</span></li>`
-        ).join("")}</ul>`
-      : '<span class="muted" style="font-size:12px;">No subdomains in this category.</span>';
-    const scopeHeading = discoveryFilter === "out" ? "Out-of-scope subdomains" : "In-scope subdomains";
+
     el.innerHTML =
-      toolsHtml +
-      `<div style="margin-top:18px; border-top:1px solid #e5e5e5; padding-top:10px;">
+      `<div>
   <div style="display:flex; align-items:baseline; gap:8px; margin-bottom:8px;">
     <h3 style="margin:0;">${scopeHeading}</h3>
     <span class="muted" style="font-size:12px;">${subs.length} of ${discoverySubs.length} total, deduped across tools and runs</span>
   </div>
   ${subsHtml}
+</div>` +
+      `<div style="margin-top:18px; border-top:1px solid #1e2630; padding-top:2px;">
+  <div style="display:flex; align-items:baseline; gap:8px; margin:12px 0 2px;">
+    <h3 style="margin:0;">Run history</h3>
+    <span class="muted" style="font-size:12px;">grouped by tool, newest first</span>
+  </div>
+  ${toolsHtml}
 </div>`;
   };
 

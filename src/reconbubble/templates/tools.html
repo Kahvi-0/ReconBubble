@@ -23,6 +23,9 @@
   <h2>
     <span class="scope-dot {% if t.available %}in{% else %}out{% endif %}">●</span>
     {{ t.label }}
+    {% if t.repo_url %}
+      <a href="{{ t.repo_url }}" target="_blank" rel="noopener noreferrer" class="muted" style="margin-left:8px; font-size:12px; font-weight:normal;">GitHub &#8599;</a>
+    {% endif %}
     {% if t.builtin %}
       <span class="muted">(built-in — no install needed)</span>
     {% elif t.available %}
