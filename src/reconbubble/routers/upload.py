@@ -190,7 +190,7 @@ def build(st: AppState, app) -> APIRouter:
     @router.get("/upload", response_class=HTMLResponse)
     def upload_page(request: Request):
         with st.db() as s:
-            users = (
+            all_users = (
                 s.execute(
                     select(NameItem).order_by(
                         NameItem.last_name.asc(), NameItem.first_name.asc()
@@ -199,6 +199,12 @@ def build(st: AppState, app) -> APIRouter:
                 .scalars()
                 .all()
             )
+            # Only users who can actually authenticate to an SMB share
+            # (stored password or NTLM hash) are offered for the import.
+            users = [
+                u for u in all_users
+                if (u.password or "").strip() or (u.ntlm_hash or "").strip()
+            ]
         return st.templates.TemplateResponse("upload.html", _upload_context(request, users))
 
     @router.post("/upload")
@@ -244,7 +250,7 @@ def build(st: AppState, app) -> APIRouter:
             "smb_shares": "/smb-shares",
         }
         with st.db() as s:
-            upload_users = (
+            _all_upload_users = (
                 s.execute(
                     select(NameItem).order_by(
                         NameItem.last_name.asc(), NameItem.first_name.asc()
@@ -253,6 +259,12 @@ def build(st: AppState, app) -> APIRouter:
                 .scalars()
                 .all()
             )
+            # Mirror the upload page: only credential-bearing users are
+            # re-offered when the form re-renders after a POST.
+            upload_users = [
+                u for u in _all_upload_users
+                if (u.password or "").strip() or (u.ntlm_hash or "").strip()
+            ]
         def _import_file(s: Session, art: Artifact, stored_path: str, fname: str, user_id: int | None = None) -> dict:
             """Run the appropriate parser and return normalized result dict."""
             p = Path(stored_path)

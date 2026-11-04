@@ -137,6 +137,13 @@ def build(st: AppState, app) -> APIRouter:
                 sh.user_id for sh in shares if sh.user_id is not None
             }
             access_users = [u for u in all_users if u.id in access_user_ids]
+            # Only users who can actually authenticate (stored password or
+            # NTLM hash) are offered in the add/edit share dropdown.
+            cred_users = [
+                u
+                for u in all_users
+                if (u.password or "").strip() or (u.ntlm_hash or "").strip()
+            ]
             user_map = {u.id: u for u in all_users}
             hosts_map: dict[str, list[dict]] = {}
             has_unassigned = False
@@ -171,6 +178,7 @@ def build(st: AppState, app) -> APIRouter:
                 "hosts_list": hosts_list,
                 "column_users": access_users,
                 "all_users": all_users,
+                "cred_users": cred_users,
                 "user_map": user_map,
                 "has_unassigned": has_unassigned,
                 "user_label": _smb_user_label,
@@ -178,21 +186,33 @@ def build(st: AppState, app) -> APIRouter:
         )
 
     @router.post("/api/smb-shares/create", response_class=JSONResponse)
-    def smb_shares_create(host: str = Form(""), shares: str = Form(""), user_id: int = Form(0)):
+    def smb_shares_create(host: str = Form(""), shares: str = Form(""), user_id: list[int] = Form([])):
+        """Create share rows; one row per selected user.
+
+        ``user_id`` is a repeated form field so a share can be associated
+        with several users at once (each user authenticates with their own
+        stored password or NTLM hash).  Existing (host, share, user) rows
+        are skipped, so re-adding a user to a known share is a no-op.
+        """
         host = host.strip()
         if not host:
             return {"ok": False, "error": "Host is required."}
         lines = [l.strip() for l in shares.strip().split("\n") if l.strip()]
         if not lines:
             return {"ok": False, "error": "At least one share entry is required."}
-        if user_id <= 0:
-            return {"ok": False, "error": "User is required."}
+        user_ids = []
+        for uid in user_id:
+            if uid > 0 and uid not in user_ids:
+                user_ids.append(uid)
+        if not user_ids:
+            return {"ok": False, "error": "Select at least one user."}
         added = 0
         skipped = 0
         errors = []
         with st.db() as s:
-            if s.get(NameItem, user_id) is None:
-                return {"ok": False, "error": "Selected user not found."}
+            for uid in user_ids:
+                if s.get(NameItem, uid) is None:
+                    return {"ok": False, "error": "Selected user not found."}
             for idx, line in enumerate(lines, 1):
                 parts = line.split(",")
                 if len(parts) < 1:
@@ -204,18 +224,19 @@ def build(st: AppState, app) -> APIRouter:
                 if not share_name:
                     errors.append(f"Row {idx}: share name is empty")
                     continue
-                existing = s.scalar(
-                    select(SmbShare).where(
-                        SmbShare.host == host,
-                        SmbShare.share == share_name,
-                        SmbShare.user_id == user_id,
+                for uid in user_ids:
+                    existing = s.scalar(
+                        select(SmbShare).where(
+                            SmbShare.host == host,
+                            SmbShare.share == share_name,
+                            SmbShare.user_id == uid,
+                        )
                     )
-                )
-                if existing:
-                    skipped += 1
-                    continue
-                s.add(SmbShare(host=host, share=share_name, access=access_val, notes=note_val, user_id=user_id))
-                added += 1
+                    if existing:
+                        skipped += 1
+                        continue
+                    s.add(SmbShare(host=host, share=share_name, access=access_val, notes=note_val, user_id=uid))
+                    added += 1
             s.commit()
         return {"ok": True, "added": added, "skipped": skipped, "errors": errors}
 
@@ -246,37 +267,84 @@ def build(st: AppState, app) -> APIRouter:
         return {"ok": True}
 
     @router.post("/api/smb-shares/update", response_class=JSONResponse)
-    def smb_shares_update(share_id: int = Form(0), host: str = Form(""), share: str = Form(""), access: str = Form(""), notes: str = Form(""), user_id: int = Form(0)):
+    def smb_shares_update(
+        share_id: int = Form(0),
+        host: str = Form(""),
+        share: str = Form(""),
+        access: str = Form(""),
+        notes: str = Form(""),
+        user_id: list[int] = Form([]),
+    ):
+        """Edit a share; the multi-select defines which users may authenticate.
+
+        The edited (anchor) row takes the form's access/notes.  Newly
+        selected users get a row with the same access/notes; users who
+        already have a row for this share keep their own access (per-user
+        privileges are preserved).  Rows for deselected users are removed.
+        """
         if not share_id:
             return {"ok": False, "error": "share_id is required."}
-        host = host.strip()
         share = share.strip()
         access = access.strip().upper()
         notes = notes.strip()
-        if not host or not share:
-            return {"ok": False, "error": "Host and share are required."}
-        resolved_user_id = user_id if user_id > 0 else None
+        if not share or not access:
+            return {"ok": False, "error": "Share and access are required."}
+        user_ids = []
+        for uid in user_id:
+            if uid > 0 and uid not in user_ids:
+                user_ids.append(uid)
+        if not user_ids:
+            return {"ok": False, "error": "Select at least one user."}
         with st.db() as s:
             target = s.get(SmbShare, share_id)
             if not target:
                 return {"ok": False, "error": "Not found."}
-            if resolved_user_id is not None and s.get(NameItem, resolved_user_id) is None:
-                return {"ok": False, "error": "Selected user not found."}
-            existing = s.scalar(
+            for uid in user_ids:
+                if s.get(NameItem, uid) is None:
+                    return {"ok": False, "error": "Selected user not found."}
+            host = target.host  # host is fixed in edit mode (input disabled)
+            group = s.execute(
                 select(SmbShare).where(
                     SmbShare.host == host,
-                    SmbShare.share == share,
-                    SmbShare.user_id == resolved_user_id,
-                    SmbShare.id != share_id,
+                    SmbShare.share == target.share,
                 )
-            )
-            if existing:
-                return {"ok": False, "error": "Another share entry already exists with these values."}
-            target.host = host
+            ).scalars().all()
+            selected = set(user_ids)
+            # The anchor row keeps its own user while that user is still
+            # selected; otherwise it is reassigned to the first selected
+            # user without a row for this share (fallback: first selected).
+            anchor_user = target.user_id if target.user_id in selected else None
+            if anchor_user is None:
+                taken = {
+                    r.user_id for r in group
+                    if r.id != target.id and r.user_id is not None
+                }
+                for uid in user_ids:
+                    if uid not in taken:
+                        anchor_user = uid
+                        break
+            if anchor_user is None:
+                anchor_user = user_ids[0]
             target.share = share
             target.access = access
             target.notes = notes
-            target.user_id = resolved_user_id
+            target.user_id = anchor_user
+            for uid in user_ids:
+                if uid == anchor_user:
+                    continue
+                existing = next(
+                    (r for r in group if r.id != target.id and r.user_id == uid),
+                    None,
+                )
+                if existing is None:
+                    s.add(SmbShare(host=host, share=share, access=access, notes=notes, user_id=uid))
+            # Drop rows the multi-select no longer covers; if a non-anchor
+            # row now shares the anchor's user (merge case), the anchor wins.
+            for r in group:
+                if r.id == target.id:
+                    continue
+                if r.user_id == anchor_user or r.user_id not in selected:
+                    s.delete(r)
             s.commit()
         return {"ok": True}
 
@@ -336,13 +404,14 @@ def build(st: AppState, app) -> APIRouter:
     def _resolve_creds(user_id: int):
         """Look up stored credentials by name-item id (0 = anonymous).
 
-        The browser only ever sends the id; usernames, passwords and
-        domains are read from the database here so secrets never travel
-        over HTTP or sit in the page markup.
+        The browser only ever sends the id; usernames, passwords, NTLM
+        hashes and domains are read from the database here so secrets
+        never travel over HTTP or sit in the page markup.  Returns
+        ``(username, password, ntlm_hash, domain)``.
         """
         uid = int(user_id or 0)
         if uid <= 0:
-            return "", "", ""
+            return "", "", "", ""
         with st.db() as s:
             u = s.get(NameItem, uid)
         if u is None:
@@ -350,7 +419,12 @@ def build(st: AppState, app) -> APIRouter:
                 "no_user",
                 "The assigned user no longer exists in the names list.",
             )
-        return u.ad_username or "", u.password or "", u.domain or ""
+        return (
+            u.ad_username or "",
+            u.password or "",
+            u.ntlm_hash or "",
+            u.domain or "",
+        )
 
     @router.post("/api/smb/browse", response_class=JSONResponse)
     def smb_browse(
@@ -362,10 +436,10 @@ def build(st: AppState, app) -> APIRouter:
         port: str = Form("445"),
     ):
         try:
-            username, password, domain = _resolve_creds(user_id)
+            username, password, ntlm_hash, domain = _resolve_creds(user_id)
             entries = smbbrowse.list_share(
                 host, share, path, username, password, _browse_timeout(timeout),
-                domain=domain, port=port,
+                domain=domain, port=port, ntlm_hash=ntlm_hash,
             )
         except smbbrowse.SmbBrowseError as exc:
             return {"ok": False, "error": exc.message, "code": exc.code}
@@ -395,10 +469,10 @@ def build(st: AppState, app) -> APIRouter:
         port: str = Query("445"),
     ):
         try:
-            username, password, domain = _resolve_creds(user_id)
+            username, password, ntlm_hash, domain = _resolve_creds(user_id)
             handle = smbbrowse.open_file_for_read(
                 host, share, path, file, username, password, _browse_timeout(timeout),
-                domain=domain, port=port,
+                domain=domain, port=port, ntlm_hash=ntlm_hash,
             )
         except smbbrowse.SmbBrowseError as exc:
             return JSONResponse({"ok": False, "error": exc.message, "code": exc.code})
@@ -446,10 +520,10 @@ def build(st: AppState, app) -> APIRouter:
         """Stream a file for inline preview (text/image), served from the
         local cache when its stored size matches the listed ``size``."""
         try:
-            username, password, domain = _resolve_creds(user_id)
+            username, password, ntlm_hash, domain = _resolve_creds(user_id)
             preview = smbbrowse.preview_file(
                 host, share, path, file, username, password, _browse_timeout(timeout),
-                domain=domain, port=port,
+                domain=domain, port=port, ntlm_hash=ntlm_hash,
                 expected_size=(size if size > 0 else None),
                 cache_dir=st.ws.preview_cache_dir,
             )
