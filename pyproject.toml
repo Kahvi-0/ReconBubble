@@ -14,6 +14,7 @@ dependencies = [
   "rich>=13.0",
   "playwright>=1.40",
   "pyyaml>=6.0",
+  "smbprotocol>=1.17.0",
 ]
 
 [project.scripts]
@@ -32,3 +33,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 reconbubble = ["templates/*.html", "static/*", "static/**/*"]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.14.0",
+]
