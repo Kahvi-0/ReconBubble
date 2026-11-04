@@ -21,6 +21,7 @@ class Workspace:
     logs_dir: Path
     bin_dir: Path
     browser_dir: Path
+    preview_cache_dir: Path
 
     @classmethod
     def from_db(cls, db_path: Path, workspace: Path | None = None) -> "Workspace":
@@ -31,12 +32,14 @@ class Workspace:
         logs_dir = root / "logs"
         bin_dir = root / "bin"
         browser_dir = root / "playwright-browsers"
+        preview_cache_dir = root / "smb_preview_cache"
         uploads_dir.mkdir(parents=True, exist_ok=True)
         exports_dir.mkdir(parents=True, exist_ok=True)
         logs_dir.mkdir(parents=True, exist_ok=True)
         bin_dir.mkdir(parents=True, exist_ok=True)
         browser_dir.mkdir(parents=True, exist_ok=True)
-        return cls(db_path=db_path, root=root, uploads_dir=uploads_dir, exports_dir=exports_dir, logs_dir=logs_dir, bin_dir=bin_dir, browser_dir=browser_dir)
+        preview_cache_dir.mkdir(parents=True, exist_ok=True)
+        return cls(db_path=db_path, root=root, uploads_dir=uploads_dir, exports_dir=exports_dir, logs_dir=logs_dir, bin_dir=bin_dir, browser_dir=browser_dir, preview_cache_dir=preview_cache_dir)
 
     def store_upload(self, src: Path, prefix: str = "upload") -> Path:
         src = src.expanduser().resolve()

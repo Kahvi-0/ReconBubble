@@ -1724,8 +1724,12 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
                         user_item = NameItem(first_name="", middle_name="", last_name="", ad_username=raw_user, domain=domain)
                         session.add(user_item)
                         session.flush()
-                    user_item.ntlm_v1 = s
-                    counts["ntlmv1"] += 1
+                    existing = user_item.ntlm_v1 or ""
+                    if s not in existing:
+                        user_item.ntlm_v1 = existing.rstrip("\n") + "\n" + s if existing else s
+                        counts["ntlmv1"] += 1
+                    else:
+                        counts["skipped"] += 1
 
         # Try NTLMv2
         if not matched:
@@ -1757,8 +1761,12 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
                             user_item = NameItem(first_name="", middle_name="", last_name="", ad_username=raw_user, domain=domain)
                             session.add(user_item)
                             session.flush()
-                        user_item.ntlm_v2 = s
-                        counts["ntlmv2"] += 1
+                        existing = user_item.ntlm_v2 or ""
+                        if s not in existing:
+                            user_item.ntlm_v2 = existing.rstrip("\n") + "\n" + s if existing else s
+                            counts["ntlmv2"] += 1
+                        else:
+                            counts["skipped"] += 1
 
         # Try DCC2
         if not matched:
@@ -1787,8 +1795,12 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
                         user_item = NameItem(first_name="", middle_name="", last_name="", ad_username=raw_user)
                         session.add(user_item)
                         session.flush()
-                    user_item.dcc2 = s
-                    counts["dcc2"] += 1
+                    existing = user_item.dcc2 or ""
+                    if s not in existing:
+                        user_item.dcc2 = existing.rstrip("\n") + "\n" + s if existing else s
+                        counts["dcc2"] += 1
+                    else:
+                        counts["skipped"] += 1
 
         # Try plain NTLM hash: username:32hex or domain\username:32hex
         if not matched:
