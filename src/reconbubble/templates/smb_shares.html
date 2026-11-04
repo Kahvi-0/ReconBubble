@@ -76,7 +76,13 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
 /* Two-pane share browser */
 .smb-browser { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 20px; }
 .smb-browser-left { flex: 0 0 340px; display: flex; flex-direction: column; gap: 12px; }
-.smb-browser-right { flex: 1; min-width: 0; }
+/* Discovered shares pane scrolls independently: header stays fixed, only the list scrolls */
+.smb-browser-left > .card { display: flex; flex-direction: column; max-height: calc(100vh - 232px); }
+.smb-shares-scroll { flex: 1 1 auto; min-height: 100px; overflow-y: auto; overscroll-behavior: contain; }
+.smb-browser-right { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+/* Browse pane scrolls independently: nav bar and breadcrumb stay fixed, only the file rows scroll */
+.smb-browser-right > .card { display: flex; flex-direction: column; max-height: calc(100vh - 232px); }
+#smbTableWrap { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .smb-browser-preview { flex: 1; min-width: 0; display: flex; flex-direction: column; }
 .smb-preview-header { display: flex; align-items: center; gap: 8px; padding: 0 0 8px; }
 .smb-preview-title {
@@ -100,6 +106,12 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
 @media (max-width: 900px) {
   .smb-browser { flex-direction: column; flex-wrap: nowrap; }
   .smb-browser-left { flex: none; width: 100%; }
+  /* On narrow screens let the page scroll naturally instead of a fixed pane */
+  .smb-browser-left > .card { max-height: none; }
+  .smb-shares-scroll { overflow: visible; }
+  .smb-browser-right > .card { max-height: none; }
+  #smbTableWrap { overflow: visible; }
+  .smb-file-table th { position: static; }
 }
 .smb-share-row { padding: 8px 12px; border-bottom: 1px solid #1a2332; }
 .smb-share-row:last-child { border-bottom: none; }
@@ -120,6 +132,13 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
 .smb-user-write { color: #86efac; border-color: #16a34a; }
 .smb-user-full { color: #fdba74; border-color: #ea580c; }
 .smb-user-none { color: #9ca3af; border-color: #374151; }
+/* Chip of the user whose stored credentials are used for the active connection */
+.smb-share-user.active { background: #2563eb; color: #fff; border-color: #3b82f6; }
+/* Badge: the users of this share have different permissions */
+.pill-privs {
+  background: #2e1065; color: #ddd6fe; border: 1px solid #7c3aed;
+  padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600;
+}
 .smb-share-row-notes { margin-top: 5px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .smb-nav-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
 .smb-nav-bar label { font-size: 12px; color: #cbd5e1; display: inline-flex; align-items: center; gap: 5px; }
@@ -142,6 +161,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
 .smb-file-table th {
   text-align: left; padding: 8px 12px; background: #0f1318;
   border-bottom: 1px solid #1a2332; font-size: 12px; color: #cbd5e1; white-space: nowrap;
+  position: sticky; top: 0; z-index: 1;
 }
 .smb-file-table td { padding: 7px 12px; border-bottom: 1px solid #1a2332; }
 .smb-file-table tr:last-child td { border-bottom: none; }
@@ -172,7 +192,8 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
   <div class="smb-browser-left">
     <div class="card" style="margin-bottom:0;">
       <h3 style="margin-top:0; font-size:13px;">Discovered shares</h3>
-      <p class="muted" style="font-size:11px; margin:0 0 8px;">Click a share name or a user chip to connect with that user's stored credentials.</p>
+      <p class="muted" style="font-size:11px; margin:0 0 8px;">Click a share name or a user chip to connect. The highlighted chip is the user whose stored credentials are used.</p>
+      <div class="smb-shares-scroll">
       {% if hosts_list %}
       {% for item in hosts_list %}
       <div class="smb-host-card">
@@ -184,13 +205,17 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
           {% for g in item.groups %}
           {% set ns = namespace(primary=None) %}
           {% if g.by_user %}{% set ns.primary = (g.by_user.values() | list | first) %}{% elif g.unassigned %}{% set ns.primary = g.unassigned %}{% endif %}
+          {% set group_rows = g.by_user.values() | list %}
+          {% if g.unassigned %}{% set _ = group_rows.append(g.unassigned) %}{% endif %}
+          {% set distinct_acc = group_rows | map(attribute='access') | list | unique | list %}
           <div class="smb-share-row" data-host="{{ item.host }}" data-share="{{ g.share }}">
             <div class="smb-share-row-line1">
               <span class="smb-share-name" title="Open {{ g.share }}">{{ g.share }}</span>
               {% if ns.primary %}
               {{ access_pill(ns.primary.access) }}
+              {% if distinct_acc | length > 1 %}<span class="pill-privs" title="Users have different permissions on this share">privs differ</span>{% endif %}
               <span class="smb-cell-actions">
-                <button class="smb-share-edit" data-edit="{{ ns.primary.id }}" data-host="{{ ns.primary.host }}" data-share="{{ ns.primary.share }}" data-access="{{ ns.primary.access }}" data-notes="{{ ns.primary.notes }}" data-user="{{ ns.primary.user_id or 0 }}" title="Edit">&#9998;</button>
+                <button class="smb-share-edit" data-edit="{{ ns.primary.id }}" data-host="{{ ns.primary.host }}" data-share="{{ ns.primary.share }}" data-access="{{ ns.primary.access }}" data-notes="{{ ns.primary.notes }}" data-users="{{ g.by_user.keys() | list | join(',') }}" title="Edit">&#9998;</button>
                 <button class="smb-share-del" data-del="{{ ns.primary.id }}" title="Delete">&#10005;</button>
               </span>
               {% endif %}
@@ -198,7 +223,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
             <div class="smb-share-users">
               {% for u in column_users %}
               {% set r = g.by_user.get(u.id) %}
-              {% if r %}<button type="button" class="smb-share-user smb-user-{{ access_class(r.access) }}" data-user="{{ r.user_id }}" title="Open as {{ user_label(u) }}">{{ user_label(u) }}</button>{% endif %}
+              {% if r %}<button type="button" class="smb-share-user smb-user-{{ access_class(r.access) }}" data-user="{{ r.user_id }}" title="Open as {{ user_label(u) }} ({{ 'no access' if r.access in ('', 'NO_ACCESS') else r.access }})">{{ user_label(u) }}</button>{% endif %}
               {% endfor %}
               {% if g.unassigned %}<button type="button" class="smb-share-user smb-user-none" data-user="0" title="Open anonymously">anon</button>{% endif %}
             </div>
@@ -213,6 +238,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
       {% else %}
       <p class="muted" style="font-size:12px; margin:0;">No share entries yet. Use the &ldquo;Add share entries&rdquo; button above.</p>
       {% endif %}
+      </div>
     </div>
   </div>
   <div class="smb-browser-right">
@@ -261,15 +287,15 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
     <div class="card" style="margin-bottom:0;">
       <form id="smbForm">
         <input type="hidden" id="smbEditId" value="" />
-        <label>User *</label>
-        <select id="smbUserId" required>
-          <option value="">Select user…</option>
-          {% for u in all_users %}
+        <label>Users *</label>
+        <select id="smbUserId" multiple size="6">
+          {% for u in cred_users %}
           <option value="{{ u.id }}">{{ user_label(u) }}</option>
           {% endfor %}
         </select>
-        {% if not all_users %}
-        <p class="muted" style="font-size:12px;">No users found. <a href="/users">Add a user first</a>.</p>
+        <p class="muted" style="font-size:11px; margin:4px 0 0;">Ctrl/Cmd-click to pick several — one entry per user, each authenticates with their own stored password or NTLM hash.</p>
+        {% if not cred_users %}
+        <p class="muted" style="font-size:12px;">No users with a password or NTLM hash. <a href="/users">Add credentials first</a>.</p>
         {% endif %}
         <label style="margin-top:12px;">Host *</label>
         <input id="smbHostInput" placeholder="192.168.1.10 or HOSTNAME" required />
@@ -340,7 +366,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
 
   function resetForm() {
     smbEditId.value = '';
-    smbUserId.value = '';
+    Array.prototype.forEach.call(smbUserId.options, function(o) { o.selected = false; });
     smbHostInput.value = '';
     smbHostInput.readOnly = false;
     smbHostInput.disabled = false;
@@ -374,8 +400,8 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
     btn.addEventListener('click', function(ev) {
       ev.stopPropagation();
       smbEditId.value = btn.getAttribute('data-edit');
-      var dataUser = btn.getAttribute('data-user') || '0';
-      smbUserId.value = dataUser === '0' ? '' : dataUser;
+      var dataUsers = (btn.getAttribute('data-users') || '').split(',').filter(Boolean);
+      Array.prototype.forEach.call(smbUserId.options, function(o) { o.selected = dataUsers.indexOf(o.value) !== -1; });
       smbHostInput.value = btn.getAttribute('data-host');
       smbHostInput.readOnly = true;
       smbHostInput.disabled = true;
@@ -398,13 +424,15 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
       msg.textContent = 'Saving...';
       var editRow = smbSharesContainer.querySelector('.smb-share-entry[data-edit-share-id="' + smbEditId.value + '"]');
       if (!editRow) { msg.textContent = 'Edit row not found'; return; }
+      var selUsers = Array.prototype.map.call(smbUserId.selectedOptions, function(o) { return o.value; });
+      if (!selUsers.length) { msg.textContent = 'Select at least one user'; return; }
       var fd = new FormData();
       fd.append('share_id', smbEditId.value);
       fd.append('host', smbHostInput.value.trim());
       fd.append('share', editRow.querySelector('.smb-share-field').value.trim());
       fd.append('access', editRow.querySelector('.smb-access-field').value);
       fd.append('notes', editRow.querySelector('.smb-notes-field').value.trim());
-      fd.append('user_id', smbUserId.value ? parseInt(smbUserId.value, 10) : 0);
+      selUsers.forEach(function(v) { fd.append('user_id', v); });
       fetch('/api/smb-shares/update', {method:'POST', body:fd})
         .then(function(r) { return r.json(); })
         .then(function(j) {
@@ -415,8 +443,8 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
     }
     var host = smbHostInput.value.trim();
     if (!host) { msg.textContent = 'Host is required'; return; }
-    var selectedUserId = smbUserId.value ? parseInt(smbUserId.value, 10) : 0;
-    if (!selectedUserId) { msg.textContent = 'Select a user'; return; }
+    var selectedUserId = Array.prototype.map.call(smbUserId.selectedOptions, function(o) { return o.value; });
+    if (!selectedUserId.length) { msg.textContent = 'Select at least one user'; return; }
     var lines = [];
     var hasValid = false;
     smbSharesContainer.querySelectorAll('.smb-share-entry').forEach(function(entry) {
@@ -432,7 +460,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
     msg.textContent = 'Adding...';
     var fd = new FormData();
     fd.append('host', host);
-    fd.append('user_id', selectedUserId);
+    selectedUserId.forEach(function(v) { fd.append('user_id', v); });
     fd.append('shares', lines.join('\n'));
     fetch('/api/smb-shares/create', {method:'POST', body:fd})
       .then(function(r) { return r.json(); })
@@ -497,7 +525,20 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
   // Files marked for the report: key (host/share/path/file) -> { path, user }.
   // Path is the full SMB path (//host/share/...) and user is the account
   // used when the file was marked ('anonymous' for unassigned shares).
-  var markedFiles = {};
+  // Persisted in localStorage so the report list survives reloads and
+  // navigation (localStorage is scoped per origin, i.e. per instance/port).
+  var markedStorageKey = 'reconbubble.smb.marked.v1';
+  var markedFiles = (function() {
+    try {
+      var raw = localStorage.getItem(markedStorageKey);
+      var obj = raw ? JSON.parse(raw) : {};
+      return (obj && typeof obj === 'object' && !Array.isArray(obj)) ? obj : {};
+    } catch (e) { return {}; }
+  })();
+  function saveMarkedFiles() {
+    try { localStorage.setItem(markedStorageKey, JSON.stringify(markedFiles)); }
+    catch (e) { /* ignore storage failures (private mode, quota) */ }
+  }
   // Id of the name entry whose stored credentials the server should use
   // for the active connection ('0' = anonymous), set when a share row or
   // user chip is clicked. The server resolves the actual
@@ -539,6 +580,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
     var key = markKey(name);
     if (on) markedFiles[key] = { path: smbPath(name), user: accessUserName() };
     else delete markedFiles[key];
+    saveMarkedFiles();
   }
   function renderMarkedList() {
     var keys = Object.keys(markedFiles);
@@ -562,7 +604,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
       rm.className = 'smb-marked-unmark';
       rm.title = 'Remove from the report list';
       rm.textContent = '\u00d7';
-      rm.addEventListener('click', function() { delete markedFiles[key]; renderMarkedList(); });
+      rm.addEventListener('click', function() { delete markedFiles[key]; saveMarkedFiles(); renderMarkedList(); });
       rmTd.appendChild(rm);
       tr.appendChild(pathTd);
       tr.appendChild(userTd);
@@ -750,6 +792,11 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
       crumbEl.appendChild(sep);
       crumbEl.appendChild(crumb(seg, i + 1, i === browseState.path.length - 1));
     });
+    var asEl = document.createElement('span');
+    asEl.className = 'smb-crumb-sep';
+    asEl.style.fontSize = '12px';
+    asEl.textContent = '\u00b7 as ' + accessUserName();
+    crumbEl.appendChild(asEl);
   }
   function renderEntries(entries) {
     fileTbody.innerHTML = '';
@@ -878,11 +925,15 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
     a.click();
     a.remove();
   }
-  function highlightShareRow(host, share) {
+  function highlightShareRow(host, share, userId) {
+    var target = String(userId);
     document.querySelectorAll('.smb-share-row').forEach(function(row) {
       var match = row.getAttribute('data-host') === host
         && row.getAttribute('data-share') === share;
       row.classList.toggle('active', match);
+      if (match) row.querySelectorAll('.smb-share-user').forEach(function(chip) {
+        chip.classList.toggle('active', chip.getAttribute('data-user') === target);
+      });
     });
   }
   function openShare(host, share, userId) {
@@ -890,7 +941,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
     browseState.share = share;
     browseState.path = [];
     selectedUserId = (userId && userId !== '0' && knownUsers[userId]) ? userId : '0';
-    highlightShareRow(host, share);
+    highlightShareRow(host, share, selectedUserId);
     doBrowse();
   }
 
@@ -911,6 +962,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
       btn.addEventListener('click', function() { openShare(host, share, btn.getAttribute('data-user')); });
     });
   });
+  renderMarkedList();
 })();
 </script>
 {% endblock %}

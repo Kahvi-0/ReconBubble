@@ -965,12 +965,16 @@ body.notes-open .export-creds-panel.active { right: calc(min(480px, 90vw) + 10px
       rows.forEach(row => {
         const val = (row.getAttribute('data-' + opt.key) || '').trim();
         if (val) {
-          count++;
           const adUser = (row.getAttribute('data-ad-username') || '').trim();
           const domain = (row.getAttribute('data-domain') || '').trim();
           const email = (row.getAttribute('data-email') || '').trim();
           const account = adUser && domain ? `${domain}\\${adUser}` : (email || adUser || 'unknown');
-          values.push({ account, value: val });
+          // One entry per unique value: shared passwords/hashes must not
+          // appear twice in the copied list.
+          if (!values.some(v => v.value === val)) {
+            count++;
+            values.push({ account, value: val });
+          }
         }
       });
 
