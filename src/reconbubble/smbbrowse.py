@@ -15,6 +15,7 @@ until ``close()`` is called).  All errors are normalised into
     bad_path     path segment failed validation
     bad_port     port input failed validation
     bad_domain   domain input failed validation
+    no_creds     the selected user has no stored password or NTLM hash
     timeout      the operation did not complete within its wall-clock deadline
     smb_error    anything else the server reported
 
@@ -194,18 +195,67 @@ def _apply_domain(username: str, domain: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _session_credentials(username: str, password: str) -> Tuple[Union[str, list], Optional[str]]:
+#: Null LM hash, paired with a bare NT hash so spnego sees ``<lm>:<nt>``.
+_NTLM_NULL_LM = "AAD3B435B51404EEAAD3B435B51404EE"
+_NTLM_PAIR_RE = re.compile(r"^([0-9a-fA-F]{32}):([0-9a-fA-F]{32})$")
+_NTLM_BARE_RE = re.compile(r"^[0-9a-fA-F]{32}$")
+_NTLM_PREFIX_RE = re.compile(r"^\$NTLM\$")
+
+
+def normalize_ntlm_hash(raw: str) -> str:
+    """Normalise a stored NTLM hash to the ``<lm>:<nt>`` form spnego accepts.
+
+    spnego (``spnego._ntlm_raw.crypto.is_ntlm_hash``) only recognises a
+    32-hex LM hash, a colon, and a 32-hex NT hash.  The common variants are
+    accepted and upper-cased; anything else yields ``""`` (unusable):
+
+    * ``<lm>:<nt>`` pair in any case -> upper-cased pair;
+    * bare 32-hex NT hash -> paired with the null LM hash;
+    * an optional ``$NTLM$`` prefix is stripped.
+
+    When the value spans several lines (e.g. pasted from a crack output)
+    the first line that normalises is used.
+    """
+    for line in (raw or "").splitlines():
+        s = _NTLM_PREFIX_RE.sub("", line.strip()).strip()
+        if not s:
+            continue
+        m = _NTLM_PAIR_RE.match(s)
+        if m:
+            return f"{m.group(1).upper()}:{m.group(2).upper()}"
+        if _NTLM_BARE_RE.match(s):
+            return f"{_NTLM_NULL_LM}:{s.upper()}"
+    return ""
+
+
+def _session_credentials(
+    username: str, password: str, ntlm_hash: str = ""
+) -> Tuple[Union[str, list], Optional[str]]:
     """Return ``(username, password)`` args for :class:`~smbprotocol.session.Session`.
 
     Anonymous access needs an explicit empty :class:`spnego.Password`:
     pypyspnego turns a falsy username into a ``CredentialCache`` lookup,
     which fails on headless systems with no credential store.
+
+    A named user authenticates with the stored password when one exists;
+    otherwise a stored NTLM hash is normalised and used in the password
+    slot (pass-the-hash — spnego recognises ``<lm>:<nt>`` hex and builds
+    an NTLMv2 response directly from it).  A named user with neither a
+    password nor a usable hash raises :class:`SmbBrowseError` with code
+    ``no_creds`` before any network I/O happens.
     """
     user = (username or "").strip()
     pwd = password or ""
     if not user and not pwd:
         return [spnego.Password(username="", password="")], None
-    return user, pwd
+    if pwd:
+        return user, pwd
+    normalized = normalize_ntlm_hash(ntlm_hash)
+    if not normalized:
+        raise SmbBrowseError(
+            "no_creds", "The selected user has no stored password or NTLM hash."
+        )
+    return user, normalized
 
 
 def _safe_str(exc: Exception) -> str:
@@ -311,11 +361,11 @@ def _establish(host: str, username: str, password: str, timeout: float,
 
 @contextlib.contextmanager
 def _smb_session(host: str, username: str, password: str, timeout: float,
-                 port: int = SMB_PORT) -> Iterator[Session]:
+                 port: int = SMB_PORT, ntlm_hash: str = "") -> Iterator[Session]:
     """Yield an authenticated session; the connection is always released."""
+    user, pwd = _session_credentials(username, password, ntlm_hash)
     conn = _establish(host, username, password, timeout, port)
     try:
-        user, pwd = _session_credentials(username, password)
         try:
             session = Session(conn, user, pwd, require_encryption=True)
             session.connect()
@@ -383,10 +433,10 @@ def _query_all(dir_open: Open) -> list:
 
 def _list_folder_blocking(
     host: str, share: str, rel: str, username: str, password: str, timeout: float,
-    port: int = SMB_PORT,
+    port: int = SMB_PORT, ntlm_hash: str = "",
 ) -> list:
     """Blocking SMB I/O for :func:`list_share`; runs in the SMB pool."""
-    with _smb_session(host, username, password, timeout, port) as session:
+    with _smb_session(host, username, password, timeout, port, ntlm_hash) as session:
         tree = _tree_connect(session, host, share)
         try:
             dir_open = Open(tree, rel)
@@ -445,12 +495,14 @@ def list_share(
     timeout: float = DEFAULT_TIMEOUT,
     domain: str = "",
     port: Union[int, str] = SMB_PORT,
+    ntlm_hash: str = "",
 ) -> List[SmbEntry]:
     """List one folder. ``path`` is the slash-separated path below the share.
 
     ``domain`` optionally qualifies a plain username as ``DOMAIN\\user``;
-    ``port`` selects the TCP port (default 445).  The whole operation is
-    bounded by a wall-clock ``timeout``; expiry raises
+    ``port`` selects the TCP port (default 445); ``ntlm_hash`` is used for
+    pass-the-hash authentication when no password is given.  The whole
+    operation is bounded by a wall-clock ``timeout``; expiry raises
     :class:`SmbBrowseError` with code ``timeout``.
     """
     host = validate_host(host)
@@ -461,7 +513,9 @@ def list_share(
     rel = "\\".join(segments)
     try:
         raw = _with_deadline(
-            lambda: _list_folder_blocking(host, share, rel, username, password, timeout, port),
+            lambda: _list_folder_blocking(
+                host, share, rel, username, password, timeout, port, ntlm_hash
+            ),
             timeout,
         )
     except SmbBrowseError:
@@ -529,11 +583,12 @@ def _open_file_blocking(
     password: str,
     timeout: float,
     port: int = SMB_PORT,
+    ntlm_hash: str = "",
 ) -> SmbFileHandle:
     """Blocking SMB I/O for :func:`open_file_for_read`; runs in the SMB pool."""
+    user, pwd = _session_credentials(username, password, ntlm_hash)
     conn = _establish(host, username, password, timeout, port)
     try:
-        user, pwd = _session_credentials(username, password)
         session = Session(conn, user, pwd, require_encryption=True)
         session.connect()
         tree = _tree_connect(session, host, share)
@@ -562,10 +617,12 @@ def open_file_for_read(
     timeout: float = DEFAULT_TIMEOUT,
     domain: str = "",
     port: Union[int, str] = SMB_PORT,
+    ntlm_hash: str = "",
 ) -> SmbFileHandle:
     """Open a file for reading and return a handle that owns its connection.
 
-    ``domain`` and ``port`` work as in :func:`list_share`.  The blocking
+    ``domain``, ``port`` and ``ntlm_hash`` work as in :func:`list_share`.
+    The blocking
     connect/auth/open phase is bounded by a wall-clock ``timeout`` (expiry
     raises :class:`SmbBrowseError` with code ``timeout``).  Reads after the
     open are bounded by TCP keepalives (a dead peer kills the socket within
@@ -585,7 +642,8 @@ def open_file_for_read(
     try:
         return _with_deadline(
             lambda: _open_file_blocking(
-                host, share, rel, filename, username, password, timeout, port
+                host, share, rel, filename, username, password, timeout, port,
+                ntlm_hash,
             ),
             timeout,
         )
@@ -876,6 +934,7 @@ def preview_file(
     port: Union[int, str] = SMB_PORT,
     expected_size: Optional[int] = None,
     cache_dir=None,
+    ntlm_hash: str = "",
 ) -> SmbPreview:
     """Open a remote file for preview and classify its content.
 
@@ -912,6 +971,7 @@ def preview_file(
         timeout,
         domain=domain,
         port=port,
+        ntlm_hash=ntlm_hash,
     )
     preview = SmbPreview()
     preview._handle = handle

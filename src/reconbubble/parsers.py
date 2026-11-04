@@ -1849,24 +1849,28 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
     }
 
 
+_SMBMAP_HOST_RE = re.compile(
+    r"\[\+\]\s*IP:\s*([\w.\-]+)(?::(\d+))?\s+Name:\s*([^\t]+?)\s+Status:\s*(\S.*)$"
+)
+
+
 def import_smbmap(session: Session, artifact: Artifact, path: Path, user_id: int | None = None) -> dict:
-    """Parse SMBMAP output in format: host:IP, share:NAME, privs:PERMS"""
+    """Parse SMB share uploads.
+
+    Supports smbmap's real console output — a ``[+] IP: <ip>[:<port>]``
+    host header followed by tab-separated ``<disk>  <permissions>
+    <comment>`` rows — plus the legacy one-line-per-share ``host:IP,
+    share:NAME, privs:PERMS`` shorthand.  Banner, spinner and progress
+    lines are ignored (smbmap writes its spinner with ``\\r``, so one
+    console line holds many frames).
+    """
     added = 0
     skipped = 0
     unmatched: list[str] = []
-    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
-        s = line.strip()
-        if not s or s.startswith("#"):
-            continue
-        host_match = re.search(r"host:[\s]*([\w.\-]+)", s)
-        share_match = re.search(r"share:[\s]*(.+?)(?:\s*,|$)", s)
-        privs_match = re.search(r"privs:[\s]*(\w+)", s)
-        if not (host_match and share_match and privs_match):
-            unmatched.append(s)
-            continue
-        host_ip = host_match.group(1).strip()
-        share_name = share_match.group(1).strip().rstrip(",")
-        access = privs_match.group(1).strip().upper()
+    hosts: set[str] = set()
+
+    def _upsert(host_ip: str, share_name: str, access: str, notes: str) -> None:
+        nonlocal added, skipped
         existing = session.scalar(
             select(SmbShare).where(
                 SmbShare.host == host_ip,
@@ -1876,14 +1880,73 @@ def import_smbmap(session: Session, artifact: Artifact, path: Path, user_id: int
         )
         if existing:
             skipped += 1
-            continue
-        session.add(SmbShare(host=host_ip, share=share_name, access=access, source_file=artifact.filename, user_id=user_id))
+            return
+        session.add(
+            SmbShare(
+                host=host_ip,
+                share=share_name,
+                access=access,
+                notes=notes,
+                source_file=artifact.filename,
+                user_id=user_id,
+            )
+        )
         added += 1
+
+    text = path.read_text(encoding="utf-8", errors="ignore").replace("\r", "\n")
+    in_block = False
+    block_host = ""
+    block_notes = ""
+    for line in text.splitlines():
+        host_match = _SMBMAP_HOST_RE.search(line)
+        if host_match:
+            in_block = True
+            block_host = host_match.group(1)
+            hosts.add(block_host)
+            block_notes = host_match.group(3)
+            if host_match.group(2) and host_match.group(2) != "445":
+                block_notes = f"{block_notes} (port {host_match.group(2)})"
+            continue
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        legacy_host = re.search(r"host:[\s]*([\w.\-]+)", s)
+        legacy_share = re.search(r"share:[\s]*(.+?)(?:\s*,|$)", s)
+        legacy_privs = re.search(r"privs:[\s]*(\w+)", s)
+        if legacy_host and legacy_share and legacy_privs:
+            hosts.add(legacy_host.group(1).strip())
+            _upsert(
+                legacy_host.group(1).strip(),
+                legacy_share.group(1).strip().rstrip(","),
+                legacy_privs.group(1).strip().upper(),
+                "",
+            )
+            continue
+        if not in_block:
+            continue  # banner / errors / spinners before the first host block
+        if re.match(r"\[[^\]\s]{1,2}\]", s):
+            continue  # progress or error tag ([*], [-], [!], spinner frames)
+        fields = line.split("\t")
+        if fields and not fields[0].strip():
+            fields = fields[1:]
+        if len(fields) < 2:
+            unmatched.append(s)
+            continue
+        name = fields[0].strip()
+        if name == "Disk" and fields[1].strip().lower() == "permissions":
+            continue  # column header
+        if name.startswith("---"):
+            continue  # separator row
+        access = fields[1].strip()
+        if not name or not access:
+            unmatched.append(s)
+            continue
+        _upsert(block_host, name, access, block_notes)
     session.commit()
     return {
         "added": added,
         "skipped": skipped,
         "unmatched": unmatched,
-        "details": {"hosts": len(set(re.search(r"host:[\s]*([\w.\-]+)", l).group(1) for l in path.read_text(encoding="utf-8", errors="ignore").splitlines() if re.search(r"host:[\s]*([\w.\-]+)", l)))},
+        "details": {"hosts": len(hosts), "shares": added + skipped},
     }
 
