@@ -70,24 +70,34 @@
 .topo-badge.has-password { background: #14532d; color: #86efac; border: 1px solid #16a34a; }
 .topo-badge.has-hash { background: #431407; color: #fdba74; border: 1px solid #ea580c; }
 
+/* Floating drawer; opens to the left of the pinned notes handle */
 .export-creds-panel {
+  box-sizing: border-box;
   position: fixed;
-  top: 0;
-  right: -420px;
-  width: 400px;
-  height: 100vh;
+  top: 63px;
+  bottom: 10px;
+  right: -450px;
+  width: min(420px, calc(100vw - 20px));
   background: #111418;
-  border-left: 1px solid #2a3545;
-  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.5);
+  border: 1px solid #1e2630;
+  border-radius: 14px;
+  box-shadow: -8px 0 26px rgba(0, 0, 0, 0.45);
   z-index: 1600;
   transition: right 0.3s ease;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .export-creds-panel.active {
-  right: 0;
+  right: 44px;
 }
+/* Follow the notes panel shift so the drawer never covers the notes panel */
+body.notes-open .export-creds-panel.active { right: calc(min(480px, 90vw) + 10px); }
+/* On small screens there is no room to sit left of the handle; the drawer may cover it */
+@media (max-width: 768px) { .export-creds-panel.active { right: 10px; } }
+@media (max-width: 768px) { body.notes-open .export-creds-panel.active { right: 10px; } }
 .export-creds-header {
   display: flex;
   align-items: center;
@@ -614,6 +624,7 @@
       document.querySelectorAll('#nameDetailForm .cred-copy-btn').forEach(b => b.style.display = '');
     }
     nameDetail.classList.add('active');
+    document.body.classList.add('name-panel-open');
   }
 
   document.querySelectorAll('.cred-copy-btn').forEach(btn => {
@@ -650,6 +661,7 @@
 
   function hideDetail() {
     nameDetail.classList.remove('active');
+    document.body.classList.remove('name-panel-open');
     document.getElementById('nameSaveBtn').style.display = 'none';
     document.getElementById('cancelEditBtn').style.display = 'none';
     document.getElementById('nameEditBtn').style.display = '';
@@ -665,7 +677,7 @@
 
   document.addEventListener('click', (e) => {
     if (nameDetail.classList.contains('active')) {
-      if (!nameDetail.contains(e.target) && !e.target.closest('.name-row') && e.target.id !== 'createNameBtn') {
+      if (!nameDetail.contains(e.target) && !e.target.closest('.name-row') && e.target.id !== 'createNameBtn' && !e.target.closest('.global-notes-panel')) {
         hideDetail();
       }
     }
@@ -997,10 +1009,12 @@
   exportCredsBtn.addEventListener('click', () => {
     buildExportHashList();
     exportCredsPanel.classList.add('active');
+    document.body.classList.add('export-panel-open');
   });
 
   closeExportCredsBtn.addEventListener('click', () => {
     exportCredsPanel.classList.remove('active');
+    document.body.classList.remove('export-panel-open');
   });
 
   exportCredsPanel.addEventListener('click', (e) => {
@@ -1023,8 +1037,9 @@
 
   document.addEventListener('click', (e) => {
     if (exportCredsPanel.classList.contains('active')) {
-      if (e.target !== exportCredsBtn && !exportCredsBtn.contains(e.target) && !exportCredsPanel.contains(e.target)) {
+      if (e.target !== exportCredsBtn && !exportCredsBtn.contains(e.target) && !exportCredsPanel.contains(e.target) && !e.target.closest('.global-notes-panel')) {
         exportCredsPanel.classList.remove('active');
+        document.body.classList.remove('export-panel-open');
       }
     }
   });
@@ -1378,11 +1393,13 @@
 
   openDomainCorrBtn.addEventListener("click", () => {
     domainCorrPanel.classList.add("active");
+    document.body.classList.add("corr-panel-open");
     loadDomains();
   });
 
   closeDomainCorrBtn.addEventListener("click", () => {
     domainCorrPanel.classList.remove("active");
+    document.body.classList.remove("corr-panel-open");
   });
 
   domainCorrPanel.addEventListener("click", (e) => {
@@ -1391,8 +1408,9 @@
 
   document.addEventListener("click", (e) => {
     if (domainCorrPanel.classList.contains("active")) {
-      if (e.target !== openDomainCorrBtn && !openDomainCorrBtn.contains(e.target)) {
+      if (e.target !== openDomainCorrBtn && !openDomainCorrBtn.contains(e.target) && !e.target.closest('.global-notes-panel')) {
         domainCorrPanel.classList.remove("active");
+        document.body.classList.remove("corr-panel-open");
       }
     }
   });

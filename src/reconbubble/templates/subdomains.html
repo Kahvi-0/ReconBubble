@@ -30,7 +30,11 @@
   </div>
   <p id="webProbeProgressText" class="muted">Preparing...</p>
 </div>
-<div class="card">
+<div class="view-toggle">
+  <button type="button" id="viewBtnTable" class="btn view-btn">📋 Table</button>
+  <button type="button" id="viewBtnScreenshots" class="btn view-btn">🖼️ Screenshots</button>
+</div>
+<div id="tableView" class="card">
   <h2>Subdomains by Domain</h2>
   {% if grouped %}
   {% for domain, data in grouped.items() %}
@@ -49,7 +53,7 @@
       {% endif %}
     </summary>
     <table style="margin-top:8px;">
-      <thead><tr><th style="width:30px;"></th><th style="width:60px;font-size:11px;">Complete</th><th style="width:70px;font-size:11px;">In Progress</th><th style="width:45px;font-size:11px;">WAF</th><th>Subdomain</th><th>Prowler IPs</th><th>Resolved IPs</th><th>HTTP/HTTPS Ports</th><th>URLs</th></tr></thead>
+      <thead><tr><th style="width:30px;"></th><th style="width:60px;font-size:11px;" data-nosort>Complete</th><th style="width:70px;font-size:11px;" data-nosort>In Progress</th><th style="width:45px;font-size:11px;" data-nosort>WAF</th><th>{% if domain == '_standalone_ips' %}IP{% else %}Subdomain{% endif %}</th><th>Prowler IPs</th><th>Resolved IPs</th><th>HTTP/HTTPS Ports</th><th>URLs</th></tr></thead>
       <tbody>
           {% for s in subs %}
           {% set url_count = s.url_count | default(0) %}
@@ -112,15 +116,19 @@
   {% endif %}
 </div>
 
-<div id="rdapModal" class="overlay hidden" style="cursor:pointer;" onclick="if(event.target===this)this.classList.add('hidden')">
-  <div class="card" style="max-width:500px; max-height:80vh; overflow:auto; cursor:default;" onclick="event.stopPropagation()">
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-      <h2 style="margin:0;">Domain Info</h2>
-      <button class="btn" onclick="document.getElementById('rdapModal').classList.add('hidden')">X</button>
-    </div>
-    <div id="rdapContent"></div>
-  </div>
+<div id="screenshotView" class="card hidden">
+  <h2>Screenshots (latest per host)</h2>
+  <p id="screenshotViewStatus" class="muted">Loading...</p>
+  <div id="screenshotGrid" class="shot-grid"></div>
 </div>
+
+<aside id="rdapModal" class="svc-drawer" aria-label="Domain info">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:12px;">
+    <h2 style="margin:0;">Domain Info</h2>
+    <button class="btn" id="rdapCloseBtn" type="button">Close</button>
+  </div>
+  <div id="rdapContent"></div>
+</aside>
 
 <style>
 .scope-dot { font-size: 14px; }
@@ -159,6 +167,27 @@
 .sub-row.row-complete:hover td { background: rgba(0, 255, 0, 0.05); }
 .sub-row.row-inprogress td { background: rgba(255, 153, 0, 0.12); }
 .sub-row.row-inprogress:hover td { background: rgba(255, 153, 0, 0.08); }
+.view-toggle { display: inline-flex; gap: 6px; margin-bottom: 10px; }
+.view-toggle .view-btn.active { background: #4a9eff; border-color: #4a9eff; color: #0b1220; font-weight: 600; }
+.shot-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-top: 10px; }
+.shot-card { border: 1px solid rgba(74,158,255,0.3); border-radius: 6px; overflow: hidden; cursor: pointer; background: rgba(74,158,255,0.05); }
+.shot-card:hover { border-color: #4a9eff; background: rgba(74,158,255,0.12); }
+.shot-card.shot-done { border-color: rgba(0,255,0,0.55); background: rgba(0,255,0,0.05); }
+.shot-card.shot-done:hover { border-color: #00ff00; background: rgba(0,255,0,0.10); }
+.shot-media { position: relative; }
+.shot-card img { width: 100%; aspect-ratio: 16/9; object-fit: cover; object-position: top center; display: block; background: #111; }
+.shot-done-box { position: absolute; top: 6px; left: 6px; z-index: 2; width: 22px; height: 22px; border-radius: 5px; background: rgba(8,12,20,0.85); border: 1px solid rgba(74,158,255,0.5); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.12s ease; cursor: pointer; }
+.shot-card:hover .shot-done-box { opacity: 1; }
+.shot-card.shot-done .shot-done-box { opacity: 1; border-color: rgba(0,255,0,0.7); }
+.shot-done-box input { -webkit-appearance: none; appearance: none; margin: 0; width: 16px; height: 16px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.65); background: transparent; display: grid; place-items: center; cursor: pointer; }
+.shot-done-box input:checked { background: #00ff00; border-color: #00ff00; }
+.shot-done-box input:checked::after { content: "✓"; font-size: 12px; font-weight: 700; color: #0b1220; line-height: 1; }
+.shot-urlbar { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; background: rgba(8,12,20,0.88); border-top: 1px solid rgba(74,158,255,0.4); padding: 4px 8px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transform: translateY(100%); opacity: 0; transition: transform 0.12s ease, opacity 0.12s ease; }
+.shot-card:hover .shot-urlbar { transform: translateY(0); opacity: 1; }
+.shot-urlbar a { color: #4a9eff; text-decoration: none; }
+.shot-urlbar a:hover { text-decoration: underline; }
+.shot-label { padding: 6px 8px 2px; font-size: 13px; word-break: break-all; display: flex; align-items: center; gap: 6px; }
+.shot-meta { padding: 0 8px 7px; font-size: 11px; }
 </style>
 
 <script>
@@ -223,8 +252,23 @@
           content.innerHTML = `<p class="muted">No RDAP data. <button class="btn" onclick="fetchRdap('${domain}', this)">Fetch RDAP</button></p>`;
         }
         
-        modal.classList.remove("hidden");
+        modal.classList.add("open");
+        document.body.classList.add("svc-drawer-open");
       });
+    });
+
+    // RDAP drawer: close button + Esc
+    document.getElementById("rdapCloseBtn").addEventListener("click", () => {
+      document.getElementById("rdapModal").classList.remove("open");
+      document.body.classList.remove("svc-drawer-open");
+    });
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      const rdapModal = document.getElementById("rdapModal");
+      if (rdapModal.classList.contains("open")) {
+        rdapModal.classList.remove("open");
+        document.body.classList.remove("svc-drawer-open");
+      }
     });
 
     // Subdomain click - open sidebar with Prowler + Screenshots
@@ -235,6 +279,130 @@
         window.ReconSidebar && window.ReconSidebar.openSubdomain(fqdn);
       });
     });
+
+    // View toggle: Table <-> Screenshots
+    const viewBtnTable = document.getElementById("viewBtnTable");
+    const viewBtnScreenshots = document.getElementById("viewBtnScreenshots");
+    const tableView = document.getElementById("tableView");
+    const screenshotView = document.getElementById("screenshotView");
+    const screenshotGrid = document.getElementById("screenshotGrid");
+    const screenshotViewStatus = document.getElementById("screenshotViewStatus");
+    let activeView = new URLSearchParams(window.location.search).get("view") === "screenshots" ? "screenshots" : "table";
+
+    const escHtml = (v) => String(v == null ? "" : v).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+    const renderScreenshotGrid = (hosts) => {
+      if (!hosts || !hosts.length) {
+        screenshotGrid.innerHTML = "";
+        screenshotViewStatus.textContent = "No screenshots captured yet.";
+        return;
+      }
+      screenshotViewStatus.textContent = `${hosts.length} host${hosts.length === 1 ? "" : "s"} with screenshots.`;
+      screenshotGrid.innerHTML = hosts.map((h) => {
+        const raw = h.created_at || "";
+        const when = raw ? new Date(raw.endsWith("Z") || raw.includes("+") ? raw : raw + "Z").toLocaleString() : "";
+        const statusTxt = h.http_status ? ` — HTTP ${h.http_status}` : "";
+        const fqdnHtml = escHtml(h.fqdn);
+        const done = Number(h.complete) === 1;
+        const urlHtml = escHtml(h.url || "");
+        return `<div class="shot-card${done ? " shot-done" : ""}" data-fqdn="${fqdnHtml}" data-port="${h.port || 0}" data-complete="${done ? "1" : "0"}" title="Open ${fqdnHtml}">
+          <div class="shot-media">
+            <img src="/screenshots/${encodeURIComponent(h.screenshot_path)}" loading="lazy" alt="${fqdnHtml}"/>
+            <label class="shot-done-box" title="${done ? "Mark incomplete" : "Mark complete"}"><input type="checkbox" class="shot-done-check"${done ? " checked" : ""}/></label>
+            ${urlHtml ? `<div class="shot-urlbar"><a href="${urlHtml}" target="_blank" rel="noopener noreferrer">${urlHtml}</a></div>` : ""}
+          </div>
+          <div class="shot-label"><span class="scope-dot ${h.in_scope ? "in" : "out"}" title="${h.in_scope ? "In-scope" : "Out-of-scope"}">●</span><code${h.is_ip ? ' class="standalone-ip"' : ""}>${fqdnHtml}</code><span class="muted">:${h.port} ${escHtml(h.scheme)}</span></div>
+          <div class="shot-meta muted">${when}${statusTxt}</div>
+        </div>`;
+      }).join("");
+      screenshotGrid.querySelectorAll(".shot-card").forEach((card) => {
+        card.addEventListener("click", () => {
+          window.ReconSidebar && window.ReconSidebar.openSubdomain(card.getAttribute("data-fqdn"));
+        });
+        const box = card.querySelector(".shot-done-box");
+        box && box.addEventListener("click", (e) => e.stopPropagation());
+        const chk = card.querySelector(".shot-done-check");
+        chk && chk.addEventListener("change", async (e) => {
+          e.stopPropagation();
+          const nowChecked = chk.checked;
+          const fd = new FormData();
+          fd.append("fqdn", card.getAttribute("data-fqdn"));
+          fd.append("complete", nowChecked ? "1" : "0");
+          const port = card.getAttribute("data-port");
+          if (port) fd.append("port", port);
+          try {
+            const r = await fetch("/api/subdomain/complete", { method: "POST", body: fd });
+            const data = await r.json();
+            if (!r.ok || !data.ok) throw new Error("bad response");
+          } catch (err) {
+            chk.checked = !nowChecked;
+            return;
+          }
+          syncScreenshotCardComplete(card, nowChecked);
+          syncTableRowComplete(card.getAttribute("data-fqdn"), nowChecked);
+        });
+        const urlA = card.querySelector(".shot-urlbar a");
+        urlA && urlA.addEventListener("click", (e) => e.stopPropagation());
+      });
+    };
+
+    const syncScreenshotCardComplete = (card, complete) => {
+      if (!card) return;
+      card.classList.toggle("shot-done", complete);
+      card.setAttribute("data-complete", complete ? "1" : "0");
+      const chk = card.querySelector(".shot-done-check");
+      if (chk) chk.checked = complete;
+      const box = card.querySelector(".shot-done-box");
+      if (box) box.title = complete ? "Mark incomplete" : "Mark complete";
+    };
+
+    const syncTableRowComplete = (fqdn, complete) => {
+      if (!fqdn) return;
+      const row = [...document.querySelectorAll(".sub-row")].find((r) => r.getAttribute("data-fqdn") === fqdn);
+      if (!row) return;
+      const cc = row.querySelector(".sub-complete");
+      const ic = row.querySelector(".sub-inprogress");
+      if (cc) cc.checked = complete;
+      if (complete && ic) ic.checked = false;
+      row.setAttribute("data-complete", complete ? "1" : "0");
+      applySubRowState(row, cc, ic);
+    };
+
+    const loadScreenshotView = () => {
+      screenshotViewStatus.textContent = "Loading...";
+      const showOut = new URL(window.location.href).searchParams.get("show_out") === "1";
+      fetch(`/api/screenshot/latest?show_out=${showOut ? "1" : "0"}`, { cache: "no-store" })
+        .then((r) => r.json())
+        .then((data) => {
+          if (!data.ok) throw new Error(data.error || "bad response");
+          renderScreenshotGrid(data.hosts);
+        })
+        .catch(() => {
+          screenshotGrid.innerHTML = "";
+          screenshotViewStatus.textContent = "Failed to load screenshots.";
+        });
+    };
+
+    const setView = (view) => {
+      activeView = view;
+      const isTable = view === "table";
+      viewBtnTable.classList.toggle("active", isTable);
+      viewBtnScreenshots.classList.toggle("active", !isTable);
+      tableView.classList.toggle("hidden", !isTable);
+      screenshotView.classList.toggle("hidden", isTable);
+      const u = new URL(window.location.href);
+      if (isTable) u.searchParams.delete("view");
+      else u.searchParams.set("view", "screenshots");
+      window.history.replaceState({}, "", u.toString());
+    };
+
+    viewBtnTable && viewBtnTable.addEventListener("click", () => setView("table"));
+    viewBtnScreenshots && viewBtnScreenshots.addEventListener("click", () => {
+      setView("screenshots");
+      if (screenshotGrid.innerHTML === "") loadScreenshotView();
+    });
+    setView(activeView);
+    if (activeView === "screenshots") loadScreenshotView();
 
     // Screenshot capture
     const btnCapture = document.getElementById("btnCaptureScreenshots");
@@ -296,6 +464,7 @@
           : `Capturing ${job.completed}/${job.total}...${suffix}`;
       } else if (job.status === "completed") {
         progressText.textContent = `Done! ${job.ok_count}/${job.total} succeeded.`;
+        if (activeView === "screenshots") loadScreenshotView();
       } else if (job.status === "failed") {
         progressText.textContent = `Error: ${job.error || "Screenshot job failed"}`;
       }
@@ -887,6 +1056,8 @@
       if (cb.checked && ic) ic.checked = false;
       if (row) row.setAttribute("data-complete", cb.checked ? "1" : "0");
       applySubRowState(row, cb, ic);
+      const shotCard = [...document.querySelectorAll(".shot-card")].find((c) => c.getAttribute("data-fqdn") === cb.getAttribute("data-fqdn"));
+      syncScreenshotCardComplete(shotCard, cb.checked);
     });
   });
 

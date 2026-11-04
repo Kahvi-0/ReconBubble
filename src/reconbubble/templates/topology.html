@@ -195,11 +195,12 @@
     backdrop-filter: blur(6px);
     box-shadow: 0 12px 26px rgba(0, 0, 0, 0.24);
   }
+  /* Opens to the left of the pinned notes handle (34px strip + 10px gap) */
   #topologyInspectorWrap {
     display: none;
     position: absolute;
     top: 64px;
-    right: 10px;
+    right: 44px;
     bottom: 10px;
     z-index: 65;
     width: min(360px, calc(100% - 20px));
@@ -212,6 +213,8 @@
     backdrop-filter: blur(10px);
     animation: topo-drawer-in 0.18s ease;
   }
+  /* On small screens there is no room to sit left of the handle; the inspector may cover it */
+  @media (max-width: 768px) { #topologyInspectorWrap { right: 10px; } }
   #topologyInspectorWrap.topo-closing {
     animation: topo-drawer-out 0.16s ease forwards;
   }
@@ -277,8 +280,8 @@
   }
   .topo-search {
     position: relative;
-    flex: 0 1 240px;
-    min-width: 150px;
+    flex: 0 1 170px;
+    min-width: 110px;
   }
   .topo-search input {
     width: 100%;
@@ -422,10 +425,41 @@
     margin-top: 14px;
     width: 100%;
   }
+  @media (max-width: 1500px) {
+    .topo-chip {
+      font-size: 11px;
+      padding: 5px 8px;
+      gap: 5px;
+    }
+    .topo-chip-icon {
+      font-size: 13px;
+    }
+  }
+  @media (max-width: 1280px) {
+    .topo-chip {
+      padding: 6px;
+      gap: 0;
+    }
+    .topo-chip span:not(.topo-chip-icon) {
+      display: none;
+    }
+    .topo-chip-icon {
+      font-size: 14px;
+    }
+  }
+  @media (max-width: 1000px) {
+    .topo-chip {
+      padding: 5px;
+    }
+    .topo-chip-icon {
+      font-size: 13px;
+    }
+  }
 </style>
 <div class="topo-page">
   <section class="topo-toolbar" aria-label="Topology tools">
     <div class="topo-palette">
+      <button type="button" class="topo-chip" draggable="true" data-node-type="group"><span class="topo-chip-icon">🗂️</span><span>Group</span></button>
       <button type="button" class="topo-chip" draggable="true" data-node-type="computer"><span class="topo-chip-icon">💻</span><span>Computer</span></button>
       <button type="button" class="topo-chip" draggable="true" data-node-type="server"><span class="topo-chip-icon">🗄️</span><span>Server</span></button>
       <button type="button" class="topo-chip" draggable="true" data-node-type="router"><span class="topo-chip-icon">📡</span><span>Router</span></button>
@@ -448,7 +482,7 @@
   </section>
 
   <div class="topo-canvas-wrap">
-    <div id="topologyCy" role="application" aria-label="Attack topology canvas"></div>
+    <div id="topologyCy" class="no-smooth" role="application" aria-label="Attack topology canvas"></div>
     <div id="topologyNoteLayer" aria-hidden="true"></div>
 
     <div id="topologyInspectorWrap">

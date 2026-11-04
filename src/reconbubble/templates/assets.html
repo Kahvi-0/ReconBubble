@@ -71,6 +71,12 @@
   </div>
 </div>
 
+<div class="card" style="margin-top:16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
+  <label for="assetSearch" class="filter-label" style="margin:0;">Search IP / hostname</label>
+  <input type="search" id="assetSearch" class="toolbar-search" placeholder="e.g. 10.0.1 or web01" style="max-width:420px;" />
+</div>
+<div id="assetNoSearchMatches" class="card" style="display:none;"><p class="muted">No assets match your search.</p></div>
+
 {% for subnet, rows in grouped.items() %}
 <div class="card">
   <details class="asset-subnet-group" open>
@@ -86,6 +92,8 @@
             data-in-scope="{{ 1 if r.in_scope else 0 }}"
             data-tag="{{ r.tag or '' }}"
             data-id="{{ r.id }}"
+            data-ip="{{ r.ip }}"
+            data-hostname="{{ r.hostname or '' }}"
             data-topo-node-id="{{ topology_asset_node_ids.get(r.id|string, '') }}"
           >
             <td><input type="checkbox" class="completeHost" data-host-id="{{ r.id }}" {% if r.complete==1 %}checked{% endif %} /></td>
@@ -308,7 +316,7 @@ html { scrollbar-gutter: stable; }
         return;
       }
 
-    const setFilter = (key, value) => {
+    const setFilter = (key, value, persist = true) => {
       const u = new URL(window.location.href);
       if (value === null || value === "") {
         u.searchParams.delete(key);
@@ -318,13 +326,15 @@ html { scrollbar-gutter: stable; }
       if (key !== "page") {
         u.searchParams.delete("page");
       }
-      const nextPrefs = { ...loadPrefs() };
-      if (value === null || value === "") {
-        delete nextPrefs[key];
-      } else {
-        nextPrefs[key] = String(value);
+      if (persist) {
+        const nextPrefs = { ...loadPrefs() };
+        if (value === null || value === "") {
+          delete nextPrefs[key];
+        } else {
+          nextPrefs[key] = String(value);
+        }
+        savePrefs(nextPrefs);
       }
-      savePrefs(nextPrefs);
       window.location.href = u.toString();
     };
 
@@ -367,10 +377,12 @@ html { scrollbar-gutter: stable; }
 
     function showAssetDetail() {
       assetDetail.classList.add("active");
+      document.body.classList.add("asset-panel-open");
     }
 
     function hideAssetDetail() {
       assetDetail.classList.remove("active");
+      document.body.classList.remove("asset-panel-open");
     }
 
     closeDetailBtn && closeDetailBtn.addEventListener("click", hideAssetDetail);
@@ -645,6 +657,55 @@ html { scrollbar-gutter: stable; }
     tagFilter && tagFilter.addEventListener("change", () => {
       setFilter("tag_filter", tagFilter.value);
     });
+
+    const assetSearch = document.getElementById("assetSearch");
+    if (assetSearch) {
+      const shownEl = document.getElementById("shownCountValue");
+      const totalEl = document.getElementById("totalCountValue");
+      const noMatchEl = document.getElementById("assetNoSearchMatches");
+      const baseShown = shownEl ? parseInt(shownEl.textContent, 10) || 0 : 0;
+      const baseTotal = totalEl ? parseInt(totalEl.textContent, 10) || 0 : 0;
+      const pageRowCount = document.querySelectorAll("tr.asset-row").length;
+
+      const applyAssetSearch = () => {
+        const q = assetSearch.value.trim().toLowerCase();
+        let visible = 0;
+        document.querySelectorAll("tr.asset-row").forEach((row) => {
+          const hay = (
+            (row.getAttribute("data-ip") || "") + " " + (row.getAttribute("data-hostname") || "")
+          ).toLowerCase();
+          const show = !q || hay.indexOf(q) !== -1;
+          row.style.display = show ? "" : "none";
+          if (show) visible++;
+        });
+        document.querySelectorAll(".asset-subnet-group").forEach((group) => {
+          let groupVisible = 0;
+          group.querySelectorAll("tr.asset-row").forEach((row) => {
+            if (row.style.display !== "none") groupVisible++;
+          });
+          const card = group.closest(".card");
+          if (card) card.style.display = groupVisible ? "" : "none";
+          const countSpan = group.querySelector("summary .muted");
+          if (countSpan) countSpan.textContent = `(${groupVisible} asset${groupVisible === 1 ? "" : "s"})`;
+        });
+        if (shownEl) shownEl.textContent = q ? String(visible) : String(baseShown);
+        if (totalEl) totalEl.textContent = q ? String(pageRowCount) : String(baseTotal);
+        if (noMatchEl) noMatchEl.style.display = q && visible === 0 ? "" : "none";
+      };
+
+      assetSearch.value = prefs.search || "";
+      applyAssetSearch();
+      assetSearch.addEventListener("input", () => {
+        const nextPrefs = { ...loadPrefs() };
+        if (assetSearch.value.trim()) {
+          nextPrefs.search = assetSearch.value.trim();
+        } else {
+          delete nextPrefs.search;
+        }
+        savePrefs(nextPrefs);
+        applyAssetSearch();
+      });
+    }
 
     const applyRowState = (row, completeCb, inprogressCb) => {
       if (!row) return;

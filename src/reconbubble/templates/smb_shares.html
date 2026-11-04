@@ -10,22 +10,7 @@
   <span class="pill-access-none">{{ access or 'UNKNOWN' }}</span>
   {% endif %}
 {% endmacro %}
-{% macro access_cell(row) %}
-  {% if row %}
-  <div class="smb-cell-top">
-    {{ access_pill(row.access) }}
-    <span class="smb-cell-actions">
-      <button class="smb-share-edit" data-edit="{{ row.id }}" data-host="{{ row.host }}" data-share="{{ row.share }}" data-access="{{ row.access }}" data-notes="{{ row.notes }}" data-user="{{ row.user_id or 0 }}" title="Edit">&#9998;</button>
-      <button class="smb-share-del" data-del="{{ row.id }}" title="Delete">&#10005;</button>
-    </span>
-  </div>
-  {% if row.notes %}
-  <div class="smb-cell-notes muted" style="font-size:11px; white-space:pre-wrap;">{{ row.notes }}</div>
-  {% endif %}
-  {% else %}
-  <span class="muted">-</span>
-  {% endif %}
-{% endmacro %}
+{% macro access_class(access) %}{% if access in ('READ', 'READ_LIST', 'READ_DATA') %}read{% elif access in ('WRITE', 'WRITE_DATA', 'CHANGE') %}write{% elif access in ('FULL', 'FULL_CONTROL', 'FULL_ACCESS') %}full{% else %}none{% endif %}{% endmacro %}
 {% block content %}
 <h1>SMB Shares</h1>
 
@@ -35,13 +20,22 @@
 </div>
 
 <style>
+/* Floating drawer; opens to the left of the pinned notes handle */
 .smb-panel {
-  position: fixed; top: 0; right: -420px; width: 420px; height: 100vh;
-  background: #111418; border-left: 1px solid #2a3545;
-  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.5); z-index: 1600;
-  transition: right 0.3s ease; display: flex; flex-direction: column; overflow-y: auto;
+  box-sizing: border-box;
+  position: fixed; top: 63px; bottom: 10px; right: -450px;
+  width: min(420px, calc(100vw - 20px));
+  background: #111418; border: 1px solid #1e2630; border-radius: 14px;
+  box-shadow: -8px 0 26px rgba(0, 0, 0, 0.45); z-index: 1600;
+  transition: right 0.3s ease; display: flex; flex-direction: column;
+  overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain;
 }
-.smb-panel.active { right: 0; }
+.smb-panel.active { right: 44px; }
+/* Follow the notes panel shift so the drawer never covers the notes panel */
+body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
+/* On small screens there is no room to sit left of the handle; the drawer may cover it */
+@media (max-width: 768px) { .smb-panel.active { right: 10px; } }
+@media (max-width: 768px) { body.notes-open .smb-panel.active { right: 10px; } }
 .smb-panel-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 16px 20px; border-bottom: 1px solid #2a3545; background: #0f1318;
@@ -49,34 +43,12 @@
 }
 .smb-panel-body { padding: 16px 20px; flex: 1; overflow-y: auto; }
 .smb-host-card { margin-bottom: 16px; border: 1px solid #2a3545; border-radius: 4px; overflow: hidden; }
+.smb-host-card:last-child { margin-bottom: 0; }
 .smb-host-header {
   background: #0f1318; padding: 10px 14px; border-bottom: 1px solid #2a3545;
   font-weight: 600; font-size: 14px; display: flex; align-items: center; justify-content: space-between;
 }
 .smb-host-header code { color: #7dd3fc; background: #1e3a5f; padding: 2px 8px; border-radius: 3px; font-size: 13px; }
-.smb-host-table-wrap { overflow-x: auto; }
-.smb-access-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-.smb-access-table th, .smb-access-table td {
-  border-bottom: 1px solid #1a2332;
-  padding: 8px 12px;
-  vertical-align: top;
-  text-align: left;
-  min-width: 140px;
-}
-.smb-access-table th {
-  background: #0f1318;
-  font-size: 12px;
-  font-weight: 600;
-  color: #cbd5e1;
-  white-space: nowrap;
-}
-.smb-access-table tr:last-child td { border-bottom: none; }
-.smb-access-table td:first-child {
-  font-family: 'Courier New', monospace;
-  color: #e8e8e8;
-  white-space: nowrap;
-}
-.smb-cell-top { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .smb-cell-actions { display: inline-flex; gap: 2px; }
 .smb-share-edit, .smb-share-del {
   opacity: 0.4; transition: opacity 0.2s; cursor: pointer;
@@ -101,9 +73,184 @@
 }
 .smb-remove-row:hover { opacity: 1; }
 .smb-add-row-btn { width: 100%; margin-top: 6px; padding: 6px; font-size: 12px; }
+/* Two-pane share browser */
+.smb-browser { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 20px; }
+.smb-browser-left { flex: 0 0 340px; display: flex; flex-direction: column; gap: 12px; }
+.smb-browser-right { flex: 1; min-width: 0; }
+.smb-browser-preview { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.smb-preview-header { display: flex; align-items: center; gap: 8px; padding: 0 0 8px; }
+.smb-preview-title {
+  font-family: 'Courier New', monospace; font-size: 13px; font-weight: 600; color: #7dd3fc;
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.smb-preview-cached {
+  background: #14532d; color: #86efac; border: 1px solid #16a34a;
+  border-radius: 3px; padding: 1px 8px; font-size: 10px; font-weight: 600; flex: none;
+}
+.smb-preview-body {
+  padding: 10px 12px; overflow: auto; max-height: 70vh; min-height: 120px;
+  background: #0f1318; border: 1px solid #1e2630; border-radius: 4px;
+}
+.smb-preview-body pre { margin: 0; font-family: 'Courier New', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; color: #e8e8e8; }
+.smb-preview-body img { max-width: 100%; height: auto; display: block; }
+@media (max-width: 1200px) {
+  .smb-browser { flex-wrap: wrap; }
+  .smb-browser-preview { flex: 1 1 100%; }
+}
+@media (max-width: 900px) {
+  .smb-browser { flex-direction: column; flex-wrap: nowrap; }
+  .smb-browser-left { flex: none; width: 100%; }
+}
+.smb-share-row { padding: 8px 12px; border-bottom: 1px solid #1a2332; }
+.smb-share-row:last-child { border-bottom: none; }
+.smb-share-row.active { background: #1e3a5f; }
+.smb-share-row-line1 { display: flex; align-items: center; gap: 8px; }
+.smb-share-name {
+  font-family: 'Courier New', monospace; font-size: 13px; color: #7dd3fc; cursor: pointer;
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.smb-share-name:hover { text-decoration: underline; }
+.smb-share-users { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 5px; }
+.smb-share-user {
+  background: #1e293b; border: 1px solid #334155; color: #93c5fd;
+  border-radius: 10px; padding: 1px 8px; font-size: 11px; cursor: pointer;
+}
+.smb-share-user:hover { border-color: #2563eb; background: #1e3a5f; }
+.smb-user-read { color: #93c5fd; border-color: #2563eb; }
+.smb-user-write { color: #86efac; border-color: #16a34a; }
+.smb-user-full { color: #fdba74; border-color: #ea580c; }
+.smb-user-none { color: #9ca3af; border-color: #374151; }
+.smb-share-row-notes { margin-top: 5px; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.smb-nav-bar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.smb-nav-bar label { font-size: 12px; color: #cbd5e1; display: inline-flex; align-items: center; gap: 5px; }
+.smb-nav-bar input { width: 170px; }
+.smb-breadcrumb {
+  display: flex; flex-wrap: wrap; gap: 2px; align-items: center;
+  padding: 9px 12px; background: #0f1318; border: 1px solid #1e2630;
+  border-radius: 4px; margin-bottom: 10px; min-height: 36px;
+}
+.smb-crumb { color: #7dd3fc; cursor: pointer; padding: 2px 6px; border-radius: 3px; font-size: 13px; }
+.smb-crumb:hover { background: #1e3a5f; }
+.smb-crumb.current { color: #e8e8e8; cursor: default; }
+.smb-crumb.current:hover { background: none; }
+.smb-crumb-sep { color: #475569; }
+.smb-nav-error {
+  padding: 10px 12px; background: #3f1d1d; border: 1px solid #7f1d1d;
+  color: #fca5a5; border-radius: 4px; margin-bottom: 10px; font-size: 13px;
+}
+.smb-file-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.smb-file-table th {
+  text-align: left; padding: 8px 12px; background: #0f1318;
+  border-bottom: 1px solid #1a2332; font-size: 12px; color: #cbd5e1; white-space: nowrap;
+}
+.smb-file-table td { padding: 7px 12px; border-bottom: 1px solid #1a2332; }
+.smb-file-table tr:last-child td { border-bottom: none; }
+.smb-file-name { font-family: 'Courier New', monospace; color: #e8e8e8; }
+.smb-file-dir .smb-file-name { color: #fbbf24; cursor: pointer; }
+.smb-file-row { cursor: pointer; }
+.smb-file-row:hover { background: #16202c; }
+.smb-file-row.selected { background: #1e3a5f; }
+.smb-file-meta { color: #9ca3af; white-space: nowrap; font-size: 12px; }
+.smb-mark-check { cursor: pointer; }
+.smb-marked-card { margin-top: 16px; }
+.smb-marked-header { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+.smb-marked-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.smb-marked-table th {
+  text-align: left; padding: 6px 10px; background: #0f1318;
+  border-bottom: 1px solid #1a2332; font-size: 12px; color: #cbd5e1; white-space: nowrap;
+}
+.smb-marked-table td { padding: 6px 10px; border-bottom: 1px solid #1a2332; }
+.smb-marked-table tr:last-child td { border-bottom: none; }
+.smb-marked-path { font-family: 'Courier New', monospace; color: #e8e8e8; word-break: break-all; }
+.smb-marked-user { color: #93c5fd; font-size: 12px; white-space: nowrap; }
+.smb-marked-unmark { background: none; border: none; color: #9ca3af; cursor: pointer; font-size: 14px; padding: 0 4px; }
+.smb-marked-unmark:hover { color: #fca5a5; }
 </style>
 
-<div id="smbOverlay" class="overlay hidden"></div>
+<!-- Share browser: discovered shares list on the left, navigation pane on the right -->
+<div class="smb-browser">
+  <div class="smb-browser-left">
+    <div class="card" style="margin-bottom:0;">
+      <h3 style="margin-top:0; font-size:13px;">Discovered shares</h3>
+      <p class="muted" style="font-size:11px; margin:0 0 8px;">Click a share name or a user chip to connect with that user's stored credentials.</p>
+      {% if hosts_list %}
+      {% for item in hosts_list %}
+      <div class="smb-host-card">
+        <div class="smb-host-header">
+          <code>{{ item.host }}</code>
+          <span class="muted" style="font-size:11px; font-weight:400;">{{ item.share_count }}</span>
+        </div>
+        <div class="smb-share-list">
+          {% for g in item.groups %}
+          {% set ns = namespace(primary=None) %}
+          {% if g.by_user %}{% set ns.primary = (g.by_user.values() | list | first) %}{% elif g.unassigned %}{% set ns.primary = g.unassigned %}{% endif %}
+          <div class="smb-share-row" data-host="{{ item.host }}" data-share="{{ g.share }}">
+            <div class="smb-share-row-line1">
+              <span class="smb-share-name" title="Open {{ g.share }}">{{ g.share }}</span>
+              {% if ns.primary %}
+              {{ access_pill(ns.primary.access) }}
+              <span class="smb-cell-actions">
+                <button class="smb-share-edit" data-edit="{{ ns.primary.id }}" data-host="{{ ns.primary.host }}" data-share="{{ ns.primary.share }}" data-access="{{ ns.primary.access }}" data-notes="{{ ns.primary.notes }}" data-user="{{ ns.primary.user_id or 0 }}" title="Edit">&#9998;</button>
+                <button class="smb-share-del" data-del="{{ ns.primary.id }}" title="Delete">&#10005;</button>
+              </span>
+              {% endif %}
+            </div>
+            <div class="smb-share-users">
+              {% for u in column_users %}
+              {% set r = g.by_user.get(u.id) %}
+              {% if r %}<button type="button" class="smb-share-user smb-user-{{ access_class(r.access) }}" data-user="{{ r.user_id }}" title="Open as {{ user_label(u) }}">{{ user_label(u) }}</button>{% endif %}
+              {% endfor %}
+              {% if g.unassigned %}<button type="button" class="smb-share-user smb-user-none" data-user="0" title="Open anonymously">anon</button>{% endif %}
+            </div>
+            {% if ns.primary and ns.primary.notes %}
+            <div class="smb-share-row-notes muted">{{ ns.primary.notes }}</div>
+            {% endif %}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+      {% else %}
+      <p class="muted" style="font-size:12px; margin:0;">No share entries yet. Use the &ldquo;Add share entries&rdquo; button above.</p>
+      {% endif %}
+    </div>
+  </div>
+  <div class="smb-browser-right">
+    <div class="card" style="margin-bottom:0;">
+      <div class="smb-nav-bar">
+        <button class="btn" id="smbNavGo" type="button" disabled>Browse</button>
+        <label>Timeout (s) <input id="smbNavTimeout" type="number" min="1" max="60" value="10" style="width:60px;" autocomplete="off" /></label>
+        <span id="smbNavStatus" class="muted" style="font-size:12px;"></span>
+      </div>
+      <div class="smb-breadcrumb" id="smbBreadcrumb"><span class="muted" style="font-size:12px;">Not connected &mdash; pick a share on the left.</span></div>
+      <div id="smbNavError" class="smb-nav-error" style="display:none;"></div>
+      <div id="smbTableWrap" style="display:none;">
+        <table class="smb-file-table">
+          <thead>
+            <tr><th style="width:44px;" title="Mark files for the report list">Mark</th><th>Name</th><th style="width:110px;">Size</th><th style="width:170px;">Modified (UTC)</th></tr>
+          </thead>
+          <tbody id="smbFileTbody"></tbody>
+        </table>
+      </div>
+      <div id="smbDownloadBar" style="display:none; padding-top:12px; border-top:1px solid #1a2332; margin-top:12px; align-items:center; gap:10px;">
+        <button class="btn" id="smbDownloadBtn" type="button">Download</button>
+        <span id="smbDownloadName" class="muted" style="font-size:12px; font-family:monospace;"></span>
+      </div>
+    </div>
+  </div>
+  <div class="smb-browser-preview">
+    <div class="card" style="margin-bottom:0;">
+      <div class="smb-preview-header">
+        <span id="smbPreviewTitle" class="smb-preview-title">File preview</span>
+        <span id="smbPreviewCached" class="smb-preview-cached" style="display:none;">cached</span>
+      </div>
+      <div id="smbPreviewBody" class="smb-preview-body">
+        <span class="muted" style="font-size:12px;">Click a file to preview it here.</span>
+      </div>
+      <div id="smbPreviewStatus" class="muted" style="font-size:11px; padding-top:6px;"></div>
+    </div>
+  </div>
+</div>
 
 <div id="smbPanel" class="smb-panel">
   <div class="smb-panel-header">
@@ -140,58 +287,25 @@
   </div>
 </div>
 
-{% if hosts_list %}
-<div class="card">
-  <h2>Discovered Shares</h2>
-  {% for item in hosts_list %}
-  <div class="smb-host-card">
-    <div class="smb-host-header">
-      <code>{{ item.host }}</code>
-      <span class="muted" style="font-size:12px; font-weight:400;">{{ item.share_count }} share{{ 's' if item.share_count != 1 else '' }}</span>
-    </div>
-    <div class="smb-host-table-wrap">
-      <table class="smb-access-table">
-        <thead>
-          <tr>
-            <th>Share</th>
-            {% for u in column_users %}
-            <th>{{ user_label(u) }}</th>
-            {% endfor %}
-            {% if has_unassigned %}
-            <th>No user</th>
-            {% endif %}
-          </tr>
-        </thead>
-        <tbody>
-          {% for group in item.groups %}
-          <tr>
-            <td>{{ group.share }}</td>
-            {% for u in column_users %}
-            <td>{{ access_cell(group.by_user.get(u.id)) }}</td>
-            {% endfor %}
-            {% if has_unassigned %}
-            <td>{{ access_cell(group.unassigned) }}</td>
-            {% endif %}
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
+<!-- Report list: files marked with the checkbox in the browse table -->
+<div class="card smb-marked-card" id="smbMarkedCard" style="display:none;">
+  <div class="smb-marked-header">
+    <h3 id="smbMarkedTitle" style="margin:0; font-size:13px;">Marked for report</h3>
+    <span class="muted" style="font-size:11px;">Full SMB path of each marked file and the user used to access it.</span>
   </div>
-  {% endfor %}
+  <table class="smb-marked-table">
+    <thead>
+      <tr><th>SMB path</th><th style="width:170px;">User</th><th style="width:34px;"></th></tr>
+    </thead>
+    <tbody id="smbMarkedTbody"></tbody>
+  </table>
 </div>
-{% else %}
-<div class="card">
-  <h2>No SMB Share Data</h2>
-  <p class="muted">Upload SMBMAP output or add entries manually.</p>
-</div>
-{% endif %}
+
 {% endblock %}
 
 {% block scripts %}
 <script>
 (function() {
-  var smbOverlay = document.getElementById('smbOverlay');
   var smbPanel = document.getElementById('smbPanel');
   var smbPanelClose = document.getElementById('smbPanelClose');
   var addShareBtn = document.getElementById('addShareBtn');
@@ -240,25 +354,25 @@
   }
 
   function showPanel() {
-    smbOverlay.classList.remove('hidden');
     smbPanel.classList.add('active');
     smbPanel.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('smb-panel-open');
   }
 
   function hidePanel() {
-    smbOverlay.classList.add('hidden');
     smbPanel.classList.remove('active');
     smbPanel.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('smb-panel-open');
     resetForm();
   }
 
   addShareBtn.addEventListener('click', function() { resetForm(); showPanel(); });
   smbAddRowBtn.addEventListener('click', function() { addShareRow('', 'NO_ACCESS', ''); });
   smbPanelClose.addEventListener('click', hidePanel);
-  smbOverlay.addEventListener('click', hidePanel);
 
   document.querySelectorAll('.smb-share-edit').forEach(function(btn) {
-    btn.addEventListener('click', function() {
+    btn.addEventListener('click', function(ev) {
+      ev.stopPropagation();
       smbEditId.value = btn.getAttribute('data-edit');
       var dataUser = btn.getAttribute('data-user') || '0';
       smbUserId.value = dataUser === '0' ? '' : dataUser;
@@ -334,12 +448,467 @@
   });
 
   document.querySelectorAll('.smb-share-del').forEach(function(btn) {
-    btn.addEventListener('click', function() {
+    btn.addEventListener('click', function(ev) {
+      ev.stopPropagation();
       if (!confirm('Delete this share entry?')) return;
       var fd = new FormData();
       fd.append('share_id', btn.getAttribute('data-del'));
       fetch('/api/smb-shares/delete', {method:'POST', body:fd});
       location.reload();
+    });
+  });
+
+  // ------------------------------------------------------------------
+  // Share browser: left list opens shares, right pane navigates them
+  // ------------------------------------------------------------------
+  var browseState = { host: '', share: '', path: [] };
+  var selectedFile = null;
+  var browsing = false;
+  var previewAbort = null;    // AbortController of the in-flight preview fetch
+  var previewImgUrl = null;   // object URL backing the current image preview
+
+  // Ids of name entries whose stored credentials the server can resolve.
+  // No secret material is rendered into the page.
+  var knownUsers = {};
+  {% for u in user_map.values() %}
+  knownUsers[{{ u.id }}] = true;
+  {% endfor %}
+  // SMB account name per entry, shown next to files marked for the report.
+  var userName = {};
+  {% for u in user_map.values() %}
+  userName[{{ u.id }}] = {{ (u.ad_username or '') | tojson }};
+  {% endfor %}
+
+  var navStatus = document.getElementById('smbNavStatus');
+  var navError = document.getElementById('smbNavError');
+  var tableWrap = document.getElementById('smbTableWrap');
+  var fileTbody = document.getElementById('smbFileTbody');
+  var crumbEl = document.getElementById('smbBreadcrumb');
+  var navGo = document.getElementById('smbNavGo');
+  var downloadBar = document.getElementById('smbDownloadBar');
+  var navTimeout = document.getElementById('smbNavTimeout');
+  var previewBody = document.getElementById('smbPreviewBody');
+  var previewTitle = document.getElementById('smbPreviewTitle');
+  var previewCached = document.getElementById('smbPreviewCached');
+  var previewStatus = document.getElementById('smbPreviewStatus');
+  var markedCard = document.getElementById('smbMarkedCard');
+  var markedTitle = document.getElementById('smbMarkedTitle');
+  var markedTbody = document.getElementById('smbMarkedTbody');
+  // Files marked for the report: key (host/share/path/file) -> { path, user }.
+  // Path is the full SMB path (//host/share/...) and user is the account
+  // used when the file was marked ('anonymous' for unassigned shares).
+  var markedFiles = {};
+  // Id of the name entry whose stored credentials the server should use
+  // for the active connection ('0' = anonymous), set when a share row or
+  // user chip is clicked. The server resolves the actual
+  // username/password/domain from the database, so credentials never
+  // round-trip through the browser.
+  var selectedUserId = '0';
+
+  function fmtSize(n) {
+    if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' GB';
+    if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+    if (n >= 1024) return (n / 1024).toFixed(1) + ' KB';
+    return n + ' B';
+  }
+  function fmtDate(iso) { return iso ? iso.slice(0, 19).replace('T', ' ') : ''; }
+  function updateDownloadBar() {
+    if (selectedFile) {
+      downloadBar.style.display = 'flex';
+      document.getElementById('smbDownloadName').textContent = selectedFile;
+    } else {
+      downloadBar.style.display = 'none';
+    }
+  }
+  // ------------------------------------------------------------------
+  // Mark files for the report list (bottom of the page)
+  // ------------------------------------------------------------------
+  function markKey(name) {
+    return browseState.host + '/' + browseState.share + '/' + browseState.path.join('/') + '/' + name;
+  }
+  function smbPath(name) {
+    var p = '//' + browseState.host + '/' + browseState.share;
+    if (browseState.path.length) p += '/' + browseState.path.join('/');
+    return p + '/' + name;
+  }
+  function accessUserName() {
+    var id = String(selectedUserId);
+    return (id !== '0' && userName[id]) ? userName[id] : 'anonymous';
+  }
+  function setMark(name, on) {
+    var key = markKey(name);
+    if (on) markedFiles[key] = { path: smbPath(name), user: accessUserName() };
+    else delete markedFiles[key];
+  }
+  function renderMarkedList() {
+    var keys = Object.keys(markedFiles);
+    markedCard.style.display = keys.length ? '' : 'none';
+    markedTitle.textContent = 'Marked for report (' + keys.length + ')';
+    markedTbody.innerHTML = '';
+    keys.forEach(function(key) {
+      var m = markedFiles[key];
+      var tr = document.createElement('tr');
+      var pathTd = document.createElement('td');
+      var ps = document.createElement('span');
+      ps.className = 'smb-marked-path';
+      ps.textContent = m.path;
+      pathTd.appendChild(ps);
+      var userTd = document.createElement('td');
+      userTd.className = 'smb-marked-user';
+      userTd.textContent = m.user;
+      var rmTd = document.createElement('td');
+      var rm = document.createElement('button');
+      rm.type = 'button';
+      rm.className = 'smb-marked-unmark';
+      rm.title = 'Remove from the report list';
+      rm.textContent = '\u00d7';
+      rm.addEventListener('click', function() { delete markedFiles[key]; renderMarkedList(); });
+      rmTd.appendChild(rm);
+      tr.appendChild(pathTd);
+      tr.appendChild(userTd);
+      tr.appendChild(rmTd);
+      markedTbody.appendChild(tr);
+    });
+  }
+  // ------------------------------------------------------------------
+  // File preview pane (right of the browser)
+  // ------------------------------------------------------------------
+  var PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
+  var IMAGE_EXT_MIME = {
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+    webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', svg: 'image/svg+xml'
+  };
+  function countReplacement(s) {
+    var n = 0, i = s.indexOf('\uFFFD');
+    while (i !== -1) { n++; i = s.indexOf('\uFFFD', i + 1); }
+    return n;
+  }
+  function resetPreview() {
+    if (previewAbort) { previewAbort.abort(); previewAbort = null; }
+    if (previewImgUrl) { URL.revokeObjectURL(previewImgUrl); previewImgUrl = null; }
+    previewTitle.textContent = 'File preview';
+    previewCached.style.display = 'none';
+    previewBody.innerHTML = '';
+    var hint = document.createElement('span');
+    hint.className = 'muted';
+    hint.style.fontSize = '12px';
+    hint.textContent = 'Click a file to preview it here.';
+    previewBody.appendChild(hint);
+    previewStatus.textContent = '';
+  }
+  // Local (no-network) preview message: empty file, too large, etc.
+  function previewLocal(name, message) {
+    if (previewAbort) { previewAbort.abort(); previewAbort = null; }
+    if (previewImgUrl) { URL.revokeObjectURL(previewImgUrl); previewImgUrl = null; }
+    previewTitle.textContent = name;
+    previewCached.style.display = 'none';
+    previewBody.innerHTML = '';
+    var s = document.createElement('span');
+    s.className = 'muted';
+    s.style.fontSize = '12px';
+    s.textContent = message;
+    previewBody.appendChild(s);
+    previewStatus.textContent = '';
+  }
+  function previewFile(e) {
+    if (e.size === 0) {
+      previewLocal(e.name, '(empty file)');
+      return;
+    }
+    if (e.size > PREVIEW_MAX_BYTES) {
+      previewLocal(e.name, 'Too large to preview (limit 10 MB). Use Download instead.');
+      return;
+    }
+    if (previewAbort) previewAbort.abort();
+    if (previewImgUrl) { URL.revokeObjectURL(previewImgUrl); previewImgUrl = null; }
+    var p = new URLSearchParams();
+    p.set('host', browseState.host);
+    p.set('share', browseState.share);
+    p.set('path', browseState.path.join('/'));
+    p.set('file', e.name);
+    p.set('user_id', selectedUserId);
+    p.set('port', '445');
+    var timeoutSec = Math.max(1, Math.min(60, parseFloat(navTimeout.value) || 10));
+    p.set('timeout', timeoutSec);
+    p.set('size', e.size);
+    var controller = new AbortController();
+    previewAbort = controller;
+    previewTitle.textContent = e.name;
+    previewCached.style.display = 'none';
+    previewBody.innerHTML = '';
+    previewStatus.textContent = 'Loading \u2026';
+    var abortTimer = setTimeout(function() { controller.abort(); }, (timeoutSec + 15) * 1000);
+    fetch('/api/smb/preview?' + p.toString(), { signal: controller.signal })
+      .then(function(r) {
+        var ct = r.headers.get('content-type') || '';
+        if (ct.indexOf('application/json') !== -1) {
+          return r.json().then(function(j) { throw { smbError: j }; });
+        }
+        return r.blob().then(function(blob) {
+          return {
+            blob: blob,
+            kind: r.headers.get('x-preview-kind'),
+            cached: r.headers.get('x-preview-cache') === 'hit'
+          };
+        });
+      })
+      .then(function(res) {
+        if (previewAbort !== controller) return;  // a newer preview took over
+        previewCached.style.display = res.cached ? '' : 'none';
+        previewStatus.textContent = res.cached ? 'Served from local cache.' : '';
+        previewBody.innerHTML = '';
+        if (res.kind === 'text') {
+          // TextDecoder needs an ArrayBuffer, not a Blob: decode async.
+          // Return the promise so .finally (which clears previewAbort) waits
+          // for the decode; otherwise the staleness guard below skips the render.
+          return res.blob.arrayBuffer().then(function(buf) {
+            if (previewAbort !== controller) return;
+            var text = new TextDecoder('utf-8').decode(buf);
+            if (text.length && countReplacement(text) / text.length > 0.01) {
+              text = new TextDecoder('iso-8859-1').decode(buf);
+            }
+            var pre = document.createElement('pre');
+            pre.textContent = text;
+            previewBody.appendChild(pre);
+          }).catch(function() {
+            if (previewAbort !== controller) return;
+            previewStatus.textContent = 'Could not decode file text.';
+          });
+        } else if (res.kind === 'image') {
+          var blob = res.blob;
+          if (!blob.type || blob.type === 'image/octet-stream') {
+            var dot = e.name.lastIndexOf('.');
+            var ext = dot >= 0 ? e.name.slice(dot + 1).toLowerCase() : '';
+            var mime = IMAGE_EXT_MIME[ext] || blob.type || 'image/octet-stream';
+            blob = new Blob([blob], { type: mime });
+          }
+          previewImgUrl = URL.createObjectURL(blob);
+          var img = document.createElement('img');
+          img.src = previewImgUrl;
+          img.alt = e.name;
+          previewBody.appendChild(img);
+        } else {
+          var s = document.createElement('span');
+          s.className = 'muted';
+          s.style.fontSize = '12px';
+          s.textContent = 'Binary file \u2014 cannot be previewed. Use Download instead.';
+          previewBody.appendChild(s);
+        }
+      })
+      ['catch'](function(err) {
+        if (previewAbort !== controller) return;
+        if (err && err.name === 'AbortError') {
+          previewStatus.textContent = 'Preview timed out after ' + timeoutSec + 's.';
+        } else if (err && err.smbError) {
+          var msg = err.smbError.error ||
+            (typeof err.smbError.detail === 'string' ? err.smbError.detail : '');
+          previewStatus.textContent = msg || 'Preview failed.';
+        } else {
+          previewStatus.textContent = 'Could not reach the ReconBubble server.';
+        }
+      })
+      .finally(function() {
+        clearTimeout(abortTimer);
+        if (previewAbort === controller) previewAbort = null;
+      });
+  }
+  function showNavError(msg, code) {
+    var hints = {
+      unreachable: ' Check that the host is reachable on the configured TCP port.',
+      auth: ' The server rejected the credentials.',
+      no_share: ' The server has no such share.',
+      no_access: ' The server refused the operation for these credentials.',
+      no_file: ' The path does not exist or is not a folder.',
+      bad_port: ' The port is not a valid TCP port (1-65535).',
+      bad_domain: ' The domain value is not valid.',
+      no_user: ' The assigned user no longer exists in the names list.'
+    };
+    navError.style.display = '';
+    navError.textContent = (msg || 'Unknown error.') + (hints[code] || '');
+    tableWrap.style.display = 'none';
+    selectedFile = null;
+    updateDownloadBar();
+    resetPreview();
+  }
+  function renderBreadcrumb() {
+    crumbEl.innerHTML = '';
+    function crumb(label, depth, current) {
+      var c = document.createElement('span');
+      c.className = 'smb-crumb' + (current ? ' current' : '');
+      c.textContent = label;
+      if (!current) c.addEventListener('click', function() {
+        browseState.path = browseState.path.slice(0, depth);
+        doBrowse();
+      });
+      return c;
+    }
+    crumbEl.appendChild(crumb(browseState.share, 0, browseState.path.length === 0));
+    browseState.path.forEach(function(seg, i) {
+      var sep = document.createElement('span');
+      sep.className = 'smb-crumb-sep';
+      sep.textContent = '/';
+      crumbEl.appendChild(sep);
+      crumbEl.appendChild(crumb(seg, i + 1, i === browseState.path.length - 1));
+    });
+  }
+  function renderEntries(entries) {
+    fileTbody.innerHTML = '';
+    if (!entries.length) {
+      var tr0 = document.createElement('tr');
+      var td0 = document.createElement('td');
+      td0.colSpan = 4;
+      td0.className = 'muted';
+      td0.textContent = '(empty folder)';
+      tr0.appendChild(td0);
+      fileTbody.appendChild(tr0);
+    }
+    entries.forEach(function(e) {
+      var tr = document.createElement('tr');
+      var markTd = document.createElement('td');
+      var nameTd = document.createElement('td');
+      var nm = document.createElement('span');
+      nm.className = 'smb-file-name';
+      nm.textContent = (e.is_dir ? '\u25B8 ' : '') + e.name;
+      nameTd.appendChild(nm);
+      var sizeTd = document.createElement('td');
+      sizeTd.className = 'smb-file-meta';
+      sizeTd.textContent = e.is_dir ? '-' : fmtSize(e.size);
+      var dateTd = document.createElement('td');
+      dateTd.className = 'smb-file-meta';
+      dateTd.textContent = fmtDate(e.mtime);
+      if (e.is_dir) {
+        tr.className = 'smb-file-dir';
+        tr.title = 'Double-click to open';
+        tr.addEventListener('dblclick', function() {
+          browseState.path.push(e.name);
+          doBrowse();
+        });
+      } else {
+        tr.className = 'smb-file-row';
+        var cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.className = 'smb-mark-check';
+        cb.title = 'Mark for the report list';
+        cb.checked = (markKey(e.name) in markedFiles);
+        cb.addEventListener('click', function(ev) { ev.stopPropagation(); });
+        cb.addEventListener('change', function() {
+          setMark(e.name, cb.checked);
+          renderMarkedList();
+        });
+        markTd.appendChild(cb);
+        tr.addEventListener('click', function() {
+          selectedFile = e.name;
+          fileTbody.querySelectorAll('.smb-file-row.selected').forEach(function(r) { r.classList.remove('selected'); });
+          tr.classList.add('selected');
+          updateDownloadBar();
+          previewFile(e);
+        });
+      }
+      tr.appendChild(markTd);
+      tr.appendChild(nameTd);
+      tr.appendChild(sizeTd);
+      tr.appendChild(dateTd);
+      fileTbody.appendChild(tr);
+    });
+  }
+  function doBrowse() {
+    if (browsing || !browseState.host || !browseState.share) return;
+    browsing = true;
+    navGo.disabled = true;
+    navStatus.textContent = 'Browsing \u2026';
+    navError.style.display = 'none';
+    selectedFile = null;
+    updateDownloadBar();
+    resetPreview();
+    renderBreadcrumb();
+    var fd = new FormData();
+    fd.append('host', browseState.host);
+    fd.append('share', browseState.share);
+    fd.append('user_id', selectedUserId);
+    fd.append('port', '445');
+    fd.append('path', browseState.path.join('/'));
+    var timeoutSec = Math.max(1, Math.min(60, parseFloat(navTimeout.value) || 10));
+    fd.append('timeout', timeoutSec);
+    // The server guarantees a reply within timeoutSec (wall-clock deadline
+    // around the SMB work).  Abort well past that so the UI always recovers
+    // even if the request itself never completes.
+    var controller = new AbortController();
+    var abortTimer = setTimeout(function() { controller.abort(); }, (timeoutSec + 15) * 1000);
+    fetch('/api/smb/browse', { method: 'POST', body: fd, signal: controller.signal })
+      .then(function(r) { return r.json(); })
+      .then(function(j) {
+        if (j.ok) {
+          tableWrap.style.display = '';
+          renderEntries(j.entries || []);
+          navStatus.textContent = (j.entries || []).length + ' items';
+        } else {
+          showNavError(j.error, j.code);
+          navStatus.textContent = '';
+        }
+      })
+      ['catch'](function(err) {
+        if (err && err.name === 'AbortError') {
+          showNavError(
+            'No response after ' + timeoutSec + 's. The target may be slow, unresponsive, or blocked by a firewall.',
+            'timeout'
+          );
+        } else {
+          showNavError('Could not reach the ReconBubble server.', 'smb_error');
+        }
+        navStatus.textContent = '';
+      })
+      .finally(function() {
+        clearTimeout(abortTimer);
+        browsing = false;
+        navGo.disabled = false;
+      });
+  }
+  function downloadFile(file) {
+    var p = new URLSearchParams();
+    p.set('host', browseState.host);
+    p.set('share', browseState.share);
+    p.set('path', browseState.path.join('/'));
+    p.set('file', file);
+    p.set('user_id', selectedUserId);
+    p.set('port', '445');
+    p.set('timeout', Math.max(1, Math.min(60, parseFloat(navTimeout.value) || 10)));
+    var a = document.createElement('a');
+    a.href = '/api/smb/download?' + p.toString();
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+  function highlightShareRow(host, share) {
+    document.querySelectorAll('.smb-share-row').forEach(function(row) {
+      var match = row.getAttribute('data-host') === host
+        && row.getAttribute('data-share') === share;
+      row.classList.toggle('active', match);
+    });
+  }
+  function openShare(host, share, userId) {
+    browseState.host = host;
+    browseState.share = share;
+    browseState.path = [];
+    selectedUserId = (userId && userId !== '0' && knownUsers[userId]) ? userId : '0';
+    highlightShareRow(host, share);
+    doBrowse();
+  }
+
+  navGo.addEventListener('click', doBrowse);
+  document.getElementById('smbDownloadBtn').addEventListener('click', function() {
+    if (selectedFile) downloadFile(selectedFile);
+  });
+
+  document.querySelectorAll('.smb-share-row').forEach(function(row) {
+    var host = row.getAttribute('data-host');
+    var share = row.getAttribute('data-share');
+    var firstBtn = row.querySelector('.smb-share-user');
+    var firstUser = firstBtn ? firstBtn.getAttribute('data-user') : '0';
+    row.querySelector('.smb-share-name').addEventListener('click', function() {
+      openShare(host, share, firstUser);
+    });
+    row.querySelectorAll('.smb-share-user').forEach(function(btn) {
+      btn.addEventListener('click', function() { openShare(host, share, btn.getAttribute('data-user')); });
     });
   });
 })();

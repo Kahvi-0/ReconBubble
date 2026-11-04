@@ -35,15 +35,22 @@
   let sprayLoaded = false;
 
   function setOpen(open, animate = true) {
-    if (!animate) panel.classList.add("no-transition");
+    if (!animate) {
+      panel.classList.add("no-transition");
+      document.body.classList.add("notes-no-transition");
+    }
     panel.classList.toggle("open", !!open);
+    document.body.classList.toggle("notes-open", !!open);
     panel.setAttribute("aria-hidden", open ? "false" : "true");
     if (pinned) {
       localStorage.setItem(OPEN_KEY, open ? "1" : "0");
     }
     if (!animate) {
       void panel.offsetWidth;
-      requestAnimationFrame(() => panel.classList.remove("no-transition"));
+      requestAnimationFrame(() => {
+        panel.classList.remove("no-transition");
+        document.body.classList.remove("notes-no-transition");
+      });
     }
   }
 

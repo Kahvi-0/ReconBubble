@@ -53,6 +53,11 @@
   </div>
 </div>
 
+<style>
+  #docViewer, #docViewer pre { overscroll-behavior: contain; }
+  #docViewer pre { contain: content; }
+</style>
+
 <script>
 document.getElementById("viewBtn").addEventListener("click", async () => {
   const content = document.getElementById("docContent");

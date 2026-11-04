@@ -30,14 +30,13 @@
 
 {% block scripts %}
 <script>
-  const overlay = document.getElementById("sidebarOverlay");
   const sidebar = document.getElementById("sidebar");
   const title = document.getElementById("sidebarTitle");
   const body = document.getElementById("sidebarBody");
 
   function showSidebar() {
-    overlay.classList.remove("hidden");
     sidebar.classList.remove("hidden");
+    sidebar.classList.add("open");
     sidebar.setAttribute("aria-hidden", "false");
   }
 

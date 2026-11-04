@@ -1,48 +1,24 @@
-/* v2 - fixed sidebar */
+/* v3 - shared floating details drawer */
 (function () {
-  const overlay = document.getElementById("sidebarOverlay");
   const sidebar = document.getElementById("sidebar");
   const title = document.getElementById("sidebarTitle");
   const body = document.getElementById("sidebarBody");
   const closeBtn = document.getElementById("sidebarClose");
   const topoBtn = document.getElementById("sidebarTopologyBtn");
-  let prevBodyOverflow = "";
-  let prevHtmlOverflow = "";
-  let scrollLockDepth = 0;
-
-  function lockBackgroundScroll() {
-    if (scrollLockDepth === 0) {
-      prevBodyOverflow = document.body.style.overflow || "";
-      prevHtmlOverflow = document.documentElement.style.overflow || "";
-    }
-    scrollLockDepth += 1;
-    document.body.style.overflow = "hidden";
-    document.documentElement.style.overflow = "hidden";
-  }
-
-  function unlockBackgroundScroll() {
-    if (scrollLockDepth > 0) scrollLockDepth -= 1;
-    if (scrollLockDepth > 0) return;
-    document.body.style.overflow = prevBodyOverflow;
-    document.documentElement.style.overflow = prevHtmlOverflow;
-  }
-
-  function resetBackgroundScroll() {
-    scrollLockDepth = 0;
-    document.body.style.overflow = prevBodyOverflow;
-    document.documentElement.style.overflow = prevHtmlOverflow;
-  }
+  let outsideClickArmed = false;
 
   function show() {
-    const wasHidden = overlay.classList.contains("hidden");
-    overlay.classList.remove("hidden");
     sidebar.classList.remove("hidden");
+    sidebar.classList.add("open");
     sidebar.setAttribute("aria-hidden", "false");
-    if (wasHidden) lockBackgroundScroll();
+    /* Arm the outside-click closer on the next tick so a click that
+       synchronously opens the drawer doesn't also close it. */
+    outsideClickArmed = false;
+    setTimeout(() => { outsideClickArmed = true; }, 0);
   }
   function hide() {
-    overlay.classList.add("hidden");
-    sidebar.classList.add("hidden");
+    if (!sidebar.classList.contains("open")) return;
+    sidebar.classList.remove("open");
     sidebar.setAttribute("aria-hidden", "true");
     body.innerHTML = "";
     const existing = document.getElementById("sidebarBack");
@@ -51,9 +27,14 @@
       topoBtn.classList.add("hidden");
       topoBtn.onclick = null;
     }
-    resetBackgroundScroll();
   }
-  overlay && overlay.addEventListener("click", hide);
+  document.addEventListener("click", (e) => {
+    if (!outsideClickArmed) return;
+    if (!sidebar.classList.contains("open")) return;
+    if (sidebar.contains(e.target)) return;
+    if (e.target.closest && e.target.closest(".global-notes-panel")) return;
+    hide();
+  });
   closeBtn && closeBtn.addEventListener("click", hide);
   window.addEventListener("keydown", (e) => { if (e.key === "Escape") hide(); });
 

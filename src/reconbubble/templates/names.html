@@ -94,7 +94,6 @@
 
 {% block scripts %}
 <script>
-  const overlay = document.getElementById("sidebarOverlay");
   const sidebar = document.getElementById("sidebar");
   const title = document.getElementById("sidebarTitle");
   const body = document.getElementById("sidebarBody");
@@ -102,8 +101,8 @@
   const closeDetailBtn = document.getElementById("closeDetailBtn");
 
   function showSidebar() {
-    overlay.classList.remove("hidden");
     sidebar.classList.remove("hidden");
+    sidebar.classList.add("open");
     sidebar.setAttribute("aria-hidden", "false");
     const topoBtn = document.getElementById("sidebarTopologyBtn");
     if (topoBtn) {
@@ -113,8 +112,7 @@
   }
 
   function hideSidebar() {
-    overlay.classList.add("hidden");
-    sidebar.classList.add("hidden");
+    sidebar.classList.remove("open");
     sidebar.setAttribute("aria-hidden", "true");
   }
 
@@ -183,10 +181,12 @@
     document.getElementById('detailTags').value = data.tags || '';
     document.querySelector('.name-detail-name').textContent = `${data.first_name} ${data.last_name}`;
     nameDetail.classList.add('active');
+    document.body.classList.add('name-panel-open');
   }
 
   function hideDetail() {
     nameDetail.classList.remove('active');
+    document.body.classList.remove('name-panel-open');
   }
 
   document.getElementById('createNameBtn').addEventListener('click', () => {

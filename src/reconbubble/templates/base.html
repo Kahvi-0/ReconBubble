@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>ReconBubble</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg"/>
-  <link rel="stylesheet" href="/static/app.css?v=17"/>
+  <link rel="stylesheet" href="/static/app.css?v=22"/>
 </head>
 <body>
   <header class="topbar">
@@ -49,7 +49,7 @@
       <img class="firegif" src="/static/fire.gif" alt="retro fire"/>
     </div>
   <nav class="nav">
-      <a href="/stats" {{ 'class=current' if request.url.path == '/stats' }}>Stats</a>
+      <a href="/stats" class="nav-opt-2{% if request.url.path == '/stats' %} current{% endif %}">Stats</a>
       <span class="nav-scope-wrap">
         <a href="/scope" class="{% if request.url.path == '/scope' %}current {% endif %}{% if scope_is_empty|default(false) %}scope-attn{% endif %}">Scope</a>
         {% if scope_is_empty|default(false) %}
@@ -58,7 +58,7 @@
       </span>
       <a href="/assets" {{ 'class=current' if request.url.path == '/assets' }}>Assets</a>
        <a href="/services" {{ 'class=current' if request.url.path == '/services' }}>Services</a>
-       <a href="/profiling" {{ 'class=current' if request.url.path == '/profiling' }}>Profiling</a>
+       <a href="/profiling" class="nav-opt-1{% if request.url.path == '/profiling' %} current{% endif %}">Profiling</a>
         <div class="nav-dropdown" id="osintDropdown">
            <a href="#" class="nav-dropbtn">OSINT ▾</a>
            <div class="nav-dropdown-content">
@@ -76,8 +76,8 @@
                 <a href="/cloud" {{ 'class=current' if request.url.path == '/cloud' }}>Cloud</a>
               </div>
             </div>
-           <a href="/subdomains" {{ 'class=current' if request.url.path in ('/subdomains', '/urls') }}>Web Apps</a>
-           <a href="/tools" {{ 'class=current' if request.url.path == '/tools' }}>Tools</a>
+           <a href="/subdomains" class="nav-opt-2{% if request.url.path in ('/subdomains', '/urls') %} current{% endif %}">Web Apps</a>
+           <a href="/tools" class="nav-opt-1{% if request.url.path == '/tools' %} current{% endif %}">Tools</a>
          <div class="nav-dropdown" id="internalDropdown">
           <a href="#" class="nav-dropbtn">Internal ▾</a>
           <div class="nav-dropdown-content">
@@ -87,12 +87,11 @@
             <a href="/smb-shares" {{ 'class=current' if request.url.path == '/smb-shares' }}>SMB Shares</a>
           </div>
         </div>
-        <a href="/topology" {{ 'class=current' if request.url.path == '/topology' }}>Attack Topology</a>
-        <a href="/users" {{ 'class=current' if request.url.path == '/users' }}>Users</a>
-
-      <a class="btn" href="/upload">Upload</a>
+        <a href="/topology" class="nav-opt-3{% if request.url.path == '/topology' %} current{% endif %}">Attack Topology</a>
+        <a href="/users" class="nav-opt-3{% if request.url.path == '/users' %} current{% endif %}">Users</a>
     </nav>
     <div class="topbar-right">
+      <a class="btn" href="/upload">Upload</a>
       <div id="globalJobsIndicator" class="jobs-indicator" hidden role="status" tabindex="0" aria-label="">
         <span id="jobsIndicatorIcon" class="jobs-spinner"></span>
         <span id="jobsIndicatorTip" class="jobs-tooltip" role="tooltip"></span>
@@ -152,11 +151,11 @@
         var gnp = document.getElementById("globalNotesPanel");
         gnp.classList.add("open", "no-transition");
         gnp.setAttribute("aria-hidden", "false");
+        document.body.classList.add("notes-open", "notes-no-transition");
       }
     }
   </script>
 
-  <div id="sidebarOverlay" class="overlay hidden"></div>
   <aside id="sidebar" class="sidebar hidden" aria-hidden="true">
     <div class="sidebarHeader">
       <div id="sidebarTitle" class="sidebarTitle">Details</div>
@@ -167,9 +166,25 @@
   </aside>
 
   {% block scripts %}{% endblock %}
-  <script src="/static/sidebar.js?v=11"></script>
+  <script src="/static/sidebar.js?v=12"></script>
+  <script src="/static/tablesort.js?v=1"></script>
   <script src="/static/jobs_indicator.js?v=2"></script>
-  <script src="/static/global_notes_panel.js?v=32"></script>
+  <script src="/static/global_notes_panel.js?v=33"></script>
+  <script src="/static/smooth_scroll.js?v=1"></script>
+  <script>
+    /* Close right-side detail panels with Esc. */
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      document
+        .querySelectorAll(".name-detail-panel.active, .asset-detail-panel.active, .domain-corr-panel.active, .smb-panel.active, .export-creds-panel.active")
+        .forEach((p) => p.classList.remove("active"));
+      /* These panels are closed directly (not via their page scripts), so also
+         clear the body classes that nudge the closed notes handle aside. */
+      document.body.classList.remove(
+        "asset-panel-open", "name-panel-open", "corr-panel-open", "export-panel-open", "smb-panel-open"
+      );
+    });
+  </script>
   <script>
     const allDropdowns = [
       document.getElementById("perimeterDropdown"),

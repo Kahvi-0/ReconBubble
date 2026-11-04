@@ -41,6 +41,12 @@
     <option value="smb_shares">SMB Shares (smbmap format)</option>
   </select>
 
+  <div id="formatHint" style="display:none; margin-top:10px;">
+    <label>Example input format</label>
+    <pre id="formatHintPre" style="margin:0; padding:10px; background:#7a8a9e; border:1px solid #555e66; border-radius:6px; color:#000; font-size:12px; overflow-x:auto; white-space:pre;"></pre>
+    <p class="muted" style="font-size:11px; margin:6px 0 0;">One entry per line. Lines starting with # are ignored.</p>
+  </div>
+
   <div id="smbUserField" style="display:none; margin-top:10px;">
     <label for="smbUserId">User *</label>
     <select id="smbUserId" name="smb_user_id">
@@ -137,6 +143,40 @@ const rawPlaceholders = {
   smb_shares: "Paste smbmap output (host:…, share:…, privs:…), one line per share…"
 };
 
+const formatHints = {
+  ad_users: [
+    "jsmith",
+    "CORP\\jsmith",
+    "CORP/jsmith"
+  ].join("\n"),
+  mixed_hashes: [
+    "CORP\\jsmith:aad3b435b51404eeaad3b435b51404ee",
+    "$krb5tgs$23$*svc_backup$CORP.LOCAL:46984672824f1211c1d9f712c93c0c30",
+    "$krb5asrep$23$jsmith@CORP.LOCAL:2336a866f317e24a9d1d5c722d6d932b",
+    "$DCC2$10000#svc_backup#6b3b5f1e2d4c8a9b0c1d2e3f4a5b6c7d",
+    "jsmith::CORP:aad3b435b51404eeaad3b435b51404ee:0101010101010101:aabbccddeeff00112233445566778899",
+    "jsmith::CORP:04010000000000000000000000000000CORP.LOCALaabbccddeeff00112233445566778899aabbccddeeff0011223344:0123456789abcdef:fedcba9876543210:0123456789abcdef0123456789abcdef"
+  ].join("\n"),
+  name_creds: [
+    "jsmith:P@ssw0rd1",
+    "CORP\\jsmith:P@ssw0rd1",
+    "CORP/jsmith:P@ssw0rd1"
+  ].join("\n")
+};
+
+function updateFormatHint() {
+  const hint = document.getElementById('formatHint');
+  const pre = document.getElementById('formatHintPre');
+  if (!hint || !pre) return;
+  const text = formatHints[kindSelect.value];
+  if (text) {
+    pre.textContent = text;
+    hint.style.display = '';
+  } else {
+    hint.style.display = 'none';
+  }
+}
+
 function toggleSmbUserField() {
   const show = kindSelect.value === 'smb_shares';
   smbUserField.style.display = show ? '' : 'none';
@@ -169,6 +209,7 @@ dirInput.addEventListener('change', function() {
 kindSelect.addEventListener('change', function() {
   toggleSmbUserField();
   updateRawPlaceholder();
+  updateFormatHint();
   rawModeBtn.disabled = this.value === 'doc';
   if (this.value === 'doc') setUploadMode('file');
 });
@@ -201,6 +242,7 @@ uploadForm.addEventListener('submit', function(e) {
 
 toggleSmbUserField();
 updateRawPlaceholder();
+updateFormatHint();
 setUploadMode('file');
 
 window.addEventListener('beforeunload', function(e) {
@@ -559,12 +601,19 @@ window.addEventListener('DOMContentLoaded', function() {
 {% if upload_results is defined and upload_results %}
 <script>
 {% for file_result in upload_results %}
+{% if file_result.type == 'mixed_hashes' %}
+renderMixedResults({
+  counts: {{ file_result.details | default('{}') | tojson }},
+  unmatched: {{ file_result.unmatched | default('[]') | tojson }}
+});
+{% else %}
 addUploadLogEntry({{ file_result.type | tojson }}, {
   added: {{ file_result.added | default(0) }},
   skipped: {{ file_result.skipped | default(0) }},
-  unmatched: {{ file_result.unmatched | default('[]') }},
+  unmatched: {{ file_result.unmatched | default('[]') | tojson }},
   details: {{ file_result.details | default('{}') | tojson }}
 });
+{% endif %}
 {% if file_result.type == 'name_creds' %}
 window._credsConflicts = {{ file_result.conflicts | default('[]') | tojson }};
 renderCredsResults({

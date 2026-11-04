@@ -55,27 +55,23 @@
   </table>
 </div>
 
-<div id="serviceOverlay" class="overlay hidden" style="cursor:pointer;">
-  <div id="servicePopup" class="svc-modal">
-    <div class="svc-modal-head">
-      <h2 id="popupTitle">Port</h2>
-      <button class="btn" id="popupClose">Close</button>
-    </div>
-    <div id="popupContent"></div>
+<aside id="servicePopup" class="svc-drawer" aria-label="Service details">
+  <div class="svc-modal-head">
+    <h2 id="popupTitle">Port</h2>
+    <button class="btn" id="popupClose">Close</button>
   </div>
-</div>
-<div id="hostOverlay" class="overlay hidden" style="cursor:pointer;">
-  <div id="hostPopup" class="svc-modal">
-    <div class="svc-modal-head">
-      <div class="svc-modal-title-group">
-        <h2 id="hostPopupTitle"></h2>
-        <button class="btn btn-sm" id="hostPopupBack">Back to service</button>
-      </div>
-      <button class="btn" id="hostPopupClose">Close</button>
+  <div id="popupContent"></div>
+</aside>
+<aside id="hostPopup" class="svc-drawer" aria-label="Host details">
+  <div class="svc-modal-head">
+    <div class="svc-modal-title-group">
+      <h2 id="hostPopupTitle"></h2>
+      <button class="btn btn-sm" id="hostPopupBack">Back to service</button>
     </div>
-    <div id="hostPopupContent"></div>
+    <button class="btn" id="hostPopupClose">Close</button>
   </div>
-</div>
+  <div id="hostPopupContent"></div>
+</aside>
 
 <style>
 /* --- Table --- */
@@ -144,7 +140,7 @@
   background:currentColor;
   flex-shrink:0;
 }
-.finding .sev-pill { margin-left:0; flex-shrink:0; }
+.finding .sev-pill { margin-left:0; flex-shrink:0; align-self:flex-start; }
 .sev-critical { background:rgba(239,68,68,.12); border-color:rgba(239,68,68,.42); color:#fca5a5; }
 .sev-high { background:rgba(239,68,68,.07); border-color:rgba(239,68,68,.32); color:#fca5a5; }
 .sev-medium { background:rgba(245,158,11,.08); border-color:rgba(245,158,11,.32); color:#fde68a; }
@@ -160,16 +156,17 @@
 .script-name { font-family:ui-monospace,SFMono-Regular,monospace; color:#9ad; font-size:12px; }
 .nmap-cmd { color:#cfe3f5; border-left-color:#4a7eb0; }
 
-/* --- Modal --- */
-.svc-modal { max-width:650px; width:92vw; max-height:85vh; overflow:auto; background:#10161d; border:1px solid #1e2630; border-radius:14px; padding:20px; box-shadow:0 12px 40px rgba(0,0,0,.55); }
-.svc-modal-head { display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; gap:12px; }
-.svc-modal-head h2 { margin:0; font-size:18px; }
-.svc-modal-title-group { display:flex; gap:8px; align-items:center; min-width:0; }
-.svc-modal-title-group h2 { margin:0; }
-#servicePopup, #hostPopup { overscroll-behavior: contain; }
+/* .svc-drawer styles live in app.css (shared with the subdomains RDAP drawer). */
+.svc-modal-head { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; margin-bottom:15px; gap:12px; }
+.svc-modal-head h2 { margin:0; font-size:18px; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.svc-modal-title-group { display:flex; gap:8px; align-items:center; min-width:0; flex:1 1 auto; }
+.svc-modal-title-group h2 { margin:0; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .btn-sm { padding:5px 9px; font-size:12px; }
 
 /* --- Popup content --- */
+.host-output-block { border:1px solid #212b36; border-left:3px solid #2a333d; border-radius:10px; padding:12px 14px; margin:14px 0; background:#121821; }
+.host-output-block .section-header { margin-top:0; }
+.host-output-block.inspected { background:rgba(34,197,94,.06); border-color:rgba(34,197,94,.35); border-left-color:rgba(34,197,94,.6); }
 .chip-row { display:flex; flex-wrap:wrap; gap:6px; margin:6px 0; }
 .chip-row .pill { margin-bottom:0; }
 .host-item { display:block; padding:6px 0; border-bottom:1px solid #1e2630; }
@@ -177,7 +174,11 @@
 .host-item a { color:#9ad; }
 .section-header { font-weight:600; color:#aab; margin-top:15px; margin-bottom:8px; padding-bottom:4px; border-bottom:1px solid #2a333d; }
 .scanner-output-header { display:flex; align-items:center; flex-wrap:wrap; gap:4px; }
-.scan-out { white-space:pre-wrap; margin:8px 0; font-size:12px; line-height:1.4; color:#7ee0b8; background:#0b1210; border:1px solid #1c2a22; border-left:3px solid #2ea06a; border-radius:6px; padding:8px 10px; max-height:220px; overflow:auto; }
+.scan-out { white-space:pre-wrap; width:70%; margin:8px 0; font-size:12px; line-height:1.4; color:#7ee0b8; background:#0b1210; border:1px solid #1c2a22; border-left:3px solid #2ea06a; border-radius:6px; padding:8px 10px; max-height:440px; overflow:auto; overscroll-behavior:contain; contain:content; scrollbar-width:thin; scrollbar-color:#1e2a22 transparent; }
+.scan-out::-webkit-scrollbar { width:8px; height:8px; }
+.scan-out::-webkit-scrollbar-track { background:transparent; }
+.scan-out::-webkit-scrollbar-thumb { background:#1e2a22; border-radius:999px; }
+.scan-out::-webkit-scrollbar-thumb:hover { background:#2ea06a; }
 .collapsible { cursor:pointer; padding:8px 12px; background:#161c24; border:1px solid #212b36; border-radius:6px; display:flex; justify-content:space-between; align-items:center; }
 .collapsible:hover { background:#1b232d; }
 .collapsible-content { display:none; padding:8px 0; }
@@ -188,24 +189,17 @@
 
 <script>
 let currentServiceDetails = null;
-let scrollLocked = false;
-let prevBodyOverflow = "";
-let prevHtmlOverflow = "";
 
-function syncBodyScrollLock() {
-  const serviceOpen = !document.getElementById("serviceOverlay").classList.contains("hidden");
-  const hostOpen = !document.getElementById("hostOverlay").classList.contains("hidden");
-  if ((serviceOpen || hostOpen) && !scrollLocked) {
-    prevBodyOverflow = document.body.style.overflow || "";
-    prevHtmlOverflow = document.documentElement.style.overflow || "";
-    document.body.style.overflow = "hidden";
-    document.documentElement.style.overflow = "hidden";
-    scrollLocked = true;
-  } else if (!serviceOpen && !hostOpen && scrollLocked) {
-    document.body.style.overflow = prevBodyOverflow;
-    document.documentElement.style.overflow = prevHtmlOverflow;
-    scrollLocked = false;
-  }
+/* Popups are now non-blocking side drawers (like the asset/topology panels),
+   so page scrolling stays available — nothing to lock or unlock. */
+function syncBodyScrollLock() {}
+
+/* Keeps the body class set so the closed notes handle nudges clear of an open drawer. */
+function syncSvcDrawerBodyClass() {
+  const anyOpen =
+    document.getElementById("hostPopup").classList.contains("open") ||
+    document.getElementById("servicePopup").classList.contains("open");
+  document.body.classList.toggle("svc-drawer-open", anyOpen);
 }
 
 document.querySelectorAll(".service-row").forEach(row => {
@@ -218,15 +212,16 @@ document.querySelectorAll(".service-row").forEach(row => {
 });
 
 function showServicePopup(port, proto) {
-  const overlay = document.getElementById("serviceOverlay");
+  const drawer = document.getElementById("servicePopup");
   const title = document.getElementById("popupTitle");
   const content = document.getElementById("popupContent");
 
   title.textContent = `Port ${port}/${proto}`;
   currentServiceDetails = null;
   content.innerHTML = `<p class="muted">Loading service details...</p>`;
-  overlay.classList.remove("hidden");
+  drawer.classList.add("open");
   syncBodyScrollLock();
+  syncSvcDrawerBodyClass();
 
   const detailUrl = `/api/service-port/${port}/${proto}${window.location.search || ""}`;
 
@@ -357,6 +352,7 @@ function getServiceDetails(svc) {
       const outOfScope = ho.counted ? false : true;
       const scopeTag = outOfScope ? '<span class="oos-tag">Out of scope</span>' : '';
       const inspectControl = outOfScope ? '' : `<label class="svc-inspect-check" title="Mark service inspected"><input type="checkbox" class="svc-inspected-checkbox" data-service-id="${ho.service_id}" data-port="${svc.port}" data-proto="${svc.proto}" data-counted="${ho.counted ? '1' : '0'}" ${inspected ? 'checked' : ''} onclick="event.stopPropagation()"></label>${inspected ? '<span class="svc-complete-tag">Inspected</span>' : ''}`;
+      html += `<div class="host-output-block${inspected ? ' inspected' : ''}" data-service-id="${ho.service_id}">`;
       html += `<div class="section-header scanner-output-header">Scanner Output: ${hostLabel}${scopeTag}${inspectControl}</div>`;
       if (ho.outputs && ho.outputs.length > 0) {
         for (const out of ho.outputs) {
@@ -369,6 +365,7 @@ function getServiceDetails(svc) {
         html += `<div class="svc-findings-sub">Findings (${ho.findings.length})</div>`;
         for (const f of ho.findings) html += findingCard(f);
       }
+      html += `</div>`;
     }
   }
 
@@ -411,6 +408,9 @@ function updateServiceInspected(cb, checked) {
   } else if (!checked && tag) {
     tag.remove();
   }
+
+  const block = cb.closest(".host-output-block");
+  if (block) block.classList.toggle("inspected", checked);
 
   if (cb.dataset.counted !== "1") return;
   const tr = document.querySelector(
@@ -458,26 +458,21 @@ document.getElementById("popupContent").addEventListener("change", async (e) => 
 let currentServicePopupService = null;
 
 document.getElementById("popupClose").addEventListener("click", () => {
-  document.getElementById("serviceOverlay").classList.add("hidden");
+  document.getElementById("servicePopup").classList.remove("open");
   syncBodyScrollLock();
-});
-
-document.getElementById("serviceOverlay").addEventListener("click", (e) => {
-  if (e.target.id === "serviceOverlay") {
-    document.getElementById("serviceOverlay").classList.add("hidden");
-    syncBodyScrollLock();
-  }
+  syncSvcDrawerBodyClass();
 });
 
 async function openHostFromService(hostId, hostLabel) {
-  document.getElementById("serviceOverlay").classList.add("hidden");
+  document.getElementById("servicePopup").classList.remove("open");
   currentServicePopupService = document.getElementById("popupTitle").textContent;
   
   document.getElementById("hostPopupTitle").textContent = hostLabel;
   document.getElementById("hostPopupContent").innerHTML = `<p class="muted">Loading host details...</p>`;
-  document.getElementById("hostOverlay").classList.remove("hidden");
+  document.getElementById("hostPopup").classList.add("open");
   syncBodyScrollLock();
-  
+  syncSvcDrawerBodyClass();
+
   try {
     const resp = await fetch(`/api/hosts/${hostId}`);
     const data = await resp.json();
@@ -526,33 +521,39 @@ function renderHostPopupContent(host) {
 }
 
 document.getElementById("hostPopupClose").addEventListener("click", () => {
-  document.getElementById("hostOverlay").classList.add("hidden");
+  document.getElementById("hostPopup").classList.remove("open");
   currentServicePopupService = null;
   syncBodyScrollLock();
+  syncSvcDrawerBodyClass();
 });
 
 document.getElementById("hostPopupBack").addEventListener("click", (e) => {
   e.stopPropagation();
-  document.getElementById("hostOverlay").classList.add("hidden");
+  document.getElementById("hostPopup").classList.remove("open");
   if (currentServicePopupService) {
     const titleEl = document.getElementById("popupTitle");
     if (titleEl.textContent === currentServicePopupService) {
-      document.getElementById("servicePopup").style.display = "";
-      document.getElementById("serviceOverlay").classList.remove("hidden");
-    } else {
-      document.getElementById("serviceOverlay").classList.add("hidden");
+      document.getElementById("servicePopup").classList.add("open");
     }
   }
   currentServicePopupService = null;
   syncBodyScrollLock();
+  syncSvcDrawerBodyClass();
 });
 
-document.getElementById("hostOverlay").addEventListener("click", (e) => {
-  if (e.target.id === "hostOverlay") {
-    document.getElementById("hostOverlay").classList.add("hidden");
+/* --- Close topmost popup with Esc --- */
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  const hostPopup = document.getElementById("hostPopup");
+  const servicePopup = document.getElementById("servicePopup");
+  if (hostPopup.classList.contains("open")) {
+    hostPopup.classList.remove("open");
     currentServicePopupService = null;
-    syncBodyScrollLock();
+  } else if (servicePopup.classList.contains("open")) {
+    servicePopup.classList.remove("open");
   }
+  syncBodyScrollLock();
+  syncSvcDrawerBodyClass();
 });
 
 /* --- Hide completed hosts toggle --- */
@@ -592,5 +593,6 @@ document.getElementById("hostOverlay").addEventListener("click", (e) => {
     window.location.href = url.toString();
   });
 })();
+
 </script>
 {% endblock %}

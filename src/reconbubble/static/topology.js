@@ -8,6 +8,7 @@
   if (!el || !window.cytoscape) return;
 
   const ICONS = {
+    group: "🗂️",
     computer: "💻",
     server: "🗄️",
     router: "📡",
@@ -40,8 +41,8 @@
         id: nodeId,
         label: label,
         type: type,
-        color: n.color || (type === "domain" ? "#16a34a" : "#1f6feb"),
-        domain_bg: n.domain_bg || (type === "domain" ? "#16a34a" : n.color || "#1f6feb"),
+        color: n.color || (type === "domain" ? "#16a34a" : type === "group" ? "#1e293b" : "#1f6feb"),
+        domain_bg: n.domain_bg || (type === "domain" ? "#16a34a" : type === "group" ? "#1e293b" : n.color || "#1f6feb"),
         notes: n.notes || "",
         floating_notes: Array.isArray(n.floating_notes) ? n.floating_notes : [],
         compromised: !!n.compromised,
@@ -59,9 +60,9 @@
         content: n.content || "",
         width: n.width || 0,
         height: n.height || 0,
-        display: `${icon}\n\n${label}`,
+        display: type === "group" ? label : `${icon}\n\n${label}`,
       },
-      position: { x: n.x || 120, y: n.y || 120 },
+      position: { x: n.x != null ? n.x : 120, y: n.y != null ? n.y : 120 },
     };
   }
 
@@ -142,6 +143,25 @@
         },
       },
       {
+        selector: 'node[type = "group"]',
+        style: {
+          "background-color": "#1e293b",
+          "background-opacity": 0.18,
+          "border-color": "#64748b",
+          "border-width": 2,
+          "border-style": "dashed",
+          "border-radius": 16,
+          "z-index": 0,
+          "font-size": 13,
+          "font-weight": 700,
+          "color": "#94a3b8",
+          "text-valign": "top",
+          "text-halign": "left",
+          "text-margin-y": -14,
+          "text-margin-x": -30,
+        },
+      },
+      {
         selector: 'node[type = "handle"]',
         style: {
           "shape": "ellipse",
@@ -153,6 +173,16 @@
           "label": "",
           "z-index": 999,
           "opacity": 0.6,
+        },
+      },
+      {
+        selector: 'node[type = "handle"].resize',
+        style: {
+          "shape": "round-rectangle",
+          "width": 12,
+          "height": 12,
+          "background-color": "#3b82f6",
+          "border-color": "#1d4ed8",
         },
       },
        {
@@ -318,21 +348,15 @@
         },
       },
       {
-        selector: "node:hover",
+        selector: 'node[type = "group"]:active',
         style: {
-          "background-opacity": 0.85,
+          "background-opacity": 0.32,
         },
       },
       {
         selector: "node:selected",
         style: {
           "border-width": 3,
-        },
-      },
-      {
-        selector: "edge:hover",
-        style: {
-          "width": 4,
         },
       },
       {
@@ -682,6 +706,14 @@
     return `h_${nodeId}`;
   }
 
+  function resizeHandleIdFor(nodeId) {
+    return `hr_${nodeId}`;
+  }
+
+  function isResizeHandle(node) {
+    return node && node.isNode && node.isNode() && String(node.id()).indexOf("hr_") === 0;
+  }
+
   function badgeIdFor(nodeId) {
     return `b_${nodeId}`;
   }
@@ -779,7 +811,23 @@
     const handle = cy.getElementById(handleIdFor(nodeId));
     if (!owner || !owner.length || !handle || !handle.length) return;
     const p = owner.position();
+    if (owner.data("type") === "group") {
+      // The group's bottom-right corner is owned by the resize handle;
+      // anchor the connection handle at the bottom-edge midpoint instead
+      // so the two never overlap (overlap would let the resize handle win
+      // hit-testing and steal connection drags).
+      handle.position({ x: p.x, y: p.y + owner.height() / 2 - 7 });
+      return;
+    }
     handle.position({ x: p.x + owner.width() / 2 - 10, y: p.y + owner.height() / 2 - 10 });
+  }
+
+  function syncResizeHandlePosition(nodeId) {
+    const owner = cy.getElementById(nodeId);
+    const handle = cy.getElementById(resizeHandleIdFor(nodeId));
+    if (!owner || !owner.length || !handle || !handle.length) return;
+    const p = owner.position();
+    handle.position({ x: p.x + owner.width() / 2 - 6, y: p.y + owner.height() / 2 - 6 });
   }
 
   function ensureHandle(nodeId) {
@@ -792,6 +840,21 @@
       selectable: false,
     });
     syncHandlePosition(nodeId);
+    const owner = cy.getElementById(nodeId);
+    if (owner && owner.length && owner.data("type") === "group") ensureResizeHandle(nodeId);
+  }
+
+  function ensureResizeHandle(nodeId) {
+    if (cy.getElementById(resizeHandleIdFor(nodeId)).length) return;
+    cy.add({
+      group: "nodes",
+      data: { id: resizeHandleIdFor(nodeId), type: "handle", owner: nodeId, label: "" },
+      position: { x: 0, y: 0 },
+      grabbable: true,
+      selectable: false,
+      classes: "resize",
+    });
+    syncResizeHandlePosition(nodeId);
   }
 
   function ensureAllHandles() {
@@ -862,6 +925,7 @@
     realNodes().forEach((n) => {
       const id = n.id();
       syncHandlePosition(id);
+      syncResizeHandlePosition(id);
       syncAllBadges(id);
       syncNoteIndicatorPosition(id);
       repositionFloatingNotes(id);
@@ -1063,6 +1127,7 @@
   }
 
   function updateNodeClass(node) {
+    if (node.data("type") === "group") return;
     if (!!node.data("compromised")) {
       ensureBadge(node.id());
       node.style("border-color", "#991b1b");
@@ -1092,14 +1157,15 @@
     const icon = ICONS[type] || "📍";
     const isNote = type === "note";
     const isDomain = type === "domain";
+    const isGroup = type === "group";
     const node = cy.add({
       group: "nodes",
       data: {
         id: `n${nextNodeId++}`,
         label: `${label} ${nextNodeId - 1}`,
         type: type,
-        color: isDomain ? "#16a34a" : "#1f6feb",
-        domain_bg: isDomain ? "#16a34a" : "#1f6feb",
+        color: isDomain ? "#16a34a" : isGroup ? "#1e293b" : "#1f6feb",
+        domain_bg: isDomain ? "#16a34a" : isGroup ? "#1e293b" : "#1f6feb",
         notes: "",
         floating_notes: [],
         compromised: false,
@@ -1107,13 +1173,18 @@
         linked_asset_id: "",
         linked_name_id: "",
         content: "",
-        width: isNote ? 260 : 0,
-        height: isNote ? 180 : 0,
-        display: isNote ? `${label} ${nextNodeId - 1}` : `${icon}\n\n${label} ${nextNodeId - 1}`,
+        width: isNote ? 260 : isGroup ? 320 : 0,
+        height: isNote ? 180 : isGroup ? 200 : 0,
+        display: isNote
+          ? `${label} ${nextNodeId - 1}`
+          : isGroup
+            ? `${label} ${nextNodeId - 1}`
+            : `${icon}\n\n${label} ${nextNodeId - 1}`,
       },
       position: { x, y },
     });
     if (isNote) applyNoteSize(node);
+    if (isGroup) applyGroupSize(node);
     ensureHandle(node.id());
     cy.$(node).select();
     renderInspector(node);
@@ -1677,6 +1748,39 @@
     });
   }
 
+  function renderGroupInspector(node) {
+    inspectorNode = node;
+    showInspector();
+    const d = node.data();
+    inspector.innerHTML = `
+      <label>Label</label>
+      <input id="topoLabel" value="${escapeHtml(d.label || "")}" />
+      <label style="margin-top:10px;">Notes</label>
+      <textarea id="topoNotes" rows="6" style="resize:vertical;">${escapeHtml(d.notes || "")}</textarea>
+      <div class="muted" style="margin-top:8px;">
+        Size: <span id="topoGroupSize"></span> — drag the blue corner handle to resize.
+      </div>
+      <div class="muted" style="margin-top:6px;">Tip: Groups render behind other nodes. Drag the grey bubble to create or receive a link.</div>
+    `;
+    const labelEl = document.getElementById("topoLabel");
+    const notesEl = document.getElementById("topoNotes");
+    const sizeEl = document.getElementById("topoGroupSize");
+    const syncSize = () => {
+      if (sizeEl) sizeEl.textContent = `${Math.round(node.width())} × ${Math.round(node.height())}`;
+    };
+    syncSize();
+    labelEl && labelEl.addEventListener("input", () => {
+      node.data("label", labelEl.value || "Group");
+      node.data("display", node.data("label"));
+      queueSave();
+    });
+    notesEl && notesEl.addEventListener("input", () => {
+      node.data("notes", notesEl.value || "");
+      refreshNoteIndicator(node.id());
+      queueSave();
+    });
+  }
+
   function renderInspector(node) {
     if (!node || !node.isNode()) {
       inspectorNode = null;
@@ -1689,6 +1793,10 @@
     const d = node.data();
     if (d.type === "note") {
       renderNoteInspector(node);
+      return;
+    }
+    if (d.type === "group") {
+      renderGroupInspector(node);
       return;
     }
     inspectorNode = node;
@@ -1970,6 +2078,15 @@
     node.style("height", String(h));
   }
 
+  function applyGroupSize(node) {
+    if (!node || !node.length || node.data("type") !== "group") return;
+    const w = Math.max(200, Number(node.data("width")) || 320);
+    const h = Math.max(120, Number(node.data("height")) || 200);
+    node.style("width", String(w));
+    node.style("height", String(h));
+    node.style("text-max-width", String(Math.max(60, w - 24)));
+  }
+
   function insertNoteImage(contentEl, file, onDone) {
     if (!file) return;
     const reader = new FileReader();
@@ -2054,10 +2171,17 @@
   ensureAllHandles();
   ensureAllNoteIndicators();
   realNodes().forEach((n) => refreshFloatingNotes(n.id()));
-  realNodes().filter((n) => n.data("type") !== "domain" && n.data("type") !== "note").forEach(adjustNodeSize);
+  realNodes()
+    .filter((n) => n.data("type") !== "domain" && n.data("type") !== "note" && n.data("type") !== "group")
+    .forEach(adjustNodeSize);
   realNodes().filter((n) => n.data("type") === "note").forEach((n) => {
     applyNoteSize(n);
     refreshNoteDisplay(n);
+  });
+  realNodes().filter((n) => n.data("type") === "group").forEach((n) => {
+    applyGroupSize(n);
+    syncHandlePosition(n.id());
+    syncResizeHandlePosition(n.id());
   });
   lastState = collectGraph();
   cy.on("tap", "node", (evt) => {
@@ -2139,6 +2263,7 @@
       pending.forEach((n) => {
         if ((n.removed && n.removed()) || isVirtualNode(n)) return;
         syncHandlePosition(n.id());
+        syncResizeHandlePosition(n.id());
         syncAllBadges(n.id());
         syncNoteIndicatorPosition(n.id());
         repositionFloatingNotes(n.id());
@@ -2161,6 +2286,11 @@
         applyNoteSize(n);
         refreshNoteDisplay(n);
       }
+      if (n.data("type") === "group") {
+        applyGroupSize(n);
+        syncHandlePosition(n.id());
+        syncResizeHandlePosition(n.id());
+      }
     }
   });
 
@@ -2169,6 +2299,8 @@
     if (!isVirtualNode(n)) {
       const h = cy.getElementById(handleIdFor(n.id()));
       if (h && h.length) h.remove();
+      const hr = cy.getElementById(resizeHandleIdFor(n.id()));
+      if (hr && hr.length) hr.remove();
       removeBadge(n.id());
       removeImpersonatedBadge(n.id());
       removeNoteIndicator(n.id());
@@ -2195,9 +2327,13 @@
   cy.on("grab", 'node[type = "handle"]', (evt) => {
     dragFromOwner = evt.target.data("owner") || null;
     const owner = dragFromOwner ? cy.getElementById(dragFromOwner) : null;
-    if (owner && owner.length && owner.data("type") === "note") {
+    const ownerType = owner && owner.length ? owner.data("type") : null;
+    const wantsResize = ownerType === "note" || (isResizeHandle(evt.target) && ownerType === "group");
+    if (wantsResize) {
       noteResize = {
         ownerId: dragFromOwner,
+        minW: ownerType === "note" ? 140 : 200,
+        minH: ownerType === "note" ? 90 : 120,
         startW: owner.width(),
         startH: owner.height(),
         startPx: owner.position("x"),
@@ -2205,7 +2341,7 @@
         hx: evt.target.position("x"),
         hy: evt.target.position("y"),
       };
-      setStatus("Drag to resize note");
+      setStatus(ownerType === "note" ? "Drag to resize note" : "Drag to resize group");
       return;
     }
     if (dragFromOwner) {
@@ -2231,8 +2367,10 @@
     }
     const dx = handle.position("x") - noteResize.hx;
     const dy = handle.position("y") - noteResize.hy;
-    const w = Math.max(140, noteResize.startW + dx);
-    const h = Math.max(90, noteResize.startH + dy);
+    const minW = noteResize.minW || 140;
+    const minH = noteResize.minH || 90;
+    const w = Math.max(minW, noteResize.startW + dx);
+    const h = Math.max(minH, noteResize.startH + dy);
     owner.position({
       x: noteResize.startPx + (w - noteResize.startW) / 2,
       y: noteResize.startPy + (h - noteResize.startH) / 2,
@@ -2251,12 +2389,15 @@
         owner.data("height", Math.round(owner.height()));
       }
       syncHandlePosition(ownerId);
+      syncResizeHandlePosition(ownerId);
       noteResize = null;
       historyCommit();
       saveNow();
       if (inspectorNode && inspectorNode.id() === ownerId) {
         const sizeEl = document.getElementById("topoNoteSize");
         if (sizeEl && owner && owner.length) sizeEl.textContent = `${Math.round(owner.width())} × ${Math.round(owner.height())}`;
+        const gSizeEl = document.getElementById("topoGroupSize");
+        if (gSizeEl && owner && owner.length) gSizeEl.textContent = `${Math.round(owner.width())} × ${Math.round(owner.height())}`;
       }
       setStatus("Ready");
       return;
@@ -2415,6 +2556,8 @@
     if (isVirtualNode(n) || isHandle(n) || isBadge(n) || isNoteIndicator(n)) return;
     const h = cy.getElementById(handleIdFor(n.id()));
     if (h && h.length) h.style("opacity", 0.9);
+    const hr = cy.getElementById(resizeHandleIdFor(n.id()));
+    if (hr && hr.length) hr.style("opacity", 0.9);
     const ind = cy.getElementById(noteIndicatorIdFor(n.id()));
     if (ind && ind.length) {
       ind.style("opacity", 0.9);
@@ -2426,6 +2569,8 @@
     if (isVirtualNode(n) || isHandle(n) || isBadge(n) || isNoteIndicator(n)) return;
     const h = cy.getElementById(handleIdFor(n.id()));
     if (h && h.length) h.removeStyle("opacity");
+    const hr = cy.getElementById(resizeHandleIdFor(n.id()));
+    if (hr && hr.length) hr.removeStyle("opacity");
     const ind = cy.getElementById(noteIndicatorIdFor(n.id()));
     if (ind && ind.length) {
       ind.style("opacity", 0.5);

@@ -2,9 +2,9 @@
 body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; background:#0b0d10; color:#e8e8e8; }
 a { color:#9ad; text-decoration:none; }
 a:hover { text-decoration:underline; }
-.topbar { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid #20252b; background:#0f1318; position:sticky; top:0; z-index:1200; }
+.topbar { display:flex; align-items:center; justify-content:space-between; height:62px; padding:0 14px; border-bottom:1px solid #20252b; background:#0f1318; position:sticky; top:0; z-index:1200; }
 .brand a { font-weight:700; letter-spacing:0.2px; }
-.nav a { margin-left:14px; }
+.nav a { margin-left:10px; font-size:13px; white-space:nowrap; }
 .container { max-width: none; margin: 18px auto; padding: 0 14px; 
 }
 h1 { margin: 10px 0 14px; font-size: 26px; }
@@ -15,7 +15,7 @@ h2 { margin: 10px 0 10px; font-size: 18px; }
 .label { font-size: 12px; color:#aab; }
 .muted { color:#9aa6b2; font-size: 13px; }
 table { width:100%; border-collapse: collapse; background:#10161d; border:1px solid #1e2630; border-radius: 12px; overflow:hidden; }
-th, td { padding: 10px 10px; border-bottom: 1px solid #1e2630; font-size: 13px; vertical-align: top; }
+th, td { padding: 10px 10px; border-bottom: 1px solid #1e2630; font-size: 13px; vertical-align: top; overflow-wrap: break-word; }
 th { text-align:left; color:#aab; font-weight:600; background:#0f141b; }
 tr:hover td { background:#0f141b; }
 .btn { display:inline-block; padding: 8px 12px; border-radius: 10px; background:#1e3a5f; border:1px solid #3a6da8; color:#e8e8e8; cursor:pointer; }
@@ -52,19 +52,30 @@ pre.evidence, pre.note { white-space: pre-wrap; margin: 0; font-size: 12px; line
   50% { transform: scale(1.04); box-shadow: 0 0 10px 2px rgba(239, 68, 68, 0.35); }
 }
 
-/* Sidebar */
+/* Shared details drawer (host / service / subdomain details panel) */
 .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 20; display: flex; align-items: center; justify-content: center; }
-.sidebar { position: fixed; top:50%; left:50%; transform:translate(-50%,-50%); height:85vh; width: 480px; max-width: 92vw; background:#0f141b; border:1px solid #1e2630; z-index: 30; box-shadow: 0 12px 40px rgba(0,0,0,.5); border-radius: 12px; }
+.sidebar { box-sizing:border-box; position:fixed; top:63px; bottom:10px; right:-500px; width:min(420px, calc(100vw - 20px)); background:#0f141b; border:1px solid #1e2630; border-radius:14px; box-shadow:-8px 0 26px rgba(0,0,0,.45); z-index:1500; visibility:hidden; transition:right 0.25s ease, visibility 0s linear 0.25s; display:flex; flex-direction:column; overflow-x:hidden; }
+.sidebar.open { right:44px; visibility:visible; transition:right 0.25s ease, visibility 0s; }
+body.notes-open .sidebar.open { right:calc(min(480px, 90vw) + 10px); }
+@media (max-width:768px) { .sidebar.open { right:10px; } }
+@media (max-width:768px) { body.notes-open .sidebar.open { right:10px; } }
 .hidden { display: none !important; }
 .sidebar.hidden, .overlay.hidden { display: none; }
-.sidebarHeader { display:flex; align-items:center; justify-content:space-between; padding: 12px 12px; border-bottom:1px solid #1e2630; background:#0f1318; border-radius: 12px 12px 0 0; }
+.sidebarHeader { position:sticky; top:0; z-index:2; display:flex; align-items:center; justify-content:space-between; padding: 12px 12px; border-bottom:1px solid #1e2630; background:#0f1318; border-radius:14px 14px 0 0; }
 .sidebarTitle { font-weight:700; }
-.sidebarBody { padding: 12px; overflow:auto; height: calc(85vh - 56px); }
-.firegif { height: 40px; width:auto; image-rendering: pixelated; margin-left: 12px; opacity: 0.95; }
-@media (max-width: 720px){ .firegif{ display:none; } }
+.sidebarBody { padding: 12px; overflow-y:auto; flex:1 1 auto; overscroll-behavior:contain; }
+
+/* Column-header sorting (see tablesort.js) */
+th[data-sortable] { cursor: pointer; user-select: none; }
+th[data-sortable]:hover { color: #4a9eff; }
+th.sort-asc::after { content: " \25B2"; font-size: 10px; color: #4a9eff; }
+th.sort-desc::after { content: " \25BC"; font-size: 10px; color: #4a9eff; }
+.firegif { height: 30px; width:auto; image-rendering: pixelated; margin-left: 12px; opacity: 0.95; }
 
 .topbar-left { display:flex; align-items:center; gap:12px; }
 .brand { display:flex; align-items:center; gap:10px; }
+.brand svg { width:180px; height:auto; }
+
 .project-tag {
   display:inline-block;
   width: max-content;
@@ -91,6 +102,14 @@ pre.evidence, pre.note { white-space: pre-wrap; margin: 0; font-size: 12px; line
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Top bar responsive: items disappear (never squish) as the window narrows.
+   These MUST come after the .project-tag base rule above (same specificity, later wins). */
+@media (max-width: 1500px) { .firegif { display:none; } }
+@media (max-width: 1400px) { .project-tag { display:none; } }
+@media (max-width: 1250px) { .nav-opt-1 { display:none; } }
+@media (max-width: 1100px) { .nav-opt-2 { display:none; } }
+@media (max-width: 950px)  { .nav-opt-3 { display:none; } .brand { display:none; } }
 .topbar-right { display:flex; align-items:center; gap:12px; margin-left:auto; }
 .firegif-right { margin-right:12px; }
 .jobs-indicator { position:relative; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; padding:0; border-radius:50%; background:#0f141b; border:1px solid #2a3a4a; cursor:pointer; outline-offset:2px; }
@@ -158,10 +177,12 @@ pre.evidence, pre.note { white-space: pre-wrap; margin: 0; font-size: 12px; line
   display: inline-block;
 }
 .nav-dropbtn {
-  margin-left: 14px;
+  margin-left: 10px;
   cursor: pointer;
   color: #9ad;
   text-decoration: none;
+  font-size: 13px;
+  white-space: nowrap;
 }
 .nav-dropbtn:hover {
   text-decoration: underline;
@@ -221,10 +242,10 @@ input[type="checkbox"]:checked {
 
 .global-notes-panel {
   position: fixed;
-  top: 72px;
+  top: 63px;
   right: 0;
   width: min(480px, 90vw);
-  height: calc(100vh - 72px);
+  height: calc(100vh - 63px);
   background: #0f141b;
   border-left: 1px solid #273245;
   box-shadow: -10px 0 24px rgba(0, 0, 0, 0.45);
@@ -239,6 +260,23 @@ input[type="checkbox"]:checked {
 .global-notes-panel.no-transition {
   transition: none;
 }
+
+/* Open notes panel pushes page content aside instead of covering it */
+.container { transition: margin-right 0.2s ease; }
+body.notes-open .container { margin-right: min(480px, 90vw); }
+body.notes-no-transition .container { transition: none; }
+@media (max-width: 768px) { body.notes-open .container { margin-right: 0; } }
+
+/* Right-side detail drawer (shared by the services and subdomains pages).
+   The notes handle stays pinned to the page's right edge; the drawer opens
+   to its left (34px handle + 10px gap = 44px) so it never covers it. */
+.svc-drawer { box-sizing:border-box; position:fixed; top:63px; bottom:10px; right:-450px; width:min(420px, calc(100vw - 20px)); background:#10161d; border:1px solid #1e2630; border-radius:14px; padding:16px; overflow-y:auto; overscroll-behavior:contain; box-shadow:-8px 0 26px rgba(0,0,0,.45); z-index:1500; visibility:hidden; transition:right 0.25s ease, visibility 0s linear 0.25s; }
+.svc-drawer.open { right:44px; visibility:visible; transition:right 0.25s ease, visibility 0s; }
+/* Follow the notes panel shift so the drawer never covers the notes panel */
+body.notes-open .svc-drawer.open { right:calc(min(480px, 90vw) + 10px); }
+/* On small screens there is no room to sit left of the handle; the drawer may cover it */
+@media (max-width:768px) { .svc-drawer.open { right:10px; } }
+@media (max-width:768px) { body.notes-open .svc-drawer.open { right:10px; } }
 .global-notes-handle {
   width: 34px;
   background: #1e293b;
@@ -564,25 +602,34 @@ input[type="checkbox"]:checked {
   margin-top: 8px;
 }
 
-/* Name detail panel */
+/* Name detail panel (floating drawer; opens to the left of the pinned notes handle) */
 .name-detail-panel {
+  box-sizing: border-box;
   position: fixed;
-  top: 0;
-  right: -420px;
-  width: 400px;
-  height: 100vh;
+  top: 63px;
+  bottom: 10px;
+  right: -450px;
+  width: min(420px, calc(100vw - 20px));
   background: #111418;
-  border-left: 1px solid #2a3545;
-  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.5);
+  border: 1px solid #1e2630;
+  border-radius: 14px;
+  box-shadow: -8px 0 26px rgba(0, 0, 0, 0.45);
   z-index: 1500;
   transition: right 0.3s ease;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .name-detail-panel.active {
-  right: 0;
+  right: 44px;
 }
+/* Follow the notes panel shift so the drawer never covers the notes panel */
+body.notes-open .name-detail-panel.active { right: calc(min(480px, 90vw) + 10px); }
+/* On small screens there is no room to sit left of the handle; the drawer may cover it */
+@media (max-width: 768px) { .name-detail-panel.active { right: 10px; } }
+@media (max-width: 768px) { body.notes-open .name-detail-panel.active { right: 10px; } }
 .name-detail-header {
   display: flex;
   align-items: center;
@@ -746,25 +793,34 @@ input[type="checkbox"]:checked {
 .topo-badge.compromised { background: #7f1d1d; color: #fecaca; border: 1px solid #991b1b; }
 .user-tag { display: inline-block; margin-left: 6px; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; letter-spacing: 0.3px; vertical-align: middle; border: 1px solid #eab308; color: #fde68a; }
 
-/* Asset detail panel */
+/* Asset detail panel (floating drawer; opens to the left of the pinned notes handle) */
 .asset-detail-panel {
+  box-sizing: border-box;
   position: fixed;
-  top: 0;
-  right: -420px;
-  width: 400px;
-  height: 100vh;
+  top: 63px;
+  bottom: 10px;
+  right: -450px;
+  width: min(420px, calc(100vw - 20px));
   background: #111418;
-  border-left: 1px solid #2a3545;
-  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.5);
+  border: 1px solid #1e2630;
+  border-radius: 14px;
+  box-shadow: -8px 0 26px rgba(0, 0, 0, 0.45);
   z-index: 1500;
   transition: right 0.3s ease;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .asset-detail-panel.active {
-  right: 0;
+  right: 44px;
 }
+/* Follow the notes panel shift so the drawer never covers the notes panel */
+body.notes-open .asset-detail-panel.active { right: calc(min(480px, 90vw) + 10px); }
+/* On small screens there is no room to sit left of the handle; the drawer may cover it */
+@media (max-width: 768px) { .asset-detail-panel.active { right: 10px; } }
+@media (max-width: 768px) { body.notes-open .asset-detail-panel.active { right: 10px; } }
 .asset-detail-header {
   display: flex;
   align-items: center;
@@ -879,25 +935,34 @@ input[type="checkbox"]:checked {
   margin: 6px 0;
 }
 
-/* Domain Correlation Panel */
+/* Domain Correlation Panel (floating drawer; opens to the left of the pinned notes handle) */
 .domain-corr-panel {
+  box-sizing: border-box;
   position: fixed;
-  top: 0;
-  right: -420px;
-  width: 400px;
-  height: 100vh;
+  top: 63px;
+  bottom: 10px;
+  right: -450px;
+  width: min(420px, calc(100vw - 20px));
   background: #111418;
-  border-left: 1px solid #2a3545;
-  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.5);
+  border: 1px solid #1e2630;
+  border-radius: 14px;
+  box-shadow: -8px 0 26px rgba(0, 0, 0, 0.45);
   z-index: 1600;
   transition: right 0.3s ease;
   display: flex;
   flex-direction: column;
+  overflow-x: hidden;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .domain-corr-panel.active {
-  right: 0;
+  right: 44px;
 }
+/* Follow the notes panel shift so the drawer never covers the notes panel */
+body.notes-open .domain-corr-panel.active { right: calc(min(480px, 90vw) + 10px); }
+/* On small screens there is no room to sit left of the handle; the drawer may cover it */
+@media (max-width: 768px) { .domain-corr-panel.active { right: 10px; } }
+@media (max-width: 768px) { body.notes-open .domain-corr-panel.active { right: 10px; } }
 .domain-corr-header {
   display: flex;
   align-items: center;
@@ -1206,4 +1271,22 @@ input[type="checkbox"]:checked {
 }
 .screenshot-error-list li:last-child {
   border-bottom: none;
+}
+
+/* --- Global QoL (added 2026-10-13) --- */
+/* Slim theme-matched scrollbars everywhere */
+* { scrollbar-width: thin; scrollbar-color: #2a3545 transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: #2a3545; border-radius: 999px; }
+*::-webkit-scrollbar-thumb:hover { background: #3d4c61; }
+
+/* Stop wheel/scroll chaining from inner panels and sidebars to the page behind */
+.name-detail-panel,
+.asset-detail-panel,
+.domain-corr-panel,
+.sidebarBody,
+#sprayContent,
+#timelineContent {
+  overscroll-behavior: contain;
 }
