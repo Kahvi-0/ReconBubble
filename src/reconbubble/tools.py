@@ -64,6 +64,7 @@ class ToolSpec:
     builtin: bool = False  # True = implemented in-process (no external binary)
     input_mode: str = "target"  # "target" (argv {target}) or "hosts_ports" (stdin host list + ports)
     wordlist_default: str = ""  # default wordlist for {wordlist} argv slot; UI shows an editable pre-filled box
+    category: str = "subdomain"  # UI grouping on the /tools page ("subdomain" | "smb")
 
 
 def _bin_hint(bin_dir: str) -> str:
@@ -320,6 +321,25 @@ def build_tools(bin_dir: str | Path) -> dict:
                     "https://github.com/projectdiscovery/dnsx/releases "
                     + _bin_hint(bin_dir)
                 ),
+            },
+        ),
+        "libreoffice": ToolSpec(
+            name="libreoffice",
+            label="LibreOffice",
+            argv=[],
+            timeout=300,
+            category="smb",
+            bin_names=("soffice", "libreoffice"),
+            network_note=(
+                "Not a scanning tool — LibreOffice is used by the SMB file "
+                "preview to convert Office documents (.doc, .docx, ...) to "
+                "PDF in the background. Native PDFs preview fine without it. "
+                "No network access."
+            ),
+            install_commands={
+                "apt": "sudo apt install libreoffice-writer",
+                "brew": "brew install --cask libreoffice",
+                "flatpak": "flatpak install flathub org.libreoffice.LibreOffice",
             },
         ),
     }

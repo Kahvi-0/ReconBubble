@@ -41,9 +41,14 @@ import contextlib
 import hashlib
 import ipaddress
 import json
+import os
 import re
+import shutil
+import signal
 import socket
 import struct
+import subprocess
+import tempfile
 import uuid
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
@@ -667,16 +672,20 @@ SNIFF_SIZE = 8 * 1024
 
 
 def sniff_kind(sample: bytes, total_size: Optional[int] = None) -> str:
-    """Classify a leading file sample as ``text``, ``image`` or ``binary``.
+    """Classify a leading file sample as ``text``, ``image``, ``pdf`` or
+    ``binary``.
 
     Image detection is magic-byte based (PNG/JPEG/GIF/WEBP/BMP/ICO/SVG);
-    everything else is ``text`` when the sample is NUL-free and mostly
-    printable, and ``binary`` otherwise.  ``total_size`` (from the
-    directory listing) is used to disambiguate BMPs, whose two-byte
-    signature is easy to hit by accident.
+    PDFs are detected by the mandatory ``%PDF-`` header; everything else
+    is ``text`` when the sample is NUL-free and mostly printable, and
+    ``binary`` otherwise.  ``total_size`` (from the directory listing) is
+    used to disambiguate BMPs, whose two-byte signature is easy to hit by
+    accident.
     """
     if not sample:
         return "binary"
+    if sample.startswith(b"%PDF-"):
+        return "pdf"
     if sample.startswith(
         (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a")
     ):
@@ -715,7 +724,7 @@ def sniff_kind(sample: bytes, total_size: Optional[int] = None) -> str:
 class SmbPreview:
     """A file opened for preview, optionally backed by a local cache.
 
-    ``kind`` is one of ``text``, ``image`` or ``binary`` (see
+    ``kind`` is one of ``text``, ``image``, ``pdf`` or ``binary`` (see
     :func:`sniff_kind`).  ``from_cache`` is true when the bytes come from
     the local cache folder instead of the share.  The caller must call
     :meth:`close`.  Consuming :meth:`iter_chunks` to the end promotes the
@@ -996,3 +1005,188 @@ def preview_file(
             cache_dir / (key + ".bin"),
         )
     return preview
+
+
+# ---------------------------------------------------------------------------
+# Legacy .doc -> PDF conversion (headless LibreOffice, Writer)
+# ---------------------------------------------------------------------------
+
+#: Suffix added to the preview cache key of a converted-PDF entry so the
+#: rendered PDF sits next to the (source) cache entry in the same folder.
+DOC2PDF_SUFFIX = "-doc2pdf"
+
+#: A single conversion is abandoned after this many seconds.
+DOC_CONVERSION_TIMEOUT = 60.0
+
+
+class DocToPdfError(Exception):
+    """A .doc file could not be converted to PDF.
+
+    ``reason`` is ``"missing"`` when LibreOffice is not installed (the
+    frontend offers the install command) or ``"failed"`` when the binary is
+    present but the conversion did not produce a usable PDF.
+    """
+
+    def __init__(self, message: str, reason: str = "failed"):
+        super().__init__(message)
+        self.reason = reason
+
+
+def find_soffice() -> Optional[str]:
+    """Locate the headless LibreOffice binary, or ``None`` when absent.
+
+    ``soffice`` is checked first, then the ``libreoffice`` alias.  The lookup
+    runs through :func:`shutil.which` on every call, so installing or
+    removing the binary takes effect on the next request without a restart.
+    """
+    return shutil.which("soffice") or shutil.which("libreoffice")
+
+
+def convert_to_pdf(
+    data: bytes,
+    filename: str,
+    timeout: float = DOC_CONVERSION_TIMEOUT,
+    tmp_root=None,
+) -> bytes:
+    """Convert .doc bytes to PDF with headless LibreOffice.
+
+    The bytes are written to a temp file under a sanitised copy of the
+    original name (the extension selects LibreOffice's import filter) and
+    converted with a private per-call user profile, so concurrent
+    conversions never fight over the global profile lock.  On timeout the
+    whole process group is killed so no ``soffice.bin`` lingers.
+
+    When ``tmp_root`` is given, the temp working directory (source copy +
+    profile) is created under it so nothing lands outside the caller's
+    workspace; otherwise the system temp directory is used.  The working
+    directory is removed on every exit path.
+
+    Raises :class:`DocToPdfError` (``reason="missing"``) when LibreOffice is
+    not installed, and (``reason="failed"``) on timeout, non-zero exit,
+    missing output or a result that is not a PDF.
+    """
+    soffice = find_soffice()
+    if soffice is None:
+        raise DocToPdfError("LibreOffice is not installed on this server",
+                            reason="missing")
+    stem = filename.rsplit(".", 1)[0] if "." in filename else filename
+    stem = "".join(c for c in stem if c.isalnum() or c in "-_") or "doc"
+    tmp_kwargs = {}
+    if tmp_root is not None:
+        Path(tmp_root).mkdir(parents=True, exist_ok=True)
+        tmp_kwargs = {"dir": tmp_root}
+    with tempfile.TemporaryDirectory(
+        prefix="recon-doc2pdf-", **tmp_kwargs
+    ) as td:
+        td_path = Path(td)
+        src = td_path / (stem + ".doc")
+        src.write_bytes(data)
+        cmd = [
+            soffice,
+            f"-env:UserInstallation=file://{td_path / 'profile'}",
+            "--headless",
+            "--norestore",
+            "--convert-to", "pdf",
+            "--outdir", str(td_path),
+            str(src),
+        ]
+        with subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        ) as proc:
+            try:
+                _out, err = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                with contextlib.suppress(OSError):
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                with contextlib.suppress(OSError):
+                    proc.wait(timeout=5)
+                raise DocToPdfError(
+                    f"conversion timed out after {timeout:g}s"
+                ) from None
+        pdf_path = td_path / (stem + ".pdf")
+        if proc.returncode != 0 or not pdf_path.is_file():
+            raise DocToPdfError(
+                "LibreOffice failed to convert the file to PDF"
+                + (f" (exit {proc.returncode})" if proc.returncode else "")
+            )
+        pdf = pdf_path.read_bytes()
+    if not pdf.startswith(b"%PDF-"):
+        raise DocToPdfError("conversion output is not a valid PDF")
+    return pdf
+
+
+def doc2pdf_cache_hit(
+    cache_dir,
+    host: str,
+    share: str,
+    path: str,
+    filename: str,
+    source_size: int,
+) -> Optional[bytes]:
+    """Return cached converted-PDF bytes for a .doc, or None on any mismatch.
+
+    Freshness is judged exactly like the file cache: the stored size is the
+    *source* .doc's listed size, so a same-size re-request is served without
+    re-downloading or re-converting.
+    """
+    key = _cache_key(host, share, path, filename) + DOC2PDF_SUFFIX
+    bin_path = Path(cache_dir) / (key + ".bin")
+    meta_path = Path(cache_dir) / (key + ".json")
+    try:
+        meta = json.loads(meta_path.read_text("utf-8"))
+        if int(meta.get("size", -1)) != int(source_size):
+            return None
+        pdf = bin_path.read_bytes()
+    except (OSError, ValueError, TypeError):
+        return None
+    return pdf if pdf.startswith(b"%PDF-") else None
+
+
+def doc2pdf_cache_write(
+    cache_dir,
+    host: str,
+    share: str,
+    path: str,
+    filename: str,
+    source_size: int,
+    pdf: bytes,
+) -> None:
+    """Store a converted PDF next to the source cache entry.
+
+    Written atomically (temp file + replace) like the file cache, and the
+    ordinary ``*.bin`` eviction covers these entries as well.  Failures are
+    swallowed: a missed cache write must never break the preview response.
+    """
+    try:
+        key = _cache_key(host, share, path, filename) + DOC2PDF_SUFFIX
+        cache_dir = Path(cache_dir)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        bin_path = cache_dir / (key + ".bin")
+        meta_path = cache_dir / (key + ".json")
+        bin_tmp = meta_tmp = None
+        try:
+            bin_tmp = cache_dir / (key + ".tmp" + uuid.uuid4().hex[:8])
+            bin_tmp.write_bytes(pdf)
+            bin_tmp.replace(bin_path)
+            bin_tmp = None
+            meta = {
+                "size": int(source_size),
+                "sha256": hashlib.sha256(pdf).hexdigest(),
+                "saved_at": datetime.now().isoformat(),
+                "converted_from": "doc",
+            }
+            meta_tmp = meta_path.with_name(meta_path.name + ".tmp" + uuid.uuid4().hex[:8])
+            meta_tmp.write_text(json.dumps(meta), "utf-8")
+            meta_tmp.replace(meta_path)
+            meta_tmp = None
+            _evict_cache(cache_dir)
+        except OSError:
+            for p in (bin_tmp, meta_tmp):
+                if p is not None:
+                    with contextlib.suppress(OSError):
+                        p.unlink()
+    except Exception:
+        pass
