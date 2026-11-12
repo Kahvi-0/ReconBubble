@@ -111,6 +111,13 @@ th.sort-desc::after { content: " \25BC"; font-size: 10px; color: #4a9eff; }
 @media (max-width: 1100px) { .nav-opt-2 { display:none; } }
 @media (max-width: 950px)  { .nav-opt-3 { display:none; } .brand { display:none; } }
 .topbar-right { display:flex; align-items:center; gap:12px; margin-left:auto; }
+.topbar-tools { font-size:12px; line-height:1; padding:5px 10px; border:1px solid #49dcb1; border-radius:0; background:rgba(73,220,177,.10); color:#49dcb1; white-space:nowrap; }
+.topbar-tools:hover { background:rgba(73,220,177,.22); text-decoration:none; }
+.topbar-tools.current { background:rgba(73,220,177,.28); font-weight:700; }
+.tool-row { padding:12px 0 14px; border-top:1px solid #1e2630; }
+.tool-row:first-of-type { border-top:none; padding-top:0; }
+.tool-row-title { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px; font-size:15px; margin:0 0 4px; }
+.tool-row-title .muted { font-size:12px; }
 .firegif-right { margin-right:12px; }
 .jobs-indicator { position:relative; display:inline-flex; align-items:center; justify-content:center; width:26px; height:26px; padding:0; border-radius:50%; background:#0f141b; border:1px solid #2a3a4a; cursor:pointer; outline-offset:2px; }
 .jobs-indicator:hover, .jobs-indicator:focus-visible { border-color:#4a9eff; }
