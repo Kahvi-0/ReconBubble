@@ -120,9 +120,14 @@ def build(st: AppState, app) -> APIRouter:
     @router.get("/tools", response_class=HTMLResponse)
     def tools_page(request: Request):
         data = st.api_tools()
+        groups = []
+        for key, title in (("subdomain", "Subdomain Enumeration"), ("smb", "SMB Tools")):
+            items = [t for t in data["tools"] if t.get("category") == key]
+            if items:
+                groups.append({"title": title, "tools": items})
         return st.templates.TemplateResponse(
             "tools.html",
-            {"request": request, "tools": data["tools"], "bin_dir": data["bin_dir"]},
+            {"request": request, "groups": groups, "bin_dir": data["bin_dir"]},
         )
 
     @router.get("/subdomains-discovery", response_class=HTMLResponse)

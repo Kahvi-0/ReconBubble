@@ -1,16 +1,16 @@
 {% extends "base.html" %}
 {% macro access_pill(access) %}
-  {% if access in ('READ', 'READ_LIST', 'READ_DATA') %}
+  {% if access in ('READ', 'READ ONLY', 'READ_LIST', 'READ_DATA') %}
   <span class="pill-access-read">{{ access }}</span>
-  {% elif access in ('WRITE', 'WRITE_DATA', 'CHANGE') %}
+  {% elif access in ('WRITE', 'READ, WRITE', 'WRITE_DATA', 'CHANGE') %}
   <span class="pill-access-write">{{ access }}</span>
-  {% elif access in ('FULL', 'FULL_CONTROL', 'FULL_ACCESS') %}
+  {% elif access in ('FULL', 'FULL CONTROL', 'FULL_CONTROL', 'FULL_ACCESS') %}
   <span class="pill-access-full">{{ access }}</span>
   {% else %}
   <span class="pill-access-none">{{ access or 'UNKNOWN' }}</span>
   {% endif %}
 {% endmacro %}
-{% macro access_class(access) %}{% if access in ('READ', 'READ_LIST', 'READ_DATA') %}read{% elif access in ('WRITE', 'WRITE_DATA', 'CHANGE') %}write{% elif access in ('FULL', 'FULL_CONTROL', 'FULL_ACCESS') %}full{% else %}none{% endif %}{% endmacro %}
+{% macro access_class(access) %}{% if access in ('READ', 'READ ONLY', 'READ_LIST', 'READ_DATA') %}read{% elif access in ('WRITE', 'READ, WRITE', 'WRITE_DATA', 'CHANGE') %}write{% elif access in ('FULL', 'FULL CONTROL', 'FULL_CONTROL', 'FULL_ACCESS') %}full{% else %}none{% endif %}{% endmacro %}
 {% block content %}
 <h1>SMB Shares</h1>
 
@@ -57,8 +57,8 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
 .smb-share-edit { color: #60a5fa; }
 .smb-share-del { color: #ef4444; }
 .smb-share-edit:hover, .smb-share-del:hover { opacity: 1; }
-.pill-access-read { background: #1e3a5f; color: #93c5fd; border: 1px solid #2563eb; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
-.pill-access-write { background: #14532d; color: #86efac; border: 1px solid #16a34a; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+.pill-access-read { background: #14532d; color: #86efac; border: 1px solid #16a34a; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
+.pill-access-write { background: #1e3a5f; color: #93c5fd; border: 1px solid #2563eb; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
 .pill-access-full { background: #431407; color: #fdba74; border: 1px solid #ea580c; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
 .pill-access-none { background: #1f2937; color: #9ca3af; border: 1px solid #374151; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600; }
 .smb-share-entry { margin-bottom: 8px; border: 1px solid #2a3545; border-radius: 4px; padding: 8px; }
@@ -99,6 +99,17 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
 }
 .smb-preview-body pre { margin: 0; font-family: 'Courier New', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; color: #e8e8e8; }
 .smb-preview-body img { max-width: 100%; height: auto; display: block; }
+.smb-preview-body iframe { width: 100%; height: 65vh; min-height: 320px; border: none; display: block; }
+.smb-preview-sheetbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.smb-preview-sheetbar label { font-size: 12px; color: #94a3b8; }
+.smb-preview-sheetbar select { background: #1a2332; color: #e8e8e8; border: 1px solid #334155; border-radius: 3px; font-size: 12px; padding: 2px 6px; }
+.smb-preview-sheet { width: 100%; border-collapse: collapse; font-size: 12px; }
+.smb-preview-sheet td { border: 1px solid #1e2630; padding: 3px 8px; text-align: left; white-space: nowrap; color: #e8e8e8; }
+.smb-preview-docx { font-size: 13px; line-height: 1.55; color: #e8e8e8; }
+.smb-preview-docx img { max-width: 100%; height: auto; }
+.smb-preview-docx table { border-collapse: collapse; }
+.smb-preview-docx td, .smb-preview-docx th { border: 1px solid #334155; padding: 3px 8px; }
+.smb-preview-docx p { margin: 0 0 8px; }
 @media (max-width: 1200px) {
   .smb-browser { flex-wrap: wrap; }
   .smb-browser-preview { flex: 1 1 100%; }
@@ -128,8 +139,8 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
   border-radius: 10px; padding: 1px 8px; font-size: 11px; cursor: pointer;
 }
 .smb-share-user:hover { border-color: #2563eb; background: #1e3a5f; }
-.smb-user-read { color: #93c5fd; border-color: #2563eb; }
-.smb-user-write { color: #86efac; border-color: #16a34a; }
+.smb-user-read { color: #86efac; border-color: #16a34a; }
+.smb-user-write { color: #93c5fd; border-color: #2563eb; }
 .smb-user-full { color: #fdba74; border-color: #ea580c; }
 .smb-user-none { color: #9ca3af; border-color: #374151; }
 /* Chip of the user whose stored credentials are used for the active connection */
@@ -223,7 +234,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
             <div class="smb-share-users">
               {% for u in column_users %}
               {% set r = g.by_user.get(u.id) %}
-              {% if r %}<button type="button" class="smb-share-user smb-user-{{ access_class(r.access) }}" data-user="{{ r.user_id }}" title="Open as {{ user_label(u) }} ({{ 'no access' if r.access in ('', 'NO_ACCESS') else r.access }})">{{ user_label(u) }}</button>{% endif %}
+              {% if r %}<button type="button" class="smb-share-user smb-user-{{ access_class(r.access) }}" data-user="{{ r.user_id }}" title="Open as {{ user_label(u) }} ({{ 'no access' if r.access in ('', 'NO_ACCESS', 'NO ACCESS') else r.access }})">{{ user_label(u) }}</button>{% endif %}
               {% endfor %}
               {% if g.unassigned %}<button type="button" class="smb-share-user smb-user-none" data-user="0" title="Open anonymously">anon</button>{% endif %}
             </div>
@@ -330,6 +341,8 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
 {% endblock %}
 
 {% block scripts %}
+<script src="/static/vendor/xlsx.full.min.js"></script>
+<script src="/static/vendor/mammoth.browser.min.js"></script>
 <script>
 (function() {
   var smbPanel = document.getElementById('smbPanel');
@@ -493,7 +506,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
   var selectedFile = null;
   var browsing = false;
   var previewAbort = null;    // AbortController of the in-flight preview fetch
-  var previewImgUrl = null;   // object URL backing the current image preview
+  var previewBlobUrl = null;   // object URL backing the current image/PDF preview
 
   // Ids of name entries whose stored credentials the server can resolve.
   // No secret material is rendered into the page.
@@ -625,9 +638,86 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
     while (i !== -1) { n++; i = s.indexOf('\uFFFD', i + 1); }
     return n;
   }
+  function fileExt(name) {
+    var dot = name.lastIndexOf('.');
+    return dot >= 0 ? name.slice(dot + 1).toLowerCase() : '';
+  }
+  // Cap on rendered rows so a huge workbook doesn't hang the DOM.
+  var SHEET_MAX_ROWS = 500;
+  // Builds a <div> with an optional sheet picker and the rendered table.
+  // Synchronous; throws on a corrupt or unreadable workbook.
+  function buildSheetPreview(buf) {
+    var wb = XLSX.read(buf, { type: 'array' });
+    var wrap = document.createElement('div');
+    var host = document.createElement('div');
+    function renderSheetInto(hostEl, name) {
+      hostEl.innerHTML = '';
+      var ws = wb.Sheets[name];
+      var rows = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: '' });
+      var table = document.createElement('table');
+      table.className = 'smb-preview-sheet';
+      var shown = 0;
+      for (var i = 0; i < rows.length && shown < SHEET_MAX_ROWS; i++) {
+        var row = rows[i];
+        if (!row) continue;
+        var empty = true;
+        for (var j = 0; j < row.length; j++) {
+          if (String(row[j] == null ? '' : row[j]) !== '') { empty = false; break; }
+        }
+        if (empty) continue;
+        var tr = document.createElement('tr');
+        for (var c = 0; c < row.length; c++) {
+          var cell = document.createElement('td');
+          cell.textContent = row[c] == null ? '' : String(row[c]);
+          tr.appendChild(cell);
+        }
+        table.appendChild(tr);
+        shown++;
+      }
+      hostEl.appendChild(table);
+      if (shown === 0) {
+        var s = document.createElement('span');
+        s.className = 'muted';
+        s.style.fontSize = '12px';
+        s.textContent = '(sheet is empty)';
+        hostEl.appendChild(s);
+      } else if (rows.length > SHEET_MAX_ROWS) {
+        var note = document.createElement('div');
+        note.className = 'muted';
+        note.style.fontSize = '11px';
+        note.textContent = 'Showing first ' + SHEET_MAX_ROWS + ' of ' + rows.length + ' rows.';
+        hostEl.appendChild(note);
+      }
+    }
+    if (wb.SheetNames.length > 1) {
+      var bar = document.createElement('div');
+      bar.className = 'smb-preview-sheetbar';
+      var label = document.createElement('label');
+      label.textContent = 'Sheet: ';
+      bar.appendChild(label);
+      var sel = document.createElement('select');
+      wb.SheetNames.forEach(function(n) {
+        var o = document.createElement('option');
+        o.value = n;
+        o.textContent = n;
+        sel.appendChild(o);
+      });
+      sel.addEventListener('change', function() { renderSheetInto(host, sel.value); });
+      bar.appendChild(sel);
+      wrap.appendChild(bar);
+    }
+    wrap.appendChild(host);
+    renderSheetInto(host, wb.SheetNames[0]);
+    return wrap;
+  }
+  // mammoth resolves to { value: html, messages: [...] }; HTML is generated
+  // by mammoth (not copied raw from the docx), so it needs no sanitising.
+  function buildDocxHtml(buf) {
+    return mammoth.convertToHtml({ arrayBuffer: buf });
+  }
   function resetPreview() {
     if (previewAbort) { previewAbort.abort(); previewAbort = null; }
-    if (previewImgUrl) { URL.revokeObjectURL(previewImgUrl); previewImgUrl = null; }
+    if (previewBlobUrl) { URL.revokeObjectURL(previewBlobUrl); previewBlobUrl = null; }
     previewTitle.textContent = 'File preview';
     previewCached.style.display = 'none';
     previewBody.innerHTML = '';
@@ -641,7 +731,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
   // Local (no-network) preview message: empty file, too large, etc.
   function previewLocal(name, message) {
     if (previewAbort) { previewAbort.abort(); previewAbort = null; }
-    if (previewImgUrl) { URL.revokeObjectURL(previewImgUrl); previewImgUrl = null; }
+    if (previewBlobUrl) { URL.revokeObjectURL(previewBlobUrl); previewBlobUrl = null; }
     previewTitle.textContent = name;
     previewCached.style.display = 'none';
     previewBody.innerHTML = '';
@@ -662,7 +752,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
       return;
     }
     if (previewAbort) previewAbort.abort();
-    if (previewImgUrl) { URL.revokeObjectURL(previewImgUrl); previewImgUrl = null; }
+    if (previewBlobUrl) { URL.revokeObjectURL(previewBlobUrl); previewBlobUrl = null; }
     var p = new URLSearchParams();
     p.set('host', browseState.host);
     p.set('share', browseState.share);
@@ -690,6 +780,7 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
           return {
             blob: blob,
             kind: r.headers.get('x-preview-kind'),
+            note: r.headers.get('x-preview-note'),
             cached: r.headers.get('x-preview-cache') === 'hit'
           };
         });
@@ -719,22 +810,76 @@ body.notes-open .smb-panel.active { right: calc(min(480px, 90vw) + 10px); }
         } else if (res.kind === 'image') {
           var blob = res.blob;
           if (!blob.type || blob.type === 'image/octet-stream') {
-            var dot = e.name.lastIndexOf('.');
-            var ext = dot >= 0 ? e.name.slice(dot + 1).toLowerCase() : '';
-            var mime = IMAGE_EXT_MIME[ext] || blob.type || 'image/octet-stream';
+            var mime = IMAGE_EXT_MIME[fileExt(e.name)] || blob.type || 'image/octet-stream';
             blob = new Blob([blob], { type: mime });
           }
-          previewImgUrl = URL.createObjectURL(blob);
+          previewBlobUrl = URL.createObjectURL(blob);
           var img = document.createElement('img');
-          img.src = previewImgUrl;
+          img.src = previewBlobUrl;
           img.alt = e.name;
           previewBody.appendChild(img);
+        } else if (res.kind === 'pdf') {
+          // Native browser PDF viewer via object URL; reuses the shared
+          // blob-URL lifecycle so every reset revokes it.
+          previewBlobUrl = URL.createObjectURL(new Blob([res.blob], { type: 'application/pdf' }));
+          var frame = document.createElement('iframe');
+          frame.src = previewBlobUrl;
+          frame.title = e.name;
+          previewBody.appendChild(frame);
+        } else if (fileExt(e.name) === 'xlsx' || fileExt(e.name) === 'xls') {
+          return res.blob.arrayBuffer().then(function(buf) {
+            if (previewAbort !== controller) return;
+            var el;
+            try {
+              el = buildSheetPreview(buf);
+            } catch (ex) {
+              previewStatus.textContent = 'Could not read spreadsheet \u2014 file may be corrupt.';
+              return;
+            }
+            previewBody.appendChild(el);
+          }).catch(function() {
+            if (previewAbort !== controller) return;
+            previewStatus.textContent = 'Could not read spreadsheet.';
+          });
+        } else if (fileExt(e.name) === 'docx') {
+          return res.blob.arrayBuffer().then(function(buf) {
+            if (previewAbort !== controller) return null;
+            return buildDocxHtml(buf).then(function(result) {
+              return result && result.value;
+            });
+          }).then(function(html) {
+            if (previewAbort !== controller || html == null) return;
+            var div = document.createElement('div');
+            div.className = 'smb-preview-docx';
+            div.innerHTML = html;
+            previewBody.appendChild(div);
+          }).catch(function() {
+            if (previewAbort !== controller) return;
+            previewStatus.textContent = 'Could not read document \u2014 file may be corrupt.';
+          });
         } else {
+          var msg;
+          if (res.note === 'needs-libreoffice') {
+            msg = 'This legacy .doc needs LibreOffice on the server to render as PDF, and it is not installed. Install it, then preview the file again:';
+          } else if (res.note === 'conversion-failed') {
+            msg = 'This .doc could not be converted to PDF for preview (corrupt file or converter error). Use Download instead.';
+          } else {
+            msg = fileExt(e.name) === 'doc'
+              ? 'Legacy .doc file \u2014 preview not supported. Use Download instead.'
+              : 'Binary file \u2014 cannot be previewed. Use Download instead.';
+          }
           var s = document.createElement('span');
           s.className = 'muted';
           s.style.fontSize = '12px';
-          s.textContent = 'Binary file \u2014 cannot be previewed. Use Download instead.';
+          s.textContent = msg;
           previewBody.appendChild(s);
+          if (res.note === 'needs-libreoffice') {
+            var code = document.createElement('code');
+            code.textContent = 'sudo apt-get install -y --no-install-recommends libreoffice-writer';
+            code.style.display = 'block';
+            code.style.marginTop = '6px';
+            previewBody.appendChild(code);
+          }
         }
       })
       ['catch'](function(err) {

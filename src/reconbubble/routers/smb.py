@@ -518,7 +518,48 @@ def build(st: AppState, app) -> APIRouter:
         size: int = Query(0),
     ):
         """Stream a file for inline preview (text/image), served from the
-        local cache when its stored size matches the listed ``size``."""
+        local cache when its stored size matches the listed ``size``.
+
+        Legacy .doc files are converted to PDF with headless LibreOffice
+        when it is installed: the converted PDF is cached like any other
+        preview (same-size re-requests hit without touching the share), and
+        without LibreOffice the response carries ``X-Preview-Note:
+        needs-libreoffice`` so the pane can offer the install command.
+        """
+        doc_ext = file.rsplit(".", 1)[-1].lower() if "." in file else ""
+        cache_dir = st.ws.preview_cache_dir
+        if doc_ext == "doc" and smbbrowse.find_soffice() is None:
+            # No converter: skip the SMB download entirely and let the
+            # preview pane prompt for the install.
+            return Response(
+                b"",
+                media_type="application/octet-stream",
+                headers={
+                    "X-Preview-Kind": "binary",
+                    "X-Preview-Cache": "miss",
+                    "X-Preview-Note": "needs-libreoffice",
+                    "Cache-Control": "no-store",
+                },
+            )
+        if (
+            doc_ext == "doc"
+            and cache_dir is not None
+            and 0 < size <= smbbrowse.PREVIEW_MAX_BYTES
+        ):
+            cached_pdf = smbbrowse.doc2pdf_cache_hit(
+                cache_dir, host, share, path, file, size,
+            )
+            if cached_pdf is not None:
+                return Response(
+                    cached_pdf,
+                    media_type="application/pdf",
+                    headers={
+                        "X-Preview-Kind": "pdf",
+                        "X-Preview-Cache": "hit",
+                        "Cache-Control": "no-store",
+                    },
+                )
+
         try:
             username, password, ntlm_hash, domain = _resolve_creds(user_id)
             preview = smbbrowse.preview_file(
@@ -532,11 +573,57 @@ def build(st: AppState, app) -> APIRouter:
         except Exception as exc:
             return JSONResponse({"ok": False, "error": f"Unexpected preview error: {exc}", "code": "smb_error"})
 
+        if (
+            doc_ext == "doc"
+            and cache_dir is not None
+            and 0 < size <= smbbrowse.PREVIEW_MAX_BYTES
+        ):
+            # Convert: consume the .doc fully (this also lands a source copy
+            # in the file cache), then render and cache the PDF.
+            try:
+                doc_bytes = b"".join(preview.iter_chunks())
+            finally:
+                preview.close()
+            try:
+                # tmp_root keeps the per-call working copy (source + profile)
+                # inside the workspace cache dir: zero footprint outside.
+                pdf = smbbrowse.convert_to_pdf(
+                    doc_bytes, file, tmp_root=cache_dir,
+                )
+            except smbbrowse.DocToPdfError as exc:
+                return Response(
+                    doc_bytes,
+                    media_type="application/octet-stream",
+                    headers={
+                        "X-Preview-Kind": "binary",
+                        "X-Preview-Cache": "miss",
+                        "X-Preview-Note": (
+                            "needs-libreoffice" if exc.reason == "missing"
+                            else "conversion-failed"
+                        ),
+                        "Cache-Control": "no-store",
+                    },
+                )
+            smbbrowse.doc2pdf_cache_write(
+                cache_dir, host, share, path, file, size, pdf,
+            )
+            return Response(
+                pdf,
+                media_type="application/pdf",
+                headers={
+                    "X-Preview-Kind": "pdf",
+                    "X-Preview-Cache": "miss",
+                    "Cache-Control": "no-store",
+                },
+            )
+
         if preview.kind == "text":
             media = "text/plain; charset=utf-8"
         elif preview.kind == "image":
             ext = file.rsplit(".", 1)[-1].lower() if "." in file else ""
             media = _IMAGE_MEDIA.get(ext, "image/octet-stream")
+        elif preview.kind == "pdf":
+            media = "application/pdf"
         else:
             media = "application/octet-stream"
 

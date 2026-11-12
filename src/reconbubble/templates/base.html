@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <title>ReconBubble</title>
   <link rel="icon" type="image/svg+xml" href="/static/favicon.svg"/>
-  <link rel="stylesheet" href="/static/app.css?v=22"/>
+  <link rel="stylesheet" href="/static/app.css?v=23"/>
 </head>
 <body>
   <header class="topbar">
@@ -77,7 +77,6 @@
               </div>
             </div>
            <a href="/subdomains" class="nav-opt-2{% if request.url.path in ('/subdomains', '/urls') %} current{% endif %}">Web Apps</a>
-           <a href="/tools" class="nav-opt-1{% if request.url.path == '/tools' %} current{% endif %}">Tools</a>
          <div class="nav-dropdown" id="internalDropdown">
           <a href="#" class="nav-dropbtn">Internal ▾</a>
           <div class="nav-dropdown-content">
@@ -91,6 +90,7 @@
         <a href="/users" class="nav-opt-3{% if request.url.path == '/users' %} current{% endif %}">Users</a>
     </nav>
     <div class="topbar-right">
+      <a class="topbar-tools{% if request.url.path == '/tools' %} current{% endif %}" href="/tools">Tools</a>
       <a class="btn" href="/upload">Upload</a>
       <div id="globalJobsIndicator" class="jobs-indicator" hidden role="status" tabindex="0" aria-label="">
         <span id="jobsIndicatorIcon" class="jobs-spinner"></span>

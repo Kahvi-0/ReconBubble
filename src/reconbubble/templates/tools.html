@@ -3,7 +3,7 @@
 <h1>Recon Tools</h1>
 
 <div class="card">
-  <h2>External Subdomain Tools</h2>
+  <h2>Recon Tools</h2>
   <p class="muted">
     These tools run on this machine as the user running ReconBubble. ReconBubble
     never downloads or installs them automatically &mdash; install one manually using
@@ -18,43 +18,48 @@
   </p>
 </div>
 
-{% for t in tools %}
+{% for g in groups %}
 <div class="card" style="margin-top:12px;">
-  <h2>
-    <span class="scope-dot {% if t.available %}in{% else %}out{% endif %}">●</span>
-    {{ t.label }}
-    {% if t.repo_url %}
-      <a href="{{ t.repo_url }}" target="_blank" rel="noopener noreferrer" class="muted" style="margin-left:8px; font-size:12px; font-weight:normal;">GitHub &#8599;</a>
+  <h2>{{ g.title }}</h2>
+  {% for t in g.tools %}
+  <div class="tool-row">
+    <div class="tool-row-title">
+      <span class="scope-dot {% if t.available %}in{% else %}out{% endif %}">●</span>
+      <strong>{{ t.label }}</strong>
+      {% if t.repo_url %}
+        <a href="{{ t.repo_url }}" target="_blank" rel="noopener noreferrer" class="muted">GitHub &#8599;</a>
+      {% endif %}
+      {% if t.builtin %}
+        <span class="muted">(built-in — no install needed)</span>
+      {% elif t.available %}
+        <span class="muted">(v{{ t.version or "unknown" }} — <code>{{ t.path }}</code>)</span>
+      {% else %}
+        <span class="muted">(not installed)</span>
+      {% endif %}
+    </div>
+    <p class="muted">{{ t.network_note }}</p>
+    {% if not t.builtin %}
+    <details {% if not t.available %}open{% endif %}>
+      <summary>Install</summary>
+      <table style="margin-top:8px;">
+        <thead><tr><th>Method</th><th>Command</th></tr></thead>
+        <tbody>
+          {% for method, cmd in t.install_commands.items() %}
+          <tr>
+            <td style="white-space:nowrap;"><strong>{{ method }}</strong></td>
+            <td><code>{{ cmd }}</code></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="muted" style="margin-top:8px;">
+        After installing, click Refresh below{% if t.category == "subdomain" %} &mdash; or run the tool from the
+        <a href="/subdomains-discovery">Subdomains</a> page (Perimeter menu){% endif %}.
+      </p>
+    </details>
     {% endif %}
-    {% if t.builtin %}
-      <span class="muted">(built-in — no install needed)</span>
-    {% elif t.available %}
-      <span class="muted">(v{{ t.version or "unknown" }} — <code>{{ t.path }}</code>)</span>
-    {% else %}
-      <span class="muted">(not installed)</span>
-    {% endif %}
-  </h2>
-  <p class="muted">{{ t.network_note }}</p>
-  {% if not t.builtin %}
-  <details {% if not t.available %}open{% endif %}>
-    <summary>Install</summary>
-    <table style="margin-top:8px;">
-      <thead><tr><th>Method</th><th>Command</th></tr></thead>
-      <tbody>
-        {% for method, cmd in t.install_commands.items() %}
-        <tr>
-          <td style="white-space:nowrap;"><strong>{{ method }}</strong></td>
-          <td><code>{{ cmd }}</code></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-    <p class="muted" style="margin-top:8px;">
-      After installing, click Refresh below &mdash; or run the tool from the
-      <a href="/subdomains-discovery">Subdomains</a> page (Perimeter menu).
-    </p>
-  </details>
-  {% endif %}
+  </div>
+  {% endfor %}
 </div>
 {% endfor %}
 

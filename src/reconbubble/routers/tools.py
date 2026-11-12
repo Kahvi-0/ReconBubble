@@ -604,6 +604,7 @@ def build(st: AppState, app) -> APIRouter:
                     {
                         "name": spec.name,
                         "label": spec.label,
+                        "category": spec.category,
                         "available": True,
                         "path": None,
                         "version": "",
@@ -621,6 +622,7 @@ def build(st: AppState, app) -> APIRouter:
                 {
                     "name": spec.name,
                     "label": spec.label,
+                    "category": spec.category,
                     "available": path is not None,
                     "path": str(path) if path else None,
                     "version": tool_version(path) if path else "",
@@ -748,6 +750,11 @@ def build(st: AppState, app) -> APIRouter:
         spec = app.state.tools_registry.get(tool)
         if not spec:
             return JSONResponse({"ok": False, "error": "Unknown tool"}, status_code=400)
+        if spec.category != "subdomain":
+            return JSONResponse(
+                {"ok": False, "error": f"{spec.label} is not a runnable recon tool"},
+                status_code=400,
+            )
         if spec.name == "cero":
             raw_hosts = body.get("hosts")
             if not isinstance(raw_hosts, list):

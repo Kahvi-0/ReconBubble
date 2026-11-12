@@ -307,6 +307,7 @@
     if (!toolButtonsWrap) return;
     toolButtonsWrap.innerHTML = "";
     for (const t of toolsData.tools) {
+      if (t.category !== "subdomain") continue;
       const btn = document.createElement("button");
       btn.className = "btn";
       btn.id = `btn-tool-${t.name}`;
