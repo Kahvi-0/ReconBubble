@@ -208,8 +208,12 @@ def build(st: AppState, app) -> APIRouter:
                 in_scope_ip_set = {
                     ip for ip in all_ips if ip_in_scope(ip, ips, subnets, excluded)
                 }
-                in_scope = bool(in_dom or in_scope_ip_set)
-                sensitive = bool(sensitive_dom or bool(sensitive_ip_set))
+                # Scope/sensitive status is based on the domain name only.
+                # In-scope IPs are shown on the chips for information but do
+                # not make an out-of-scope domain in-scope (the "subdomains
+                # with in-scope IP" rule is handled by domain_in_scope()).
+                in_scope = bool(in_dom)
+                sensitive = bool(sensitive_dom)
                 # Get RDAP info for root domain
                 rdap = rdap_info.get(x.root_domain, {}) if x.root_domain else {}
                 # Get Prowler info for this subdomain
@@ -239,7 +243,7 @@ def build(st: AppState, app) -> APIRouter:
                         "port": port,
                         "ips": sorted(info["ips"]),
                         "in_scope_ips": sorted(info["in_scope_ips"]),
-                        "in_scope": bool(in_dom or info["in_scope_ips"]),
+                        "in_scope": bool(in_dom),
                     }
                     for port, info in sorted(port_info.items())
                 ]
@@ -372,8 +376,6 @@ def build(st: AppState, app) -> APIRouter:
                         ips,
                         subnets,
                         excluded,
-                    ) or any(
-                        ip_in_scope(ip, ips, subnets, excluded) for ip in root_ips
                     )
                 # Insert a synthetic anchor row for the root domain only when
                 # no DB row exists for it and the root domain is itself in scope.

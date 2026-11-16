@@ -175,7 +175,24 @@ def build(st: AppState, app) -> APIRouter:
                 server_hostname = None if _is_ip_like(host_header) else host_header
                 try:
                     sock = ctx.wrap_socket(sock, server_hostname=server_hostname)
-                except ssl.SSLError:
+                except ssl.SSLError as exc:
+                    if _is_ip_like(host_header):
+                        # IP targets cannot send SNI, so a handshake failure
+                        # is ambiguous. A real TLS alert means the peer IS a
+                        # TLS server (it just rejected the SNI-less
+                        # handshake) -> count the port as an HTTPS listener.
+                        reason = getattr(exc, "reason", "") or ""
+                        if "ALERT" in reason or "UNRECOGNIZED_NAME" in reason:
+                            return 0, "tls-server"
+                        # The peer is not speaking TLS at all, so this port
+                        # cannot be HTTPS -> ignore the error.
+                        if reason in (
+                            "RECORD_LAYER_FAILURE",
+                            "WRONG_VERSION_NUMBER",
+                            "UNSUPPORTED_PROTOCOL",
+                            "UNEXPECTED_EOF_WHILE_READING",
+                        ):
+                            return 0, "no-tls"
                     return 0, "tls-error"
             request = (
                 f"GET / HTTP/1.1\r\n"
@@ -223,16 +240,20 @@ def build(st: AppState, app) -> APIRouter:
         http_status, http_error = _probe_http_status_once(
             addr, port, host_header, False
         )
-        if https_status and http_status:
+        # For IP targets, "tls-server" means the peer is a TLS server that
+        # rejected the SNI-less handshake -> treat as HTTPS. "no-tls" means
+        # the peer is not speaking TLS -> ignore the error.
+        https_detected = bool(https_status) or https_error == "tls-server"
+        if https_detected and http_status:
             scheme = "both"
-        elif https_status:
+        elif https_detected:
             scheme = "https"
         elif http_status:
             scheme = "http"
         else:
             scheme = "none"
         error_parts = []
-        if not https_status:
+        if not https_detected and https_error not in ("tls-server", "no-tls"):
             error_parts.append(f"https:{https_error or 'no-response'}")
         if not http_status:
             error_parts.append(f"http:{http_error or 'no-response'}")
@@ -454,10 +475,15 @@ def build(st: AppState, app) -> APIRouter:
             host, ip, port, use_tls, scheme_name = task
             try:
                 status, error = _probe_http_status_once(ip or host, port, host, use_tls)
-                if status:
+                if status or error == "tls-server":
                     scheme = scheme_name
                     http_status = status if scheme_name == "http" else 0
                     https_status = status if scheme_name == "https" else 0
+                    error_text = ""
+                elif error == "no-tls":
+                    scheme = "none"
+                    http_status = 0
+                    https_status = 0
                     error_text = ""
                 else:
                     scheme = "none"

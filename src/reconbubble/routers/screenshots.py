@@ -358,7 +358,22 @@ def build(st: AppState, app) -> APIRouter:
                 if job_id in app.state.screenshot_queue_ids:
                     app.state.screenshot_queue_ids.remove(job_id)
 
-    async def _run_screenshot_capture(clean_targets: list[dict], progress_cb=None, status_cb=None) -> list[dict]:
+    async def _screenshot_sleep_cancelable(seconds: float, cancel_check) -> None:
+        remaining = float(seconds)
+        while remaining > 0:
+            step = min(0.25, remaining)
+            await asyncio.sleep(step)
+            remaining -= step
+            if cancel_check is not None and cancel_check():
+                return
+
+    async def _run_screenshot_capture(
+        clean_targets: list[dict],
+        progress_cb=None,
+        status_cb=None,
+        delay_ms: int = 0,
+        cancel_check=None,
+    ) -> list[dict]:
         from playwright.async_api import async_playwright
 
         screenshots_dir = st.ws.uploads_dir / "screenshots"
@@ -379,6 +394,8 @@ def build(st: AppState, app) -> APIRouter:
                 batch_results: list[dict] = []
 
                 for target in target_list:
+                    if cancel_check is not None and cancel_check():
+                        break
                     fqdn = target["fqdn"]
                     port = target["port"]
                     ip = target.get("ip", "")
@@ -408,6 +425,8 @@ def build(st: AppState, app) -> APIRouter:
                     scheme = "https"
 
                     for try_scheme in ["https", "http"]:
+                        if cancel_check is not None and cancel_check():
+                            break
                         url = f"{try_scheme}://{fqdn}:{port}"
                         scheme = try_scheme
                         page = None
@@ -425,6 +444,16 @@ def build(st: AppState, app) -> APIRouter:
                                 except Exception:
                                     http_title = ""
 
+                                if delay_ms > 0:
+                                    await _screenshot_sleep_cancelable(delay_ms / 1000.0, cancel_check)
+                                if cancel_check is not None and cancel_check():
+                                    try:
+                                        await page.close()
+                                    except Exception:
+                                        pass
+                                    page = None
+                                    break
+
                                 await page.screenshot(path=str(filepath), clip={"x": 0, "y": 0, "width": 1280, "height": 720})
                                 success = True
                                 await page.close()
@@ -438,6 +467,10 @@ def build(st: AppState, app) -> APIRouter:
                                 except Exception:
                                     pass
                             continue
+
+                    # Cancelled: don't record a result for this skipped target.
+                    if cancel_check is not None and cancel_check():
+                        break
 
                     rec = WebScreenshot(
                         fqdn=fqdn,
@@ -519,8 +552,14 @@ def build(st: AppState, app) -> APIRouter:
                 job["current_label"] = label
                 job["updated_at"] = datetime.utcnow().isoformat()
 
-            await _run_screenshot_capture(job["targets"], progress_cb, status_cb)
-            job["status"] = "completed"
+            await _run_screenshot_capture(
+                job["targets"],
+                progress_cb,
+                status_cb,
+                delay_ms=job.get("delay_ms", 0),
+                cancel_check=lambda: bool(job.get("cancel_requested", False)),
+            )
+            job["status"] = "cancelled" if job.get("cancel_requested") else "completed"
             job["error"] = ""
         except Exception as e:
             job["status"] = "failed"
@@ -572,12 +611,19 @@ def build(st: AppState, app) -> APIRouter:
         clean_targets = _clean_screenshot_targets(body.get("targets", []))
         if not clean_targets:
             return JSONResponse({"ok": False, "error": "No valid targets provided"}, status_code=400)
+        try:
+            delay_ms = int(body.get("delay_ms", 0) or 0)
+        except (TypeError, ValueError):
+            delay_ms = 0
+        delay_ms = max(0, min(delay_ms, 300000))
         _prune_screenshot_jobs()
         job_id = uuid.uuid4().hex
         now = datetime.utcnow()
         job = {
             "id": job_id,
             "targets": clean_targets,
+            "delay_ms": delay_ms,
+            "cancel_requested": False,
             "status": "pending",
             "total": len(clean_targets),
             "completed": 0,
@@ -634,6 +680,31 @@ def build(st: AppState, app) -> APIRouter:
             "job": _screenshot_public_job(job, queued_count=_screenshot_pending_count()),
         }
 
+    @router.post("/api/screenshot/jobs/{job_id}/cancel")
+    def api_screenshot_cancel_job(job_id: str):
+        _prune_screenshot_jobs()
+        job = app.state.screenshot_jobs.get(job_id)
+        if not job:
+            return JSONResponse({"ok": False, "error": "Screenshot job not found"}, status_code=404)
+        job["cancel_requested"] = True
+        if job["status"] == "pending":
+            # Queued jobs cancel immediately; the worker skips them and a
+            # racing start still ends up cancelled via the capture-loop check.
+            job["status"] = "cancelled"
+            job["error"] = ""
+            job["finished_at"] = datetime.utcnow()
+            if job_id in app.state.screenshot_queue_ids:
+                app.state.screenshot_queue_ids.remove(job_id)
+        job["updated_at"] = datetime.utcnow().isoformat()
+        return {
+            "ok": True,
+            "job": _screenshot_public_job(
+                job,
+                queue_position=len(app.state.screenshot_queue_ids),
+                queued_count=_screenshot_pending_count(),
+            ),
+        }
+
     @router.get("/api/screenshot/latest")
     def api_screenshot_latest(request: Request):
         show_out = request.query_params.get("show_out", "0") == "1"
@@ -676,14 +747,20 @@ def build(st: AppState, app) -> APIRouter:
                 fqdn, domains, domain_all_subs, domain_subs_if_ip,
                 resolved, ips, subnets, excluded,
             )
-            in_scope_ip_set = {ip for ip in all_ips if ip_in_scope(ip, ips, subnets, excluded)}
-            in_scope = bool(in_dom or in_scope_ip_set)
-            if not show_out and not in_scope:
-                continue
             try:
                 is_ip = ipaddress.ip_address(fqdn) is not None
             except Exception:
                 is_ip = False
+            # Bare-IP screenshots are scoped by the IP itself; domain
+            # screenshots are scoped by the domain name only. In-scope IPs
+            # do not make an out-of-scope domain in-scope.
+            in_scope = (
+                ip_in_scope(fqdn, ips, subnets, excluded)
+                if is_ip
+                else bool(in_dom)
+            )
+            if not show_out and not in_scope:
+                continue
             scheme = (r.scheme or "https").strip().lower().rstrip(":")
             if scheme not in ("http", "https"):
                 scheme = "https"
