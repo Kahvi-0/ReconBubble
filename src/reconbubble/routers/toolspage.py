@@ -134,7 +134,10 @@ def build(st: AppState, app) -> APIRouter:
     def subdomains_discovery_page(request: Request):
         data = st.api_tools()
         with st.db() as s:
-            _, _, domains, _, _, _, _ = scope_sets(s)
+            (
+                ips, subnets, domains, _email_domains,
+                domain_all_subs, domain_subs_if_ip, excluded,
+            ) = scope_sets(s)
             in_scope_domains = sorted(domains)
             sub_rows = s.execute(
                 select(Subdomain.fqdn, Subdomain.root_domain).order_by(
@@ -145,6 +148,59 @@ def build(st: AppState, app) -> APIRouter:
                 {"fqdn": fqdn, "root": (root or "").strip()}
                 for fqdn, root in sub_rows
             ]
+            # Out-of-scope root domains whose discovered subdomains resolve to
+            # in-scope IPs — candidates for quick add / ignore.
+            all_ips_map = list_all_subdomain_ips(s)
+            group_ips: dict[str, set[str]] = {}
+            for fqdn, root in sub_rows:
+                rd = (root or "").strip().lower().strip(".")
+                if not rd:
+                    continue
+                group_ips.setdefault(rd, set()).update(all_ips_map.get(fqdn, []))
+            suggested_roots = []
+            for rd, gips in sorted(group_ips.items()):
+                if rd in excluded:
+                    continue
+                root_ips = all_ips_map.get(rd, [])
+                # A root explicitly listed in scope is in scope even when
+                # domain_in_scope() shadows that via the subs-with-in-scope-ip
+                # branch (a root with no own resolved IPs would otherwise read
+                # as out-of-scope).
+                root_in_scope = (rd in domains) or domain_in_scope(
+                    rd,
+                    domains,
+                    domain_all_subs,
+                    domain_subs_if_ip,
+                    root_ips,
+                    ips,
+                    subnets,
+                    excluded,
+                ) or any(
+                    ip_in_scope(ip, ips, subnets, excluded) for ip in root_ips
+                )
+                if root_in_scope:
+                    continue
+                in_scope_ips = sorted(
+                    ip for ip in gips if ip_in_scope(ip, ips, subnets, excluded)
+                )
+                if not in_scope_ips:
+                    continue
+                suggested_roots.append({"root": rd, "ips": in_scope_ips})
+            exc_rows = s.execute(
+                select(ScopeExclusion.fqdn, ScopeExclusion.created_at)
+            ).all()
+            ignored_roots = [
+                {
+                    "root": (fq or "").strip().lower().strip("."),
+                    "ignored_at": (
+                        created_at.strftime("%Y-%m-%d %H:%M:%S")
+                        if created_at else ""
+                    ),
+                }
+                for fq, created_at in exc_rows
+                if (fq or "").strip().lower().strip(".") in group_ips
+            ]
+            ignored_roots.sort(key=lambda x: x["root"])
         return st.templates.TemplateResponse(
             "subdomains_discovery.html",
             {
@@ -153,6 +209,9 @@ def build(st: AppState, app) -> APIRouter:
                 "bin_dir": data["bin_dir"],
                 "in_scope_domains": in_scope_domains,
                 "discovered_subdomains": discovered_subdomains,
+                "suggested_roots": suggested_roots,
+                "ignored_roots": ignored_roots,
+                "ignored_root_names": [r["root"] for r in ignored_roots],
             },
         )
 

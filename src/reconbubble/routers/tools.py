@@ -113,6 +113,11 @@ from ..helpers import (
 )
 from ..state import AppState
 
+# VHost run limits: cap sockets per run and process them in small parallel
+# batches (asyncio.Semaphore) so large selections finish in reasonable time.
+_VHOST_MAX_SOCKETS = 100
+_VHOST_CONCURRENCY = 4
+
 
 def build(st: AppState, app) -> APIRouter:
     router = APIRouter()
@@ -304,57 +309,67 @@ def build(st: AppState, app) -> APIRouter:
                         else:
                             wl_path = wl
                         wl_desc = wl
-                    for i, sock in enumerate(sockets, 1):
-                        n = len(sockets)
-                        job["current_label"] = (
-                            f"VHost {sock} ({i}/{n})..." if n > 1 else f"VHost {sock}..."
-                        )
-                        job["updated_at"] = datetime.utcnow().isoformat()
-                        result = await asyncio.to_thread(
-                            run_vhost_socket, spec, sock, wl_path, st.ws.bin_dir
-                        )
-                        lines = result.get("lines") or []
-                        header = (
-                            f"# tool=vhost target={sock} wordlist={wl_desc} job={job_id} "
-                            f"ts={datetime.utcnow().isoformat()}"
-                        )
-                        fname = f"vhost_{sock.replace(':', '_')}_{job_id[:8]}.txt"
-                        tail = ""
-                        if lines:
-                            total_found += len(lines)
-                            stored = st.ws.store_text(
-                                header + "\n" + "\n".join(lines) + "\n",
-                                fname, prefix="tool_run",
+                    # Run sockets in small parallel batches: all coroutines are
+                    # started, but the semaphore caps concurrent gobuster runs.
+                    vhost_sem = asyncio.Semaphore(_VHOST_CONCURRENCY)
+
+                    async def _run_vhost_socket_task(i: int, sock: str) -> None:
+                        nonlocal total_found, total_added, last_artifact_id
+                        async with vhost_sem:
+                            n = len(sockets)
+                            job["current_label"] = (
+                                f"VHost {sock} ({i}/{n})..." if n > 1 else f"VHost {sock}..."
                             )
-                            with st.SessionLocal() as s:
-                                art = upsert_artifact(s, "subdomains_tool", stored)
-                                added = import_subdomains(s, art, stored)
-                                last_artifact_id = art.id
-                            total_added += added
-                            tail = f"# done found={len(lines)} added={added}\n"
-                            if not result.get("ok"):
-                                err_text = result.get("error") or "vhost error"
-                                target_errors.append(f"{sock}: {err_text[:300]}")
-                                tail += (
-                                    f"# error={sock}: {err_text.replace(chr(10), ' | ')[:500]}\n"
+                            job["updated_at"] = datetime.utcnow().isoformat()
+                            result = await asyncio.to_thread(
+                                run_vhost_socket, spec, sock, wl_path, st.ws.bin_dir
+                            )
+                            lines = result.get("lines") or []
+                            header = (
+                                f"# tool=vhost target={sock} wordlist={wl_desc} job={job_id} "
+                                f"ts={datetime.utcnow().isoformat()}"
+                            )
+                            fname = f"vhost_{sock.replace(':', '_')}_{job_id[:8]}.txt"
+                            tail = ""
+                            if lines:
+                                total_found += len(lines)
+                                stored = st.ws.store_text(
+                                    header + "\n" + "\n".join(lines) + "\n",
+                                    fname, prefix="tool_run",
                                 )
-                        else:
-                            if not result.get("ok"):
-                                err_text = (result.get("error") or "no vhost hits")
-                                target_errors.append(f"{sock}: {err_text[:300]}")
-                                tail = (
-                                    f"# error={sock}: {err_text.replace(chr(10), ' | ')[:500]}\n"
-                                )
-                            tail += "# done found=0 added=0\n"
-                            stored = st.ws.store_text(header + "\n", fname, prefix="tool_run")
-                            with st.SessionLocal() as s:
-                                upsert_artifact(s, "subdomains_tool", stored)
-                        logs = _log_lines(result)
-                        if tail or logs:
-                            with stored.open("a", encoding="utf-8") as fh:
-                                fh.write(tail)
-                                if logs:
-                                    fh.write("\n".join(logs) + "\n")
+                                with st.SessionLocal() as s:
+                                    art = upsert_artifact(s, "subdomains_tool", stored)
+                                    added = import_subdomains(s, art, stored)
+                                    last_artifact_id = art.id
+                                total_added += added
+                                tail = f"# done found={len(lines)} added={added}\n"
+                                if not result.get("ok"):
+                                    err_text = result.get("error") or "vhost error"
+                                    target_errors.append(f"{sock}: {err_text[:300]}")
+                                    tail += (
+                                        f"# error={sock}: {err_text.replace(chr(10), ' | ')[:500]}\n"
+                                    )
+                            else:
+                                if not result.get("ok"):
+                                    err_text = (result.get("error") or "no vhost hits")
+                                    target_errors.append(f"{sock}: {err_text[:300]}")
+                                    tail = (
+                                        f"# error={sock}: {err_text.replace(chr(10), ' | ')[:500]}\n"
+                                    )
+                                tail += "# done found=0 added=0\n"
+                                stored = st.ws.store_text(header + "\n", fname, prefix="tool_run")
+                                with st.SessionLocal() as s:
+                                    upsert_artifact(s, "subdomains_tool", stored)
+                            logs = _log_lines(result)
+                            if tail or logs:
+                                with stored.open("a", encoding="utf-8") as fh:
+                                    fh.write(tail)
+                                    if logs:
+                                        fh.write("\n".join(logs) + "\n")
+
+                    await asyncio.gather(
+                        *(_run_vhost_socket_task(i, sock) for i, sock in enumerate(sockets, 1))
+                    )
                 finally:
                     # Only unlink the discovered-subdomain temp list; wordlists
                     # materialized from URLs are cached and reused by other jobs.
@@ -831,9 +846,10 @@ def build(st: AppState, app) -> APIRouter:
                     sockets.append(sock)
             if not sockets:
                 return JSONResponse({"ok": False, "error": "select at least one socket"}, status_code=400)
-            if len(sockets) > 20:
+            if len(sockets) > _VHOST_MAX_SOCKETS:
                 return JSONResponse(
-                    {"ok": False, "error": "too many sockets (max 20 per run)"}, status_code=400
+                    {"ok": False, "error": f"too many sockets (max {_VHOST_MAX_SOCKETS} per run)"},
+                    status_code=400,
                 )
             wordlist = str(body.get("wordlist") or "").strip()
             wordlist_source = str(body.get("wordlist_source") or "").strip()

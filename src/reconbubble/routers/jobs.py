@@ -264,6 +264,7 @@ def build(st: AppState, app) -> APIRouter:
                             "fqdn": f,
                             "in_scope": scope_of[f],
                             "runs": [],
+                            "ips": resolved.get(f, []),
                         }
                     e["runs"].append({"tool": r["tool"], "created_at": r["created_at"]})
             subdomains_out = [union[f] for f in sorted(union)]

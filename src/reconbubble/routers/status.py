@@ -137,6 +137,12 @@ def build(st: AppState, app) -> APIRouter:
             all_web_ips_ports = get_open_web_ports_by_ip(s)
             entries: dict[tuple[str, int | None], set[str]] = {}
             covered_ip_ports: set[str] = set()
+            prowl_ips_by_fqdn: dict[str, set[str]] = {}
+            for x in rows:
+                if x.prowl_ips:
+                    prowl_ips_by_fqdn[(x.fqdn or "").strip().lower().rstrip(".")] = {
+                        ip.strip() for ip in x.prowl_ips.split(",") if ip.strip()
+                    }
 
             def add_entry(
                 host: str,
@@ -180,8 +186,31 @@ def build(st: AppState, app) -> APIRouter:
                 bare_ips = set(all_ips) if in_dom else set(in_scope_ip_set)
                 add_entry(fqdn, None, bare_ips)
                 if root_domain:
-                    root_ips = set(all_sub_ips.get(root_domain, []))
-                    add_entry(root_domain, None, root_ips)
+                    root_resolved = set(all_sub_ips.get(root_domain, []))
+                    all_root_ips = root_resolved | prowl_ips_by_fqdn.get(
+                        root_domain, set()
+                    )
+                    root_in_dom = domain_in_scope(
+                        root_domain,
+                        domains,
+                        domain_all_subs,
+                        domain_subs_if_ip,
+                        list(root_resolved),
+                        ips,
+                        subnets,
+                        excluded,
+                    )
+                    root_in_scope_ips = {
+                        ip
+                        for ip in all_root_ips
+                        if ip_in_scope(ip, ips, subnets, excluded)
+                    }
+                    if root_in_dom or root_in_scope_ips:
+                        add_entry(
+                            root_domain,
+                            None,
+                            all_root_ips if root_in_dom else root_in_scope_ips,
+                        )
                 eligible_ips = set(all_ips) if in_dom else set(in_scope_ip_set)
                 for ip in eligible_ips:
                     for port in sorted(set(all_web_ips_ports.get(ip, []))):
@@ -264,6 +293,64 @@ def build(st: AppState, app) -> APIRouter:
                 s.delete(existing)
             else:
                 s.add(ScopeExclusion(fqdn=fq))
+            s.commit()
+        return {"ok": True}
+
+    @router.post("/api/subdomain/root/ignore")
+    def api_subdomain_root_ignore(root: str = Form(...)):
+        rd = (root or "").strip().lower().rstrip(".")
+        if not rd:
+            return JSONResponse({"ok": False, "error": "Invalid domain"}, status_code=400)
+        with st.db() as s:
+            existing = s.scalar(select(ScopeExclusion).where(ScopeExclusion.fqdn == rd))
+            if not existing:
+                s.add(ScopeExclusion(fqdn=rd))
+            s.commit()
+        return {"ok": True}
+
+    @router.post("/api/subdomain/root/scope-add")
+    def api_subdomain_root_scope_add(
+        root: str = Form(...),
+        apply_all_subdomains: int = Form(0),
+        apply_subdomains_with_in_scope_ip: int = Form(0),
+    ):
+        rd = (root or "").strip().lower().rstrip(".")
+        if not rd or " " in rd:
+            return JSONResponse({"ok": False, "error": "Invalid domain"}, status_code=400)
+        with st.db() as s:
+            existing = s.scalar(
+                select(ScopeItem).where(
+                    ScopeItem.kind == "domain", ScopeItem.value == rd
+                )
+            )
+            if existing:
+                existing.in_scope = 1
+                existing.apply_all_subdomains = (
+                    1 if apply_all_subdomains == 1 else 0
+                )
+                existing.apply_subdomains_with_in_scope_ip = (
+                    1 if apply_subdomains_with_in_scope_ip == 1 else 0
+                )
+            else:
+                s.add(
+                    ScopeItem(
+                        kind="domain",
+                        value=rd,
+                        note="",
+                        in_scope=1,
+                        apply_all_subdomains=(
+                            1 if apply_all_subdomains == 1 else 0
+                        ),
+                        apply_subdomains_with_in_scope_ip=(
+                            1 if apply_subdomains_with_in_scope_ip == 1 else 0
+                        ),
+                        sensitive=0,
+                    )
+                )
+            # A prior ignore (exclusion) would override the new domain rule.
+            exc = s.scalar(select(ScopeExclusion).where(ScopeExclusion.fqdn == rd))
+            if exc:
+                s.delete(exc)
             s.commit()
         return {"ok": True}
 

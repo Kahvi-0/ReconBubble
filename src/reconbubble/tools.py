@@ -1390,7 +1390,7 @@ def run_vhost_socket(spec: ToolSpec, sock: str, wordlist_file: str,
     if base_sig is None:
         return _vhost_empty(
             f"socket {sock} did not answer any HTTP probe "
-            f"({len(_VHOST_BASELINE_PROBES)} random-Host attempts, "
+            f"({_VHOST_BASELINE_PROBES} random-Host attempts, "
             f"{_VHOST_PROBE_TIMEOUT:.0f}s timeout)"
         )
 

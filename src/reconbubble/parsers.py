@@ -126,6 +126,29 @@ def hostname_as_domain(value: str) -> str:
     return v
 
 
+def _like_escape(value: str) -> str:
+    """Escape LIKE wildcards (\\, %, _) for literal user-input searches."""
+    return (value or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def split_domain_user(value: str) -> tuple[str, str]:
+    """Split a credential username into (domain, username).
+
+    Backslash always splits (Windows `domain\\user` form). Slash only splits
+    when the left side looks like a dotted domain, so values such as
+    `NinjaRMM/AgentKey` are preserved as a single literal username.
+    """
+    v = (value or "").strip()
+    if "\\" in v:
+        domain, user = v.rsplit("\\", 1)
+        return domain.strip(), user.strip()
+    if "/" in v:
+        left, user = v.rsplit("/", 1)
+        if DOMAIN_RE.match(left.strip()):
+            return left.strip(), user.strip()
+    return "", v
+
+
 def upsert_artifact(session: Session, type_: str, stored_path: Path) -> Artifact:
     h = sha256_file(stored_path)
     art = Artifact(
@@ -249,9 +272,9 @@ def import_names(session: Session, artifact: Artifact, path: Path) -> int:
             continue
         existing = session.scalar(
             select(NameItem).where(
-                NameItem.first_name.ilike(first_name),
-                NameItem.middle_name.ilike(middle_name or "%"),
-                NameItem.last_name.ilike(last_name),
+                NameItem.first_name.ilike(_like_escape(first_name), escape="\\"),
+                NameItem.middle_name.ilike(_like_escape(middle_name) if middle_name else "%", escape="\\"),
+                NameItem.last_name.ilike(_like_escape(last_name), escape="\\"),
             )
         )
         if existing:
@@ -452,9 +475,9 @@ def extract_doc_names(session: Session, meta_fields: set[str] | None = None) -> 
                 continue
             existing_name = session.scalar(
                 select(NameItem).where(
-                    NameItem.first_name.ilike(first_name),
-                    NameItem.middle_name.ilike(middle_name or "%"),
-                    NameItem.last_name.ilike(last_name),
+                    NameItem.first_name.ilike(_like_escape(first_name), escape="\\"),
+                    NameItem.middle_name.ilike(_like_escape(middle_name) if middle_name else "%", escape="\\"),
+                    NameItem.last_name.ilike(_like_escape(last_name), escape="\\"),
                 )
             )
             if not existing_name:
@@ -756,16 +779,7 @@ def import_ad_users(session: Session, artifact: Artifact, path: Path) -> int:
         s = s.split()[0].strip()
         if not s:
             continue
-        domain = ""
-        username = s
-        if "\\" in s:
-            parts = s.rsplit("\\", 1)
-            domain = parts[0].strip()
-            username = parts[1].strip()
-        elif "/" in s:
-            parts = s.rsplit("/", 1)
-            domain = parts[0].strip()
-            username = parts[1].strip()
+        domain, username = split_domain_user(s)
         existing = session.scalar(select(NameItem).where(NameItem.ad_username == username))
         if existing:
             if domain and not existing.domain:
@@ -822,16 +836,7 @@ def import_creds_to_names(session: Session, artifact: Artifact, path: Path) -> d
             unmatched.append(s)
             continue
 
-        domain = ""
-        username = raw_user
-        if "\\" in raw_user:
-            parts = raw_user.rsplit("\\", 1)
-            domain = parts[0].strip()
-            username = parts[1].strip()
-        elif "/" in raw_user:
-            parts = raw_user.rsplit("/", 1)
-            domain = parts[0].strip()
-            username = parts[1].strip()
+        domain, username = split_domain_user(raw_user)
 
         if not username:
             unmatched.append(s)
@@ -840,8 +845,8 @@ def import_creds_to_names(session: Session, artifact: Artifact, path: Path) -> d
         if domain:
             domain_match = session.scalar(
                 select(NameItem).where(
-                    NameItem.ad_username.ilike(username),
-                    NameItem.domain.ilike(domain),
+                    NameItem.ad_username.ilike(_like_escape(username), escape="\\"),
+                    NameItem.domain.ilike(_like_escape(domain), escape="\\"),
                 )
             )
             if domain_match:
@@ -870,7 +875,7 @@ def import_creds_to_names(session: Session, artifact: Artifact, path: Path) -> d
                 added += 1
         else:
             matched = session.scalars(
-                select(NameItem).where(NameItem.ad_username.ilike(username))
+                select(NameItem).where(NameItem.ad_username.ilike(_like_escape(username), escape="\\"))
             ).all()
 
             if len(matched) == 1:
@@ -1635,13 +1640,13 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
             realm_domain = m_krb.group(3).strip()
             if raw_user:
                 user_item = session.scalar(
-                    select(NameItem).where(NameItem.ad_username.ilike(raw_user))
+                    select(NameItem).where(NameItem.ad_username.ilike(_like_escape(raw_user), escape="\\"))
                 )
                 if not user_item:
                     email_match = session.scalar(
                         select(NameItem).where(
                             NameItem.email != "",
-                            NameItem.email.ilike(f"{raw_user}@%"),
+                            NameItem.email.ilike(f"{_like_escape(raw_user)}@%", escape="\\"),
                         )
                     )
                     if email_match:
@@ -1670,13 +1675,13 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
                 domain = m_asrep.group(3).strip()
                 if raw_user:
                     user_item = session.scalar(
-                        select(NameItem).where(NameItem.ad_username.ilike(raw_user))
+                        select(NameItem).where(NameItem.ad_username.ilike(_like_escape(raw_user), escape="\\"))
                     )
                     if not user_item:
                         email_match = session.scalar(
                             select(NameItem).where(
                                 NameItem.email != "",
-                                NameItem.email.ilike(f"{raw_user}@%"),
+                                NameItem.email.ilike(f"{_like_escape(raw_user)}@%", escape="\\"),
                             )
                         )
                         if email_match:
@@ -1705,13 +1710,13 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
                 domain = m_ntlmv1.group(2).strip()
                 if raw_user:
                     user_item = session.scalar(
-                        select(NameItem).where(NameItem.ad_username.ilike(raw_user))
+                        select(NameItem).where(NameItem.ad_username.ilike(_like_escape(raw_user), escape="\\"))
                     )
                     if not user_item:
                         email_match = session.scalar(
                             select(NameItem).where(
                                 NameItem.email != "",
-                                NameItem.email.ilike(f"{raw_user}@%"),
+                                NameItem.email.ilike(f"{_like_escape(raw_user)}@%", escape="\\"),
                             )
                         )
                         if email_match:
@@ -1742,13 +1747,13 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
                     domain = m_ntlm.group(2).strip()
                     if raw_user:
                         user_item = session.scalar(
-                            select(NameItem).where(NameItem.ad_username.ilike(raw_user))
+                            select(NameItem).where(NameItem.ad_username.ilike(_like_escape(raw_user), escape="\\"))
                         )
                         if not user_item:
                             email_match = session.scalar(
                                 select(NameItem).where(
                                     NameItem.email != "",
-                                    NameItem.email.ilike(f"{raw_user}@%"),
+                                    NameItem.email.ilike(f"{_like_escape(raw_user)}@%", escape="\\"),
                                 )
                             )
                             if email_match:
@@ -1776,13 +1781,13 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
                 raw_user = m_dcc2.group(2).strip()
                 if raw_user:
                     user_item = session.scalar(
-                        select(NameItem).where(NameItem.ad_username.ilike(raw_user))
+                        select(NameItem).where(NameItem.ad_username.ilike(_like_escape(raw_user), escape="\\"))
                     )
                     if not user_item:
                         email_match = session.scalar(
                             select(NameItem).where(
                                 NameItem.email != "",
-                                NameItem.email.ilike(f"{raw_user}@%"),
+                                NameItem.email.ilike(f"{_like_escape(raw_user)}@%", escape="\\"),
                             )
                         )
                         if email_match:
@@ -1811,13 +1816,13 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
                 raw_user = m_ntlm.group(2).strip()
                 if raw_user:
                     user_item = session.scalar(
-                        select(NameItem).where(NameItem.ad_username.ilike(raw_user))
+                        select(NameItem).where(NameItem.ad_username.ilike(_like_escape(raw_user), escape="\\"))
                     )
                     if not user_item:
                         email_match = session.scalar(
                             select(NameItem).where(
                                 NameItem.email != "",
-                                NameItem.email.ilike(f"{raw_user}@%"),
+                                NameItem.email.ilike(f"{_like_escape(raw_user)}@%", escape="\\"),
                             )
                         )
                         if email_match:

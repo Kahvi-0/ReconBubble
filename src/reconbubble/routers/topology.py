@@ -448,8 +448,8 @@ def build(st: AppState, app) -> APIRouter:
                     candidate = s.execute(
                         select(NameItem)
                         .where(
-                            NameItem.first_name.ilike(fn),
-                            NameItem.last_name.ilike(ln),
+                            NameItem.first_name.ilike(_like_escape(fn), escape="\\"),
+                            NameItem.last_name.ilike(_like_escape(ln), escape="\\"),
                             NameItem.topology_node_id == "",
                         )
                         .limit(1)
@@ -460,7 +460,7 @@ def build(st: AppState, app) -> APIRouter:
                     candidate = s.execute(
                         select(NameItem)
                         .where(
-                            NameItem.first_name.ilike(parts[0]),
+                            NameItem.first_name.ilike(_like_escape(parts[0]), escape="\\"),
                             NameItem.topology_node_id == "",
                         )
                         .limit(1)

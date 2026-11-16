@@ -73,6 +73,7 @@ from .parsers import (
     resolve_ips_concurrent,
     DOMAIN_RE,
     hostname_as_domain,
+    _like_escape,
     link_host_domain as parser_link_host_domain,
 )
 from .tools import (
@@ -133,9 +134,6 @@ def _web_url_host_from_domain(value: str) -> str:
     if host.count(":") == 1:
         host = host.rsplit(":", 1)[0]
     return host
-
-def _like_escape(value: str) -> str:
-    return (value or "").replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 def _web_url_host_from_url(value: str) -> str:
     try:

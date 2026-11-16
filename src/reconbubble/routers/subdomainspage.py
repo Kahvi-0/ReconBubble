@@ -353,19 +353,44 @@ def build(st: AppState, app) -> APIRouter:
             )
             if filtered:
                 filtered.sort(key=lambda x: (0 if x["fqdn"] == rd else 1, x["fqdn"]))
-                if rd != "_standalone_ips" and not any(s["fqdn"] == rd for s in filtered):
-                    root_sub = s.scalar(select(Subdomain).where(Subdomain.fqdn == rd))
+                if rd == "_standalone_ips":
+                    grouped_filtered[rd] = {"subs": filtered, "rdap": data["rdap"]}
+                    continue
+                root_entry = next(
+                    (sub for sub in data["subs"] if sub["fqdn"] == rd), None
+                )
+                if root_entry is not None:
+                    root_in_scope = bool(root_entry.get("in_scope"))
+                else:
+                    root_ips = all_ips_map.get(rd, [])
+                    root_in_scope = domain_in_scope(
+                        rd,
+                        domains,
+                        domain_all_subs,
+                        domain_subs_if_ip,
+                        root_ips,
+                        ips,
+                        subnets,
+                        excluded,
+                    ) or any(
+                        ip_in_scope(ip, ips, subnets, excluded) for ip in root_ips
+                    )
+                # Insert a synthetic anchor row for the root domain only when
+                # no DB row exists for it and the root domain is itself in scope.
+                if root_in_scope and not any(s["fqdn"] == rd for s in filtered):
                     filtered.insert(0, {
                         "fqdn": rd, "root_domain": rd, "ips": [],
                         "in_scope": True, "sensitive": False,
                         "sensitive_ips": set(), "in_scope_ips": set(),
                         "rdap": {}, "prowl": {}, "scope_override": None,
                         "ports": {}, "port_chips": [], "url_count": 0,
-                        "complete": root_sub.complete if root_sub else 0,
-                        "inprogress": root_sub.inprogress if root_sub else 0,
-                        "waf": root_sub.waf if root_sub else 0,
+                        "complete": 0, "inprogress": 0, "waf": 0,
                     })
-                grouped_filtered[rd] = {"subs": filtered, "rdap": data["rdap"]}
+                grouped_filtered[rd] = {
+                    "subs": filtered,
+                    "rdap": data["rdap"],
+                    "root_in_scope": root_in_scope,
+                }
 
         probe_rows = s.execute(select(WebProtocolProbe)).scalars().all()
         probes_by_fqdn_port: dict[tuple[str, int], list[dict]] = {}
