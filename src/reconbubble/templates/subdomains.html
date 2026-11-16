@@ -46,7 +46,7 @@
         <span class="standalone-label">IPs with HTTP/HTTPS ports</span>
         <span class="muted">({{ subs|length }} hosts)</span>
       {% else %}
-        <span class="scope-dot {% if subs[0].in_scope %}in{% else %}out{% endif %}" title="Domain scope: {% if subs[0].in_scope %}IN{% else %}OUT{% endif %}">●</span>
+        <span class="scope-dot {% if data.root_in_scope %}in{% else %}out{% endif %}" title="Domain scope: {% if data.root_in_scope %}IN{% else %}OUT{% endif %}">●</span>
         <a href="#" class="domain-link" data-domain="{{ domain }}" data-rdap='{{ rdap | tojson }}'>{{ domain }}</a>
         {% if subs|selectattr('sensitive')|list|length > 0 %}<span class="sensitive-banner">Sensitive</span>{% endif %}
         <span class="muted">({{ subs|length }} subdomains)</span>

@@ -58,7 +58,7 @@
         <input type="checkbox" id="ceroSelectAll" /> Select all
       </label>
     </div>
-    <div id="ceroHostList" style="max-height:260px; overflow:auto; border:1px solid #d0d7de; border-radius:4px; padding:6px 8px; font-size:12px; background:#f6f8fa;"></div>
+    <div id="ceroHostList" style="max-height:260px; overflow:auto; border:1px solid #1e2630; border-radius:4px; padding:6px 8px; font-size:12px; background:#0f141b;"></div>
     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; flex-wrap:wrap; gap:8px;">
       <div class="muted" style="font-size:11px;"><span id="ceroCount">0</span> selected</div>
       <div style="display:flex; gap:8px; align-items:center;">
@@ -88,9 +88,9 @@
         <input type="checkbox" id="vhostSelectAll" /> Select all
       </label>
     </div>
-    <div id="vhostSocketList" style="max-height:220px; overflow:auto; border:1px solid #d0d7de; border-radius:4px; padding:6px 8px; font-size:12px; background:#f6f8fa;"></div>
+    <div id="vhostSocketList" style="max-height:220px; overflow:auto; border:1px solid #1e2630; border-radius:4px; padding:6px 8px; font-size:12px; background:#0f141b;"></div>
     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; flex-wrap:wrap; gap:8px;">
-      <div class="muted" style="font-size:11px;"><span id="vhostCount">0</span> selected (max 20 per run)</div>
+      <div class="muted" style="font-size:11px;"><span id="vhostCount">0</span> selected (max 100 per run)</div>
       <p class="muted" style="font-size:11px; margin:0;">Sockets come from open TCP services on web-ish ports.</p>
     </div>
     <div style="margin-top:10px;">
@@ -128,7 +128,7 @@
         <input type="checkbox" id="revSelectAll" /> Select all
       </label>
     </div>
-    <div id="revIpList" style="max-height:220px; overflow:auto; border:1px solid #d0d7de; border-radius:4px; padding:6px 8px; font-size:12px; background:#f6f8fa;"></div>
+    <div id="revIpList" style="max-height:220px; overflow:auto; border:1px solid #1e2630; border-radius:4px; padding:6px 8px; font-size:12px; background:#0f141b;"></div>
     <div style="display:flex; justify-content:space-between; align-items:center; margin-top:10px; flex-wrap:wrap; gap:8px;">
       <div class="muted" style="font-size:11px;"><span id="revCount">0</span> selected (max 100 per run)</div>
       <p class="muted" style="font-size:11px; margin:0;">IPs come from your scan results (hosts table).</p>
@@ -149,27 +149,97 @@
   </div>
 </div>
 
+{% if suggested_roots or ignored_roots %}
+<div class="card" style="margin-top:20px;">
+  <h2>Out-of-Scope Roots</h2>
+  <p class="muted">Root domains the tools discovered that are not in scope but resolve to in-scope IPs. Quick add them to scope, or ignore them to keep them out of future scans.</p>
+  {% if suggested_roots %}
+  <table>
+    <thead><tr><th>Root domain</th><th>In-scope IPs</th><th style="white-space:nowrap; width:1%;">Actions</th></tr></thead>
+    <tbody>
+      {% for sr in suggested_roots %}
+      <tr>
+        <td><code>{{ sr.root }}</code></td>
+        <td class="muted" style="font-size:12px; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;">{{ sr.ips | join(", ") }}</td>
+        <td style="white-space:nowrap;">
+          <button class="btn btn-sm" data-ignore-root="{{ sr.root }}">Ignore</button>
+          <button class="btn btn-sm" data-scope-add-root="{{ sr.root }}">Quick add</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% if ignored_roots %}
+  <p class="muted" style="margin:10px 0 0; font-size:12px;">
+    Ignored:
+    {% for ig in ignored_roots %}
+    <code>{{ ig.root }}</code>{% if ig.ignored_at %} ({{ ig.ignored_at }}){% endif %}{% if not loop.last %}; {% endif %}
+    {% endfor %}
+  </p>
+  {% endif %}
+</div>
+
+<div id="rootScopeAddModal" class="overlay hidden" style="cursor:pointer;" onclick="if(event.target===this)this.classList.add('hidden')">
+  <div class="card" style="max-width:560px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+      <h2 style="margin:0;">Add to scope: <code id="rootScopeAddDomain"></code></h2>
+      <button class="btn" onclick="document.getElementById('rootScopeAddModal').classList.add('hidden')">X</button>
+    </div>
+    <div class="toggle-row">
+      <label class="toggle-switch">
+        <input type="checkbox" id="rootScopeAddAllSubs" />
+        <span class="toggle-slider"></span>
+      </label>
+      <span class="filter-label">Mark all subdomains in-scope</span>
+    </div>
+    <div class="toggle-row">
+      <label class="toggle-switch">
+        <input type="checkbox" id="rootScopeAddSubsIp" />
+        <span class="toggle-slider"></span>
+      </label>
+      <span class="filter-label">Mark subdomains with in-scope IPs in-scope</span>
+    </div>
+    <p id="rootScopeAddError" style="color:#ff6666; margin:8px 0 0; display:none;"></p>
+    <div style="display:flex; gap:8px; margin-top:12px;">
+      <button class="btn" id="btnRootScopeAdd">Add to scope</button>
+      <button class="btn" onclick="document.getElementById('rootScopeAddModal').classList.add('hidden')">Cancel</button>
+    </div>
+  </div>
+</div>
+{% endif %}
+
 <div class="card" style="margin-top:20px;">
   <h2>Discovery Log</h2>
-  <p class="muted">Discovered subdomains by scope, with the full per-tool run history below. Results merge into the <a href="/subdomains">Web Apps</a> table.</p>
+  <p class="muted">Discovered subdomains by scope — select the list to copy. Full per-tool run history below; results merge into the <a href="/subdomains">Web Apps</a> table.</p>
   <div style="display:flex; gap:8px; margin:8px 0;" id="toolScopeToggles">
     <button class="btn btn-sm tool-scope-toggle" data-filter="in">In scope</button>
     <button class="btn btn-sm tool-scope-toggle" data-filter="out">Out of scope</button>
+    <button class="btn btn-sm tool-scope-toggle" id="toolIpsToggle" title="Show resolved IPs next to each subdomain">IPs</button>
   </div>
   <div id="toolDiscoveryLog"></div>
 </div>
 
 <style>
- .scope-dot { font-size: 14px; }
+ .btn-sm { padding:5px 9px; font-size:12px; }
  .tool-scope-toggle.active { background:#2f5d8f; border-color:#4a9eff; }
- .scope-dot.in { color: #00ff00; }
- .scope-dot.out { color: #ff3333; }
+ /* Toggle switches for the root quick-add modal (copied from scope.html) */
+ .toggle-switch { position:relative; display:inline-block; width:40px; height:22px; flex-shrink:0; }
+ .toggle-switch input { opacity:0; width:0; height:0; position:absolute; }
+ .toggle-slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#3a3f47; border-radius:22px; transition:background 0.25s ease; }
+ .toggle-slider::before { content:""; position:absolute; height:16px; width:16px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:transform 0.25s ease; }
+ .toggle-switch input:checked + .toggle-slider { background:#58a6ff; }
+ .toggle-switch input:checked + .toggle-slider::before { transform:translateX(18px); }
+ .toggle-switch input:focus-visible + .toggle-slider { box-shadow:0 0 0 2px #58a6ff44; }
+ .toggle-row { display:flex; align-items:center; gap:10px; margin:6px 0 12px; }
+ .toggle-row .filter-label { font-size:14px; color:#aab; margin:0; }
  #toolDiscoveryLog code { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; background:#0b0d10; border:1px solid #1e2630; border-radius:6px; padding:1px 6px; color:#d8e1ea; white-space:nowrap; }
  .tool-run-arrow { display:inline-block; margin-right:2px; flex:none; transition:transform .1s ease; }
  .dl-run[open] > .dl-run-head .tool-run-arrow { transform:rotate(90deg); }
- .tool-subs { list-style:none; padding:0; margin:0; max-height:360px; overflow:auto; display:grid; grid-template-columns:1fr 1fr; column-gap:32px; }
- .tool-subs li { margin:3px 0; font-size:13px; }
- @media (max-width: 900px) { .tool-subs { grid-template-columns:1fr; } }
+ .tool-subs { list-style:none; padding:8px 10px; margin:0; max-height:360px; overflow:auto; background:#0b0d10; border:1px solid #1e2630; border-radius:8px; font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:12px; line-height:1.7; }
+ .tool-subs li { display:flex; align-items:baseline; gap:20px; }
+ .tool-subs .sub-fqdn { white-space:nowrap; color:#d8e1ea; }
+ .tool-subs .sub-ips { color:#9aa6b2; font-size:11px; text-align:right; }
  /* Discovery log — run history */
  .dl-tool { margin:10px 0; }
  .dl-tool-head { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; border-bottom:1px solid #1e2630; padding-bottom:6px; }
@@ -226,6 +296,14 @@
   const btnToolTargetGo = document.getElementById("btnToolTargetGo");
   const inScopeDomains = {{ in_scope_domains | tojson }};
   const discoveredSubs = {{ discovered_subdomains | tojson }};
+  // Subdomains of ignored (excluded) roots are left out of tool targets
+  const ignoredRootSet = new Set(
+    {{ ignored_root_names | tojson }}.map((r) => String(r).toLowerCase())
+  );
+  const visibleDiscoveredSubs = discoveredSubs.filter((d) => {
+    const r = String(d.root || "").toLowerCase();
+    return !r || !ignoredRootSet.has(r);
+  });
   const includeDiscovered = document.getElementById("includeDiscovered");
   const discoveredWrap = document.getElementById("toolDiscoveredSuggestions");
   let toolsData = { tools: [] };
@@ -236,6 +314,7 @@
   let discoveryTools = [];
   let discoverySubs = [];
   let discoveryFilter = "in";
+  let discoveryShowIps = false;
   const CERO_DEFAULT_PORTS = "443,8443,465,587,993,995";
   const ceroModal = document.getElementById("ceroModal");
   const ceroFilter = document.getElementById("ceroFilter");
@@ -345,13 +424,13 @@
   const buildDiscoveredSuggestions = () => {
     if (discoveredBuilt) return;
     discoveredBuilt = true;
-    document.getElementById("discoveredCount").textContent = String(discoveredSubs.length);
-    if (!discoveredSubs.length) {
+    document.getElementById("discoveredCount").textContent = String(visibleDiscoveredSubs.length);
+    if (!visibleDiscoveredSubs.length) {
       discoveredWrap.innerHTML = '<span class="muted">No subdomains discovered yet.</span>';
       return;
     }
     const byRoot = {};
-    for (const d of discoveredSubs) {
+    for (const d of visibleDiscoveredSubs) {
       const r = d.root || "?";
       (byRoot[r] = byRoot[r] || []).push(d.fqdn);
     }
@@ -380,7 +459,7 @@
     }
   };
 
-  document.getElementById("discoveredCount").textContent = String(discoveredSubs.length);
+  document.getElementById("discoveredCount").textContent = String(visibleDiscoveredSubs.length);
 
   includeDiscovered.addEventListener("change", () => {
     if (includeDiscovered.checked) buildDiscoveredSuggestions();
@@ -523,7 +602,7 @@
   const updateVhostCount = () => {
     const n = selectedVhostSockets().length;
     vhostCount.textContent = String(n);
-    vhostCount.style.color = n > 20 ? "#ff6666" : "";
+    vhostCount.style.color = n > 100 ? "#ff6666" : "";
     if (vhostSelectAll) {
       vhostSelectAll.checked =
         vhostSockets.length > 0 && selectedVhostSockets().length === vhostSockets.length;
@@ -937,8 +1016,8 @@
       vhostError.style.display = "";
       return;
     }
-    if (sockets.length > 20) {
-      vhostError.textContent = `Too many sockets: ${sockets.length} selected, max 20 per run.`;
+    if (sockets.length > 100) {
+      vhostError.textContent = `Too many sockets: ${sockets.length} selected, max 100 per run.`;
       vhostError.style.display = "";
       return;
     }
@@ -994,21 +1073,12 @@
 
   const fmtTs = (ts) => String(ts || "").replace("T", " ").slice(0, 19);
 
-  // Unique tools that found a subdomain, in order of first discovery (no timestamps).
-  const firstTools = (runs) => {
-    const seen = new Set();
-    const out = [];
-    for (const rn of runs || []) {
-      if (!seen.has(rn.tool)) { seen.add(rn.tool); out.push(rn.tool); }
-    }
-    return out;
-  };
-
   const renderDiscoveryLog = () => {
     const el = document.getElementById("toolDiscoveryLog");
-    document.querySelectorAll(".tool-scope-toggle").forEach((b) => {
+    document.querySelectorAll(".tool-scope-toggle[data-filter]").forEach((b) => {
       b.classList.toggle("active", b.getAttribute("data-filter") === discoveryFilter);
     });
+    document.getElementById("toolIpsToggle").classList.toggle("active", discoveryShowIps);
     if (!discoveryTools.length) {
       el.innerHTML =
         '<span class="muted">No tool runs yet. Use the tool buttons above — install tools on the <a href="/tools">Tools page</a>.</span>';
@@ -1018,9 +1088,13 @@
       discoveryFilter === "out" ? !x.in_scope : x.in_scope
     );
     const subsHtml = subs.length
-      ? `<ul class="tool-subs">${subs.map((x) =>
-          `<li><span class="scope-dot ${x.in_scope ? "in" : "out"}">●</span> <code>${escHtml(x.fqdn)}</code><span class="muted" style="font-size:11px; margin-left:6px;">via ${firstTools(x.runs).map(escHtml).join(", ")}</span></li>`
-        ).join("")}</ul>`
+      ? `<ul class="tool-subs">${subs.map((x) => {
+          const ips = x.ips || [];
+          const ipsHtml = discoveryShowIps && ips.length
+            ? `<span class="sub-ips">${ips.map(escHtml).join(", ")}</span>`
+            : "";
+          return `<li><span class="sub-fqdn">${escHtml(x.fqdn)}</span>${ipsHtml}</li>`;
+        }).join("")}</ul>`
       : '<span class="muted" style="font-size:12px;">No subdomains in this category.</span>';
     const scopeHeading = discoveryFilter === "out" ? "Out-of-scope subdomains" : "In-scope subdomains";
 
@@ -1129,11 +1203,87 @@
   };
   loadDiscoveryLog();
 
-  document.querySelectorAll(".tool-scope-toggle").forEach((b) => {
+  document.querySelectorAll(".tool-scope-toggle[data-filter]").forEach((b) => {
     b.addEventListener("click", () => {
       discoveryFilter = b.getAttribute("data-filter");
       renderDiscoveryLog();
     });
   });
+  document.getElementById("toolIpsToggle").addEventListener("click", () => {
+    discoveryShowIps = !discoveryShowIps;
+    renderDiscoveryLog();
+  });
+</script>
+<script>
+  // ---- Out-of-scope roots: ignore / quick add to scope ----
+  const rootScopeAddButtons = document.querySelectorAll("[data-scope-add-root]");
+  if (document.querySelectorAll("[data-ignore-root]").length || rootScopeAddButtons.length) {
+    const postForm = async (url, fields) => {
+      const body = new URLSearchParams();
+      for (const [k, v] of Object.entries(fields)) body.append(k, v);
+      const resp = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+        cache: "no-store",
+      });
+      let data = {};
+      try { data = await resp.json(); } catch { /* non-JSON response */ }
+      if (!resp.ok || data.ok === false) throw new Error(data.error || `HTTP ${resp.status}`);
+      return data;
+    };
+
+    document.querySelectorAll("[data-ignore-root]").forEach((btn) => {
+      btn.addEventListener("click", async () => {
+        const root = btn.getAttribute("data-ignore-root");
+        if (!confirm(`Ignore ${root}?\nIt will be excluded from scope and left out of future tool targets.`)) return;
+        btn.disabled = true;
+        try {
+          await postForm("/api/subdomain/root/ignore", { root });
+          window.location.reload();
+        } catch (e) {
+          alert(`Failed to ignore ${root}: ${e.message}`);
+          btn.disabled = false;
+        }
+      });
+    });
+
+    const rootScopeAddModal = document.getElementById("rootScopeAddModal");
+    if (rootScopeAddModal && rootScopeAddButtons.length) {
+      const rootScopeAddDomain = document.getElementById("rootScopeAddDomain");
+      const rootScopeAddAllSubs = document.getElementById("rootScopeAddAllSubs");
+      const rootScopeAddSubsIp = document.getElementById("rootScopeAddSubsIp");
+      const rootScopeAddError = document.getElementById("rootScopeAddError");
+      const btnRootScopeAdd = document.getElementById("btnRootScopeAdd");
+      let pendingRoot = "";
+      rootScopeAddButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          pendingRoot = btn.getAttribute("data-scope-add-root");
+          rootScopeAddDomain.textContent = pendingRoot;
+          rootScopeAddAllSubs.checked = false;
+          rootScopeAddSubsIp.checked = false;
+          rootScopeAddError.style.display = "none";
+          rootScopeAddError.textContent = "";
+          btnRootScopeAdd.disabled = false;
+          rootScopeAddModal.classList.remove("hidden");
+        });
+      });
+      btnRootScopeAdd.addEventListener("click", async () => {
+        btnRootScopeAdd.disabled = true;
+        try {
+          await postForm("/api/subdomain/root/scope-add", {
+            root: pendingRoot,
+            apply_all_subdomains: rootScopeAddAllSubs.checked ? 1 : 0,
+            apply_subdomains_with_in_scope_ip: rootScopeAddSubsIp.checked ? 1 : 0,
+          });
+          window.location.reload();
+        } catch (e) {
+          rootScopeAddError.textContent = e.message;
+          rootScopeAddError.style.display = "block";
+          btnRootScopeAdd.disabled = false;
+        }
+      });
+    }
+  }
 </script>
 {% endblock %}
