@@ -28,6 +28,7 @@
     <option value="nmap_xml">Nmap XML</option>
     <option value="doc">OSINT document</option>
     <option value="prowl_phase1">Prowler phase 1 (json)</option>
+    <option value="prowl_results">Prowler results.json (full run)</option>
     <option value="zone_transfers">Prowler phase 2 - zone transfers (json)</option>
     <option value="smtp">Prowler phase 3 - SMTP (json)</option>
     <option value="names_emails">Names - Email List</option>
@@ -130,6 +131,7 @@ const rawPlaceholders = {
   nmap_xml: "Paste Nmap XML output…",
   doc: "OSINT documents must be uploaded as files…",
   prowl_phase1: "Paste Prowler phase 1 JSON…",
+  prowl_results: "Paste Prowler results.json (full run output — all phases)…",
   zone_transfers: "Paste Prowler phase 2 zone transfer JSON…",
   smtp: "Paste Prowler phase 3 SMTP JSON…",
   names_emails: "Paste email addresses, one per line…",
@@ -429,6 +431,7 @@ var typeNamesMap = {
   bbot: 'BBOT',
   bbot_cloud: 'BBOT Cloud',
   prowl_phase1: 'Prowler Phase 1',
+  prowl_results: 'Prowler Results',
   zone_transfers: 'Prowler Phase 2',
   smtp: 'Prowler Phase 3',
   smb_shares: 'SMB Shares'

@@ -1,0 +1,760 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hub-titlebar">
+  <h1 style="margin:0;">OSINT Hub</h1>
+</div>
+
+<div class="card" style="display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 14px; flex-wrap:wrap;">
+  <span class="muted">{{ hub.total }} items across {{ hub.categories|length }} categories</span>
+  <span style="display:flex; gap:8px; flex-wrap:wrap;">
+    <button class="btn" style="padding:5px 12px;" id="hubAccExpandAll">Expand all</button>
+    <button class="btn" style="padding:5px 12px;" id="hubAccCollapseAll">Collapse all</button>
+    <a class="btn" href="/osint/tools" style="padding:5px 12px;">Run a tool →</a>
+  </span>
+</div>
+
+<style>
+.hub-acc { margin:10px 0; }
+.hub-acc > summary { cursor:pointer; padding:12px 14px; display:flex; align-items:center; gap:10px; list-style:none; }
+.hub-acc > summary::-webkit-details-marker { display:none; }
+.hub-acc > summary::before { content:"▸"; color:#556; display:inline-block; transition:transform .15s; }
+.hub-acc[open] > summary::before { transform:rotate(90deg); }
+.hub-acc .cnt { background:#1e3a5f; border:1px solid #3a6da8; border-radius:999px; padding:1px 10px; font-size:12px; font-weight:700; }
+.hub-acc.empty { opacity:.6; }
+.hub-acc .acc-body { padding:4px 16px 14px; }
+.hub-click-row { cursor:pointer; }
+.hub-click-row:hover td { background:#182230; }
+#hubDocViewer, #hubDocViewer pre { overscroll-behavior: contain; }
+#hubDocViewer pre { contain: content; }
+.hub-titlebar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.hub-dropzone { transition:border-color .2s, background .2s; }
+.hub-dropzone.dragover { border-color:#22c55e; background:rgba(34,197,94,.1); }
+.hub-shot { max-width:100%; max-height:280px; border-radius:4px; border:1px solid #444; cursor:zoom-in; }
+.hub-previmg { width:56px; height:56px; object-fit:cover; border-radius:4px; border:1px solid #444; }
+.hub-thumb { width:56px; height:56px; object-fit:cover; border-radius:4px; border:1px solid #444; cursor:pointer; display:block; }
+.hub-extra, .hub-sub-extra { display:none; }
+.hub-extra.show, .hub-sub-extra.show { display:table-row; }
+</style>
+
+{% for c in hub.categories %}
+<details class="card hub-acc{% if c.count == 0 %} empty{% endif %}" {% if c.count > 0 %}open{% endif %}>
+  <summary>
+    <strong style="font-size:15px;">{{ c.label }}</strong>
+    <span class="cnt">{{ c.count }}</span>
+    {% if c.last %}<span class="muted">updated {{ c.last }}</span>{% endif %}
+    {% if c.key == "social" %}<button class="btn btn-small" id="hubAddSocialBtn" type="button" style="margin-left:auto;" title="Add an online research / social media entry">+ Social</button>{% endif %}
+    {% if c.key == "registrars" %}<button class="btn btn-small" id="hubAddRegistrarBtn" type="button" style="margin-left:auto;" title="Add a new root domain (registrar info)">+ Registrar</button>{% endif %}
+  </summary>
+  <div class="acc-body">
+    {% if c.count %}
+    <table>
+      <thead><tr>{% for h in c.table.head %}<th>{{ h }}</th>{% endfor %}{% if c.key == "registrars" %}<th style="width:140px;"></th>{% endif %}</tr></thead>
+      <tbody>
+        {% for row in c.table.rows %}
+        {% if c.key == "docs" and c.table.row_ids %}
+        <tr class="hub-click-row{% if loop.index0 >= 8 %} hub-extra{% endif %}" data-hub-cat="docs" data-hub-id="{{ c.table.row_ids[loop.index0] }}">{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+        {% elif c.key == "social" %}
+        <tr class="hub-click-row{% if loop.index0 >= 8 %} hub-extra{% endif %}" data-hub-cat="social" data-hub-meta="{{ c.table.row_metas[loop.index0] }}">{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+        {% elif c.key == "dns" %}
+        <tr class="hub-click-row{% if loop.index0 >= 8 %} hub-extra{% endif %}" data-hub-cat="dns" data-hub-meta="{{ c.table.row_metas[loop.index0] }}">{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+        {% elif c.key == "smtp" %}
+        <tr class="hub-click-row{% if loop.index0 >= 8 %} hub-extra{% endif %}" data-hub-cat="smtp">{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+        {% elif c.key == "registrars" %}
+        <tr class="hub-click-row{% if loop.index0 >= 8 %} hub-extra{% endif %}" data-hub-cat="registrars" data-hub-domain="{{ c.table.row_ids[loop.index0] }}">{% for cell in row %}<td>{{ cell }}</td>{% endfor %}
+        <td style="vertical-align:top;">
+          <div style="display:flex; gap:6px; flex-direction:column;">
+            <div style="display:flex; gap:6px;">
+              <button class="btn btn-small" type="button" data-hub-reg-edit="{{ c.table.row_ids[loop.index0] }}">Edit</button>
+              <button class="btn btn-small" type="button" data-hub-reg-delete="{{ c.table.row_ids[loop.index0] }}" style="background:#7f1d1d; color:#fecaca;">Delete</button>
+            </div>
+            <button class="btn btn-small" type="button" data-hub-reg-topology="{{ c.table.row_ids[loop.index0] }}" style="background:#065f46; color:#a7f3d0; margin-top:4px;">+ Topology</button>
+            <button class="btn btn-small" type="button" data-hub-reg-copy="{{ c.table.row_ids[loop.index0] }}" style="background:#374151; color:#d1d5db; margin-top:4px;">Copy</button>
+          </div>
+        </td>
+        </tr>
+        {% else %}
+        <tr{% if loop.index0 >= 8 %} class="hub-extra"{% endif %}>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+        {% endif %}
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if c.count > 8 %}
+    <p style="margin:10px 0 0;"><button class="btn btn-small" type="button" data-hub-showall data-hub-total="{{ c.count }}">Show all {{ c.count }} ↓</button></p>
+    {% endif %}
+    {% for stbl in c.subtables or [] %}
+    <h2 style="margin:20px 0 8px; font-size:14px;">{{ stbl.label }} <span class="muted" style="font-weight:400; font-size:12px;">({{ stbl.count }})</span></h2>
+    {% if stbl.rows %}
+    <div data-hub-stbl-wrap>
+      {% if stbl.fields %}
+      <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:4px 0 8px;">
+        <select data-hub-stbl-select style="padding:4px 8px;">
+          <option value="">All fields</option>
+          {% for f in stbl.fields %}
+          <option value="{{ f }}">{{ f }}</option>
+          {% endfor %}
+        </select>
+        <button class="btn btn-small" type="button" data-hub-stbl-refresh title="Reload the page for fresh data">Refresh</button>
+      </div>
+      {% endif %}
+      <table>
+        <thead><tr>{% for h in stbl.head %}<th>{{ h }}</th>{% endfor %}</tr></thead>
+        <tbody>
+          {% for row in stbl.rows %}
+          <tr data-stbl-field="{{ row[1] }}"{% if loop.index0 >= 10 %} class="hub-sub-extra"{% endif %}>{% for cell in row %}<td>{{ cell }}</td>{% endfor %}</tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <p data-hub-sub-toggle style="margin:10px 0 0;{% if stbl.count <= 10 %} display:none;{% endif %}">
+        <button class="btn btn-small" type="button">Show all {{ stbl.count }} ↓</button>
+      </p>
+    </div>
+    {% else %}
+    <p class="muted">Nothing extracted yet.</p>
+    {% endif %}
+    {% endfor %}
+    {% else %}
+    {% if c.key == "social" %}
+    <p class="muted">No data yet — click <b>+ Social</b> above to add your first entry.</p>
+    {% elif c.key == "registrars" %}
+    <p class="muted">No data yet — click <b>+ Registrar</b> above, or import a Prowler file via the <a href="/osint/tools">Tools page</a>.</p>
+    {% elif c.key == "docs" %}
+    <p class="muted">No data yet — upload a document (or run Prowler on the <a href="/osint/tools">Tools page</a>) and its metadata will be extracted here.</p>
+    {% else %}
+    <p class="muted">No data yet — run Prowler on the <a href="/osint/tools">Tools page</a> to populate this section.</p>
+    {% endif %}
+    {% endif %}
+    {% if c.key == "registrars" and hub.hidden_registrars %}
+    <div class="card" style="margin-top:12px; padding:12px;">
+      <div class="muted" style="margin-bottom:8px;">Hidden from this list — data is kept (subdomain/IP info remains on the Subdomains page). Use Show to bring a domain back:</div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        {% for h in hub.hidden_registrars %}
+        <span class="badge">{{ h }}</span>
+        <button class="btn btn-small" type="button" data-unhide-registrar="{{ h }}">Show</button>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </div>
+</details>
+{% endfor %}
+
+<script>
+document.getElementById("hubAccExpandAll").addEventListener("click", () => {
+  document.querySelectorAll(".hub-acc").forEach(d => d.open = true);
+});
+document.getElementById("hubAccCollapseAll").addEventListener("click", () => {
+  document.querySelectorAll(".hub-acc").forEach(d => d.open = false);
+});
+</script>
+
+<div id="hubDocOverlay" class="overlay hidden" style="cursor:pointer;">
+  <div id="hubDocViewer" style="max-width:90vw; max-height:90vh; overflow:auto; background:#10161d; border:2px solid #fff; border-radius:8px; padding:20px;">
+    <div style="text-align:right; margin-bottom:10px;">
+      <button class="btn" id="hubDocClose" type="button">Close</button>
+    </div>
+    <div id="hubDocContent"></div>
+    <div id="hubDocStatus" class="muted" style="font-size:12px; margin-top:8px;"></div>
+  </div>
+</div>
+
+<div id="hubImgOverlay" class="overlay hidden" style="cursor:pointer;">
+  <div id="hubGalleryNav" style="position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); display:flex; align-items:center; gap:20px;">
+    <button id="hubGalleryPrev" class="btn" type="button" style="font-size:24px;">‹</button>
+    <img id="hubImgFull" style="max-width:80vw; max-height:80vh; border:2px solid #fff; border-radius:4px;" />
+    <button id="hubGalleryNext" class="btn" type="button" style="font-size:24px;">›</button>
+  </div>
+  <div id="hubGalleryClose" style="position:absolute; top:20px; right:20px; color:#fff; font-size:24px; cursor:pointer;">✕</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/vendor/xlsx.full.min.js"></script>
+<script src="/static/vendor/mammoth.browser.min.js"></script>
+<script src="/static/preview.js"></script>
+<script>
+(function () {
+  const sidebar = document.getElementById("sidebar");
+  const titleEl = document.getElementById("sidebarTitle");
+  const bodyEl = document.getElementById("sidebarBody");
+  const overlay = document.getElementById("hubDocOverlay");
+  const content = document.getElementById("hubDocContent");
+
+  const esc = (v) => (v == null ? "" : String(v)).replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"}[c]));
+  const sizeHuman = (b) => {
+    if (b == null) return "—";
+    b = Number(b);
+    if (b < 1024) return b + " B";
+    if (b < 1048576) return (b / 1024).toFixed(1) + " KB";
+    return (b / 1048576).toFixed(1) + " MB";
+  };
+
+  function closeOverlay() {
+    ReconPreview.resetPreview(content);
+    overlay.classList.add("hidden");
+    overlay.style.display = "";
+    overlay.style.alignItems = "";
+    overlay.style.justifyContent = "";
+  }
+  document.getElementById("hubDocClose").addEventListener("click", closeOverlay);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) closeOverlay(); });
+
+  function viewDoc(doc) {
+    const statusEl = document.getElementById("hubDocStatus");
+    content.onStatus = (msg) => { statusEl.textContent = msg; };
+    overlay.style.display = "flex";
+    overlay.style.alignItems = "center";
+    overlay.style.justifyContent = "center";
+    overlay.classList.remove("hidden");
+    const artifactId = doc.artifact_id;
+    if (!artifactId) {
+      ReconPreview.resetPreview(content, "No stored file for this document.");
+      return;
+    }
+    // Use the stored file name so xlsx/docx pick the right renderer by
+    // extension (titles can be stored without the extension).
+    const name = doc.stored_path
+      ? String(doc.stored_path).split(/[\\/]/).pop()
+      : (doc.title || ("document-" + doc.id));
+    ReconPreview.renderPreview({
+      url: "/api/doc/" + doc.id + "/preview",
+      name: name,
+      size: doc.size_bytes || 0,
+      into: content,
+      timeoutSec: 90,
+      downloadUrl: "/api/artifacts/" + artifactId,
+    });
+  }
+
+  // Open the shared drawer via sidebar.js so its outside-click closer
+  // is armed (it resets the "armed" flag on the next tick, so the click
+  // that opened the drawer doesn't immediately close it).
+  function openSidebarShell() {
+    if (window.ReconSidebar && window.ReconSidebar.show) {
+      window.ReconSidebar.show();
+    } else {
+      sidebar.classList.remove("hidden");
+      sidebar.classList.add("open");
+      sidebar.setAttribute("aria-hidden", "false");
+    }
+    const topo = document.getElementById("sidebarTopologyBtn");
+    if (topo) topo.classList.add("hidden");
+  }
+
+  async function openDoc(id) {
+    titleEl.textContent = "Document #" + id;
+    bodyEl.innerHTML = '<p class="muted">Loading…</p>';
+    openSidebarShell();
+    let d;
+    try {
+      const r = await fetch("/api/doc/" + id + "/detail");
+      d = await r.json();
+    } catch (err) {
+      bodyEl.innerHTML = '<p class="muted">Failed to load document details.</p>';
+      return;
+    }
+    if (d.error) {
+      bodyEl.innerHTML = '<p class="muted">' + esc(d.error) + "</p>";
+      return;
+    }
+    titleEl.textContent = d.title || ("Document #" + d.id);
+    let html = `
+      <div class="card">
+        <h2>Details</h2>
+        <div><b>MIME:</b> ${esc(d.mime || "—")}</div>
+        <div><b>Size:</b> ${esc(sizeHuman(d.size_bytes))}</div>
+        ${d.sha256 ? `<div><b>SHA256:</b> <code>${esc(d.sha256)}</code></div>` : ""}
+        <div><b>Added:</b> ${esc(d.created_at || "—")}</div>
+        ${d.stored_path ? `<div><b>Stored:</b> <code>${esc(d.stored_path)}</code></div>` : ""}
+        <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+          <button class="btn" id="hubDocViewBtn" type="button">View document</button>
+          <button class="btn" id="hubDocDeleteBtn" type="button" style="background:#7f1d1d; color:#fecaca;">Delete</button>
+        </div>
+      </div>`;
+    const metaKeys = Object.keys(d.meta || {});
+    if (metaKeys.length) {
+      html += `<h2 style="margin:16px 0 8px;">Extracted metadata</h2>
+      <div class="card"><pre class="evidence">${esc(JSON.stringify(d.meta, null, 2))}</pre></div>`;
+    }
+    html += `<h2 style="margin:16px 0 8px;">Notes</h2>`;
+    if (d.notes && d.notes.length) {
+      html += d.notes.map((n) => `
+        <div class="card">
+          <div class="muted">${esc(n.created_at)} · ${esc(n.severity)}${n.tags ? " · " + esc(n.tags) : ""}</div>
+          <pre class="note">${esc(n.body)}</pre>
+        </div>`).join("");
+    } else {
+      html += '<p class="muted">No notes yet.</p>';
+    }
+    bodyEl.innerHTML = html;
+    document.getElementById("hubDocViewBtn").addEventListener("click", () => {
+      if (window.ReconSidebar) window.ReconSidebar.hide();
+      viewDoc(d);
+    });
+    document.getElementById("hubDocDeleteBtn").addEventListener("click", async () => {
+      if (!confirm("Delete this document and its metadata?")) return;
+      const fd = new FormData();
+      fd.append("doc_id", d.id);
+      await fetch("/api/doc/delete", { method: "POST", body: fd });
+      if (window.ReconSidebar) window.ReconSidebar.hide();
+      window.location.reload();
+    });
+  }
+
+  // --- Social -----------------------------------------------------------------
+  const SOCIAL_PLATFORMS = [
+    "Website", "Social Media", "Forum", "Blog", "News",
+    "Directory", "GitHub", "Paste Site", "Data Breach", "Other",
+  ];
+
+  function openSocial(m) {
+    titleEl.textContent = m.handle || m.url || m.platform || "Social entry";
+    const shot = m.artifact_id
+      ? `<div class="card" style="text-align:center;">
+           <a href="/api/artifacts/${m.artifact_id}" target="_blank">
+             <img class="hub-shot" src="/api/artifacts/${m.artifact_id}/thumb" alt="screenshot" />
+           </a>
+         </div>`
+      : "";
+    const rows = [
+      ["Platform", esc(m.platform || "—")],
+      ["Handle", m.handle ? `<code>${esc(m.handle)}</code>` : "—"],
+      ["URL", m.url ? `<a href="${esc(m.url)}" target="_blank">${esc(m.url)}</a>` : "—"],
+      ["Display name", esc(m.display_name || "—")],
+      ["Added", esc(m.added || "—")],
+    ];
+    if (m.bio) rows.push(["Bio", esc(m.bio)]);
+    bodyEl.innerHTML = `
+      <div class="card">
+        <h2>Details</h2>
+        ${rows.map((r) => `<div>${r[0]}: ${r[1]}</div>`).join("")}
+        <div style="display:flex; gap:8px; margin-top:12px; flex-wrap:wrap;">
+          <button class="btn" id="hubSocialDeleteBtn" type="button">Delete</button>
+        </div>
+      </div>
+      ${shot}
+      ${m.notes ? `<h2 style="margin:16px 0 8px;">Notes</h2><div class="card"><pre class="note">${esc(m.notes)}</pre></div>` : ""}`;
+    openSidebarShell();
+    const del = document.getElementById("hubSocialDeleteBtn");
+    if (del) del.addEventListener("click", async () => {
+      if (!window.confirm("Delete this entry?")) return;
+      const fd = new FormData();
+      fd.append("social_id", m.id);
+      await fetch("/api/social/delete", { method: "POST", body: fd });
+      window.location.reload();
+    });
+  }
+
+  // --- Social: add form (sidebar) ---------------------------------------------
+  let hubFiles = [];
+  const hubPasteHandler = (e) => {
+    if (!document.getElementById("hubSocialForm")) return;
+    const items = (e.clipboardData || e).items;
+    if (!items) return;
+    const picked = [];
+    for (const it of items) {
+      if (it.kind === "file" && it.type && it.type.startsWith("image/")) {
+        const f = it.getAsFile();
+        if (f) picked.push(f);
+      }
+    }
+    if (picked.length) hubAddFiles(picked);
+  };
+  document.addEventListener("paste", hubPasteHandler);
+
+  function hubAddFiles(files) {
+    const pr = document.getElementById("hubPreviewRow");
+    for (const file of files) {
+      if (!file.type || !file.type.startsWith("image/")) continue;
+      hubFiles.push(file);
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = document.createElement("img");
+        img.className = "hub-previmg";
+        img.src = ev.target.result;
+        const rm = document.createElement("button");
+        rm.type = "button";
+        rm.className = "btn btn-small";
+        rm.textContent = "✕";
+        rm.style.marginLeft = "4px";
+        rm.addEventListener("click", () => {
+          const i = hubFiles.indexOf(file);
+          if (i !== -1) hubFiles[i] = null;
+          img.remove();
+          rm.remove();
+        });
+        pr.appendChild(img);
+        pr.appendChild(rm);
+      };
+      reader.readAsDataURL(file);
+    }
+  }
+
+  function openSocialAdd() {
+    hubFiles = [];
+    titleEl.textContent = "Add social entry";
+    bodyEl.innerHTML = `
+      <div class="card">
+        <h2>New entry</h2>
+        <form id="hubSocialForm" enctype="multipart/form-data">
+          <label>Source</label>
+          <select name="platform">
+            ${SOCIAL_PLATFORMS.map((p) => `<option value="${p}">${p}</option>`).join("")}
+          </select>
+          <label>URL</label>
+          <input name="url" placeholder="https://..." />
+          <label>Identifier / Handle</label>
+          <input name="handle" placeholder="username, email, or identifier" />
+          <label>Screenshot (optional) — drop, browse, or paste</label>
+          <div id="hubDropZone" class="hub-dropzone" style="min-height:64px; border:2px dashed #444; border-radius:8px; padding:10px; text-align:center; cursor:pointer;">
+            <p class="muted" style="margin:0;">Click to browse, drag &amp; drop, or paste (Ctrl+V)</p>
+            <input type="file" id="hubFileInput" accept="image/*" multiple style="display:none;" />
+          </div>
+          <div id="hubPreviewRow" style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;"></div>
+          <label>Notes</label>
+          <textarea name="notes" rows="4" placeholder="Findings, content, observations..."></textarea>
+          <div style="display:flex; gap:8px; margin-top:10px;">
+            <button class="btn" type="submit">Add entry</button>
+            <button class="btn" type="button" id="hubSocialCancelBtn">Cancel</button>
+          </div>
+          <div id="hubSocialMsg" class="muted" style="margin-top:8px;"></div>
+        </form>
+      </div>`;
+    openSidebarShell();
+    const dz = document.getElementById("hubDropZone");
+    const fi = document.getElementById("hubFileInput");
+    dz.addEventListener("click", (e) => {
+      if (e.target === fi) return;
+      fi.click();
+    });
+    dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("dragover"); });
+    dz.addEventListener("dragleave", () => dz.classList.remove("dragover"));
+    dz.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dz.classList.remove("dragover");
+      hubAddFiles(Array.from(e.dataTransfer.files || []));
+    });
+    fi.addEventListener("change", () => {
+      hubAddFiles(Array.from(fi.files || []));
+      fi.value = "";
+    });
+    document.getElementById("hubSocialCancelBtn").addEventListener("click", () => {
+      if (window.ReconSidebar) window.ReconSidebar.hide();
+    });
+    document.getElementById("hubSocialForm").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const form = e.target;
+      const msg = document.getElementById("hubSocialMsg");
+      const fd = new FormData(form);
+      for (const f of hubFiles) if (f) fd.append("screenshot", f);
+      msg.textContent = "Adding…";
+      try {
+        const r = await fetch("/api/social/create", { method: "POST", body: fd });
+        if (r.ok) {
+          window.location.reload();
+          return;
+        }
+        msg.textContent = "Add failed (" + r.status + ")";
+      } catch (err) {
+        msg.textContent = "Add failed";
+      }
+    });
+  }
+
+  // --- DNS --------------------------------------------------------------------
+  function statusPill(v) {
+    const t = v || "—";
+    if (t === "SUCCESS" || t === "OK") return `<span class="pill inscope">${esc(t)}</span>`;
+    if (t === "PROHIBITED" || t === "ERROR") return `<span class="pill outscope">${esc(t)}</span>`;
+    return esc(t);
+  }
+
+  function openDns(m) {
+    titleEl.textContent = m.domain || "DNS";
+    const recs = (m.records || []).map(([ns, st]) =>
+      `<tr><td><code>${esc(ns)}</code></td><td>${statusPill(st)}</td></tr>`).join("");
+    bodyEl.innerHTML = `
+      <div class="card">
+        <h2>Zone transfer</h2>
+        <p class="muted" style="margin-top:0;">Attempts to query each nameserver of ${esc(m.domain || "this domain")} for a zone transfer (AXFR).</p>
+        <table>
+          <thead><tr><th>Nameserver</th><th>Status</th></tr></thead>
+          <tbody>${recs || '<tr><td colspan="2" class="muted">No records</td></tr>'}</tbody>
+        </table>
+              </div>`;
+    openSidebarShell();
+  }
+
+  // --- SMTP -------------------------------------------------------------------
+  function openSmtp(tr) {
+    const cells = Array.from(tr.querySelectorAll("td")).map((td) => td.textContent.trim());
+    const [host, vrfy, expn, rcpt, added] = cells;
+    titleEl.textContent = host || "SMTP";
+    bodyEl.innerHTML = `
+      <div class="card">
+        <h2>SMTP results</h2>
+        <div><b>MX host:</b> <code>${esc(host || "—")}</code></div>
+        <div><b>VRFY:</b> ${statusPill(vrfy)}</div>
+        <div><b>EXPN:</b> ${statusPill(expn)}</div>
+        <div><b>RCPT:</b> ${statusPill(rcpt)}</div>
+        <div><b>Added:</b> ${esc(added || "—")}</div>
+      </div>`;
+    openSidebarShell();
+  }
+
+  // --- Row clicks (event delegation) ------------------------------------------
+  // data-hub-meta is URL-safe base64 of a UTF-8 JSON object (attribute-safe).
+  const readMeta = (tr) => {
+    const b64 = tr.getAttribute("data-hub-meta") || "";
+    try {
+      const bin = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
+      const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+      return JSON.parse(new TextDecoder("utf-8").decode(bytes)) || {};
+    } catch (err) {
+      return {};
+    }
+  };
+  document.addEventListener("click", (e) => {
+    const tr = e.target.closest ? e.target.closest("tr.hub-click-row") : null;
+    if (!tr) return;
+    if (e.target.closest && e.target.closest("a")) return;
+    if (e.target.closest && e.target.closest("button")) return;
+    if (e.target.closest && e.target.closest("img.hub-thumb")) {
+      hubOpenGallery(e.target);
+      return;
+    }
+    const cat = tr.getAttribute("data-hub-cat");
+    if (cat === "docs") {
+      const id = Number(tr.getAttribute("data-hub-id"));
+      if (id) openDoc(id);
+    } else if (cat === "social") {
+      openSocial(readMeta(tr));
+    } else if (cat === "dns") {
+      openDns(readMeta(tr));
+    } else if (cat === "smtp") {
+      openSmtp(tr);
+    } else if (cat === "registrars") {
+      const d = tr.getAttribute("data-hub-domain");
+      if (d && window.ReconSidebar) window.ReconSidebar.openRegistrarDetail(d);
+    }
+  });
+
+  // --- Registrar row buttons (mirrors the full page) ----------------------------
+  document.querySelectorAll("[data-hub-reg-edit]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const root = btn.getAttribute("data-hub-reg-edit");
+      window.ReconSidebar && window.ReconSidebar.openRegistrarEdit(root);
+    });
+  });
+  document.querySelectorAll("[data-hub-reg-delete]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const root = btn.getAttribute("data-hub-reg-delete");
+      if (!confirm(`Remove "${root}" from the registrar list? (data is kept)`)) return;
+      const fd = new FormData();
+      fd.append("domain", root);
+      await fetch("/api/registrar/delete", { method: "POST", body: fd });
+      location.reload();
+    });
+  });
+  (async () => {
+    const topologyNodes = await (async () => {
+      try {
+        const r = await fetch("/api/topology");
+        if (!r.ok) return [];
+        const j = await r.json();
+        if (!j.ok) return [];
+        return (j.map && j.map.nodes) || [];
+      } catch { return []; }
+    })();
+
+    document.querySelectorAll("[data-hub-reg-topology]").forEach(btn => {
+      const root = btn.getAttribute("data-hub-reg-topology");
+      const alreadyInTopology = topologyNodes.some(n => n.label === root && n.type === "domain");
+
+      const setDisabled = (disabled) => {
+        btn.disabled = disabled;
+        btn.classList.toggle("btn--disabled", disabled);
+      };
+
+      if (alreadyInTopology) {
+        btn.textContent = "In Topology ✓";
+        setDisabled(true);
+        return;
+      }
+
+      setDisabled(false);
+      btn.addEventListener("click", async () => {
+        btn.disabled = true;
+        btn.textContent = "Adding...";
+        try {
+          const resp = await fetch(`/api/registrar?domain=${encodeURIComponent(root)}`);
+          const data = await resp.json();
+          const item = data.item || {};
+          const r = await fetch("/api/topology/add-domain", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              domain: root,
+              asn: item.asn || "",
+              registrar: item.registrar || "",
+              netblocks: item.netblocks || "",
+              subdomain_ips: data.subdomain_ips || "",
+            }),
+          });
+          const j = await r.json();
+          if (j.ok) {
+            btn.textContent = "In Topology ✓";
+            setDisabled(true);
+          } else {
+            alert(j.error || "Failed to add domain to topology");
+            btn.textContent = "+ Topology";
+            setDisabled(false);
+          }
+        } catch (e) {
+          alert("Error: " + e.message);
+          btn.textContent = "+ Topology";
+          setDisabled(false);
+        }
+      });
+    });
+
+    document.querySelectorAll("[data-hub-reg-copy]").forEach(btn => {
+      const root = btn.getAttribute("data-hub-reg-copy");
+      btn.addEventListener("click", async () => {
+        try {
+          const r = await fetch(`/api/registrar/copy?domain=${encodeURIComponent(root)}`);
+          const j = await r.json();
+          if (j.text) {
+            if (j.html) {
+              const htmlBlob = new Blob([j.html], { type: "text/html" });
+              const textBlob = new Blob([j.text], { type: "text/plain" });
+              const item = new ClipboardItem({
+                "text/html": htmlBlob,
+                "text/plain": textBlob
+              });
+              await navigator.clipboard.write([item]);
+            } else {
+              await navigator.clipboard.writeText(j.text);
+            }
+            btn.textContent = "Copied ✓";
+            setTimeout(() => { btn.textContent = "Copy"; }, 2000);
+          }
+        } catch (e) {
+          alert("Copy failed: " + e.message);
+        }
+      });
+    });
+  })();
+
+  // --- Add buttons (sit in their category summary; stop the details toggle) ----
+  const addSocialBtn = document.getElementById("hubAddSocialBtn");
+  if (addSocialBtn) addSocialBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openSocialAdd();
+  });
+  const addRegBtn = document.getElementById("hubAddRegistrarBtn");
+  if (addRegBtn) addRegBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (window.ReconSidebar) window.ReconSidebar.openRegistrarCreate();
+  });
+
+  // --- Social thumbnail gallery (mirrors /social) ------------------------------
+  const hubImgOverlay = document.getElementById("hubImgOverlay");
+  const hubImgFull = document.getElementById("hubImgFull");
+  let hubGalleryImages = [];
+  let hubGalleryIdx = 0;
+  function hubShowGalleryImage(idx) {
+    if (!hubGalleryImages.length) return;
+    const n = hubGalleryImages.length;
+    hubGalleryIdx = ((idx % n) + n) % n;
+    hubImgFull.src = hubGalleryImages[hubGalleryIdx];
+  }
+  function hubOpenGallery(img) {
+    hubGalleryImages = [...new Set(
+      Array.from(document.querySelectorAll(".hub-thumb"))
+        .map((t) => t.getAttribute("data-full"))
+        .filter(Boolean)
+    )];
+    hubShowGalleryImage(hubGalleryImages.indexOf(img.getAttribute("data-full")));
+    if (hubImgOverlay) hubImgOverlay.classList.remove("hidden");
+  }
+  if (hubImgOverlay) {
+    document.getElementById("hubGalleryPrev").addEventListener("click", (e) => {
+      e.stopPropagation();
+      hubShowGalleryImage(hubGalleryIdx - 1);
+    });
+    document.getElementById("hubGalleryNext").addEventListener("click", (e) => {
+      e.stopPropagation();
+      hubShowGalleryImage(hubGalleryIdx + 1);
+    });
+    document.getElementById("hubGalleryClose").addEventListener("click", (e) => {
+      e.stopPropagation();
+      hubImgOverlay.classList.add("hidden");
+    });
+    hubImgOverlay.addEventListener("click", (e) => {
+      if (e.target === hubImgOverlay) hubImgOverlay.classList.add("hidden");
+    });
+  }
+
+  // --- Show all / show less (main tables) ---------------------------------------
+  document.querySelectorAll("[data-hub-showall]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const scope = btn.closest(".hub-acc");
+      if (!scope) return;
+      const rows = scope.querySelectorAll("tr.hub-extra");
+      const shown = rows.length && rows[0].classList.contains("show");
+      rows.forEach((r) => r.classList.toggle("show", !shown));
+      btn.textContent = shown ? ("Show all " + btn.getAttribute("data-hub-total") + " ↓") : "Show less ↑";
+    });
+  });
+
+  // --- Docs subtables: field filter + show all ----------------------------------
+  function hubRefreshSubToggle(wrap) {
+    const p = wrap.querySelector("[data-hub-sub-toggle]");
+    if (!p) return;
+    const btn = p.querySelector("button");
+    const rows = wrap.querySelectorAll("tr.hub-sub-extra");
+    if (!rows.length) { p.style.display = "none"; return; }
+    p.style.display = "";
+    const shown = rows[0].classList.contains("show");
+    btn.textContent = shown ? "Show less ↑" : ("Show all " + rows.length + " ↓");
+  }
+  document.querySelectorAll("[data-hub-stbl-select]").forEach((sel) => {
+    const wrap = sel.closest("[data-hub-stbl-wrap]");
+    if (!wrap) return;
+    const apply = () => {
+      const f = sel.value || "";
+      wrap.querySelectorAll("tbody tr[data-stbl-field]").forEach((tr) => {
+        tr.style.display = f && tr.getAttribute("data-stbl-field") !== f ? "none" : "";
+      });
+      hubRefreshSubToggle(wrap);
+    };
+    sel.addEventListener("change", apply);
+    const ref = wrap.querySelector("[data-hub-stbl-refresh]");
+    if (ref) ref.addEventListener("click", () => location.reload());
+  });
+  document.querySelectorAll("[data-hub-sub-toggle] button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const wrap = btn.closest("[data-hub-stbl-wrap]");
+      if (!wrap) return;
+      const rows = wrap.querySelectorAll("tr.hub-sub-extra");
+      const shown = rows.length && rows[0].classList.contains("show");
+      rows.forEach((r) => r.classList.toggle("show", !shown));
+      hubRefreshSubToggle(wrap);
+    });
+  });
+
+  // --- Registrar hidden strip (unhide) -------------------------------------------
+  document.querySelectorAll("[data-unhide-registrar]").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const root = btn.getAttribute("data-unhide-registrar");
+      const fd = new FormData();
+      fd.append("domain", root);
+      await fetch("/api/registrar/unhide", { method: "POST", body: fd });
+      location.reload();
+    });
+  });
+})();
+</script>
+{% endblock %}

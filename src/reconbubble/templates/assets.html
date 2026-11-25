@@ -1,36 +1,29 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Assets</h1>
-
-<div class="split">
-  <div class="card">
-    <h2>Actions</h2>
-    <button class="btn" id="createAssetBtn" type="button">Create asset</button>
-    <ul class="filter-list">
-      <li>
-        <label class="toggle-switch">
-          <input id="showOut" type="checkbox" {% if show_out==1 %}checked{% endif %}/>
-          <span class="toggle-slider"></span>
-        </label>
-        <span class="filter-label">Show out-of-scope assets</span>
-      </li>
-      <li>
-        <label class="toggle-switch">
-          <input id="hideCompleted" type="checkbox" {% if hide_completed==1 %}checked{% endif %}/>
-          <span class="toggle-slider"></span>
-        </label>
-        <span class="filter-label">Hide completed assets</span>
-      </li>
-      <li>
-        <label class="toggle-switch">
-          <input id="hideZeroServices" type="checkbox" {% if hide_zero_services==1 %}checked{% endif %}/>
-          <span class="toggle-slider"></span>
-        </label>
-        <span class="filter-label">Hide assets with 0 services</span>
-      </li>
-    </ul>
-    <label class="row-limit-label">Max assets shown</label>
-    <span class="muted" style="font-size:11px;">Limit the total number of asset rows across all subnet groups.</span>
+<div class="card assets-toolbar">
+  <span class="toolbar-toggle">
+    <label class="toggle-switch">
+      <input id="showOut" type="checkbox" {% if show_out==1 %}checked{% endif %}/>
+      <span class="toggle-slider"></span>
+    </label>
+    <span class="filter-label">Show out-of-scope assets</span>
+  </span>
+  <span class="toolbar-toggle">
+    <label class="toggle-switch">
+      <input id="hideCompleted" type="checkbox" {% if hide_completed==1 %}checked{% endif %}/>
+      <span class="toggle-slider"></span>
+    </label>
+    <span class="filter-label">Hide completed assets</span>
+  </span>
+  <span class="toolbar-toggle">
+    <label class="toggle-switch">
+      <input id="hideZeroServices" type="checkbox" {% if hide_zero_services==1 %}checked{% endif %}/>
+      <span class="toggle-slider"></span>
+    </label>
+    <span class="filter-label">Hide assets with 0 services</span>
+  </span>
+  <span class="toolbar-select-group">
+    <span class="toolbar-select-title">Max assets</span>
     <select id="rowLimit" class="toolbar-select">
       <option value="50"{% if row_limit == 50 %} selected{% endif %}>50</option>
       <option value="100"{% if row_limit == 100 %} selected{% endif %}>100</option>
@@ -38,37 +31,41 @@
       <option value="500"{% if row_limit == 500 %} selected{% endif %}>500</option>
       <option value="0"{% if row_limit == 0 %} selected{% endif %}>All (paginated)</option>
     </select>
-    <label class="tag-filter-label">Host Tag Filter</label>
+  </span>
+  <span class="toolbar-select-group">
+    <span class="toolbar-select-title">Tag</span>
     <select id="tagFilter" class="toolbar-select">
       <option value="">All</option>
       {% for t in available_tags %}
       <option value="{{ t }}" {% if t == tag_filter %}selected{% endif %}>{{ t }}</option>
       {% endfor %}
     </select>
-    <p class="muted actions-summary-note">Showing <span id="shownCountValue">{{ shown_count }}</span> of <span id="totalCountValue">{{ total_count }}</span> assets.</p>
-  </div>
-  <div class="card">
-    <h2>In-Scope Assets by Subnet</h2>
-    <p class="muted">Total in-scope assets: <strong>{{ in_scope_total }}</strong></p>
-    {% if subnet_stats %}
-      <details class="subnet-stats-details"{% if subnet_stats|length <= 10 %} open{% endif %}>
-        {% if subnet_stats|length > 10 %}<summary>Subnet breakdown ({{ subnet_stats|length }} subnets)</summary>{% endif %}
-        <table>
-          <thead><tr><th>Subnet</th><th>In-Scope Assets</th></tr></thead>
-          <tbody>
-            {% for s in subnet_stats %}
-              <tr>
-                <td><code>{{ s.subnet }}</code></td>
-                <td>{{ s.count }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </details>
-    {% else %}
-      <p class="muted">No scoped subnet statistics yet.</p>
-    {% endif %}
-  </div>
+  </span>
+  <span class="muted actions-summary-note">Showing <span id="shownCountValue">{{ shown_count }}</span> of <span id="totalCountValue">{{ total_count }}</span> assets.</span>
+  <button class="btn" id="createAssetBtn" type="button">Create asset</button>
+</div>
+
+<div class="card">
+  <h2>In-Scope Assets by Subnet</h2>
+  <p class="muted">Total in-scope assets: <strong>{{ in_scope_total }}</strong></p>
+  {% if subnet_stats %}
+    <details class="subnet-stats-details"{% if subnet_stats|length <= 10 %} open{% endif %}>
+      {% if subnet_stats|length > 10 %}<summary>Subnet breakdown ({{ subnet_stats|length }} subnets)</summary>{% endif %}
+      <table>
+        <thead><tr><th>Subnet</th><th>In-Scope Assets</th></tr></thead>
+        <tbody>
+          {% for s in subnet_stats %}
+            <tr>
+              <td><code>{{ s.subnet }}</code></td>
+              <td>{{ s.count }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </details>
+  {% else %}
+    <p class="muted">No scoped subnet statistics yet.</p>
+  {% endif %}
 </div>
 
 <div class="card" style="margin-top:16px; display:flex; align-items:center; gap:12px; flex-wrap:wrap;">
@@ -248,12 +245,10 @@ tr.row-inprogress:hover td { background: rgba(255, 153, 0, 0.1); }
 #assetServicesList table tr.service-inspected td { background: rgba(34, 197, 94, 0.12); }
 #assetServicesList table tr.service-inspected:hover td { background: rgba(34, 197, 94, 0.18); }
 html { scrollbar-gutter: stable; }
-.filter-list {
-  margin: 10px 0 0;
-  padding-left: 18px;
-  list-style: none;
-}
-.filter-list li { display:flex; align-items:center; gap:10px; margin:8px 0; }
+.assets-toolbar { display:flex; align-items:center; gap:18px; flex-wrap:wrap; }
+.toolbar-toggle { display:inline-flex; align-items:center; gap:10px; }
+.toolbar-select-group { display:inline-flex; align-items:center; gap:8px; }
+.toolbar-select-title { font-size:12px; color:#aab; }
 .filter-label { font-size:14px; color:#aab; }
 .toggle-switch { position:relative; display:inline-block; width:40px; height:22px; flex-shrink:0; }
 .toggle-switch input { opacity:0; width:0; height:0; position:absolute; }
@@ -262,11 +257,7 @@ html { scrollbar-gutter: stable; }
 .toggle-switch input:checked + .toggle-slider { background:#58a6ff; }
 .toggle-switch input:checked + .toggle-slider::before { transform:translateX(18px); }
 .toggle-switch input:focus-visible + .toggle-slider { box-shadow:0 0 0 2px #58a6ff44; }
-.row-limit-label { display: inline-block; margin-top: 26px; }
-#rowLimit { margin-top: 8px; }
-.actions-summary-note { margin-top: 24px; }
-.tag-filter-label { display: inline-block; margin-top: 16px; }
-#tagFilter { margin-top: 8px; }
+.actions-summary-note { margin-left: auto; }
 </style>
 
 <script>
@@ -386,6 +377,15 @@ html { scrollbar-gutter: stable; }
     }
 
     closeDetailBtn && closeDetailBtn.addEventListener("click", hideAssetDetail);
+
+    // Click-off: close the side panel when clicking anywhere outside of it.
+    // Row clicks are excluded because they swap the panel's contents instead.
+    document.addEventListener("click", (ev) => {
+      if (!assetDetail.classList.contains("active")) return;
+      if (assetDetail.contains(ev.target)) return;
+      if (ev.target.closest(".asset-row")) return;
+      hideAssetDetail();
+    });
 
     function populateAssetForm(data) {
       const h = data.host;
@@ -620,7 +620,8 @@ html { scrollbar-gutter: stable; }
     });
 
     const btn = document.getElementById("createAssetBtn");
-    btn && btn.addEventListener("click", () => {
+    btn && btn.addEventListener("click", (ev) => {
+      ev.stopPropagation(); // don't let the click-off handler close it immediately
       clearAssetForm();
       showAssetDetail();
     });

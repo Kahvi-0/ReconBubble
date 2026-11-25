@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block content %}
+<div id="demoPage">
+  <style>
+    #demoPage {
+      --dm-bg: #0a0e17;
+      --dm-card: #111827;
+      --dm-card2: #0d1420;
+      --dm-border: #1e2d3d;
+      --dm-border-hi: #2c4257;
+      --dm-text: #e2e8f0;
+      --dm-dim: #64748b;
+      --dm-bright: #f8fafc;
+      --dm-red: #ef4444;
+      --dm-cyan: #06b6d4;
+      --dm-blue: #3b82f6;
+      --dm-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+      background: var(--dm-bg);
+      border: 1px solid var(--dm-border);
+      border-radius: 12px;
+      padding: 22px 24px 30px;
+      margin-bottom: 28px;
+      color: var(--dm-text);
+    }
+    #demoPage h1, #demoPage p, #demoPage h3 { margin: 0; }
+    #demoPage .demo-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+    #demoPage .demo-title { font-size: 20px; font-weight: 700; color: var(--dm-bright); letter-spacing: .01em; display: flex; align-items: center; gap: 10px; }
+    #demoPage .demo-tag { font-family: var(--dm-mono); font-size: 10px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--dm-cyan); border: 1px solid var(--dm-cyan); border-radius: 4px; padding: 2px 7px; opacity: .9; }
+    #demoPage .demo-sub { margin-top: 6px; font-size: 12px; color: var(--dm-dim); }
+    #demoPage .demo-toggle { display: flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; font-size: 12px; color: #94a3b8; padding-top: 4px; }
+    #demoPage .demo-toggle input { display: none; }
+    #demoPage .demo-switch { width: 34px; height: 20px; border-radius: 999px; background: #1e2d3d; position: relative; transition: background .15s ease; flex: none; }
+    #demoPage .demo-switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #64748b; transition: left .15s ease, background .15s ease; }
+    #demoPage .demo-toggle input:checked + .demo-switch { background: rgba(239, 68, 68, .35); }
+    #demoPage .demo-toggle input:checked + .demo-switch::after { left: 16px; background: var(--dm-red); }
+    #demoPage .demo-section { margin-top: 30px; }
+    #demoPage .demo-section-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; border-bottom: 1px solid var(--dm-border); padding-bottom: 10px; margin-bottom: 14px; }
+    #demoPage .demo-section-mark { font-family: var(--dm-mono); font-size: 13px; font-weight: 700; letter-spacing: .12em; }
+    #demoPage .demo-mark-unauth { color: var(--dm-red); }
+    #demoPage .demo-mark-auth { color: var(--dm-cyan); }
+    #demoPage .demo-section-sub { font-size: 11px; color: var(--dm-dim); }
+    #demoPage .demo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+    #demoPage .demo-bubble { position: relative; background: var(--dm-card); border: 1px solid var(--dm-border); border-radius: 8px; padding: 11px 12px 10px; cursor: pointer; transition: border-color .12s ease, background .12s ease, box-shadow .12s ease; }
+    #demoPage .demo-bubble:hover { border-color: var(--dm-border-hi); background: #141d2c; }
+    #demoPage .demo-bubble.st-vuln { border-color: rgba(239, 68, 68, .75); box-shadow: 0 0 0 1px rgba(239, 68, 68, .25), 0 0 16px rgba(239, 68, 68, .14); }
+    #demoPage .demo-bubble.st-vuln:hover { border-color: var(--dm-red); }
+    #demoPage .demo-bubble.st-notvuln { opacity: .5; }
+    #demoPage .demo-bubble.st-notvuln:hover { opacity: .75; }
+    #demoPage .demo-bubble-top { display: flex; align-items: flex-start; gap: 8px; }
+    #demoPage .demo-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; margin-top: 3px; }
+    #demoPage .demo-dot-unchecked { background: var(--dm-blue); }
+    #demoPage .demo-dot-vuln { background: var(--dm-red); box-shadow: 0 0 8px rgba(239, 68, 68, .8); }
+    #demoPage .demo-dot-notvuln { background: #475569; }
+    #demoPage .demo-bubble-title { font-size: 12.5px; font-weight: 600; color: var(--dm-bright); line-height: 1.3; flex: 1; }
+    #demoPage .demo-bubble-sub { margin-top: 6px; font-size: 10.5px; color: var(--dm-dim); line-height: 1.5; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+    #demoPage .demo-pwned { display: inline-flex; align-items: center; background: var(--dm-red); color: #fff; font-family: var(--dm-mono); font-size: 9px; font-weight: 700; letter-spacing: .1em; padding: 2px 7px; border-radius: 4px; box-shadow: 0 0 10px rgba(239, 68, 68, .5); flex: none; }
+    #demoPage .demo-pwned-sm { font-size: 8.5px; padding: 1.5px 6px; }
+    #demoPage .demo-empty { font-size: 12px; color: var(--dm-dim); padding: 10px 2px; font-style: italic; grid-column: 1 / -1; }
+    #demoPage .demo-details { margin-top: 12px; display: flex; flex-direction: column; gap: 12px; }
+    #demoPage .demo-detail { background: var(--dm-card); border: 1px solid var(--dm-border); border-left: 3px solid var(--dm-blue); border-radius: 8px; padding: 14px 16px 16px; }
+    #demoPage .demo-detail-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    #demoPage .demo-detail-tag { font-family: var(--dm-mono); font-size: 9.5px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--dm-dim); }
+    #demoPage .demo-detail-title { font-size: 14px; font-weight: 700; color: var(--dm-bright); }
+    #demoPage .demo-detail-desc { margin-top: 8px; font-size: 12px; color: #9fb0c7; line-height: 1.55; }
+    #demoPage .demo-vuln-btns { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+    #demoPage .dvbtn { background: #16202f; border: 1px solid var(--dm-border); color: #94a3b8; border-radius: 6px; padding: 5px 11px; font-size: 11px; font-weight: 600; cursor: pointer; transition: border-color .12s ease, color .12s ease, background .12s ease; }
+    #demoPage .dvbtn:hover { border-color: var(--dm-border-hi); color: var(--dm-text); }
+    #demoPage .dvbtn.active-unchecked { background: rgba(59, 130, 246, .15); border-color: rgba(59, 130, 246, .6); color: #93c5fd; }
+    #demoPage .dvbtn.active-vuln { background: rgba(239, 68, 68, .15); border-color: rgba(239, 68, 68, .65); color: #fca5a5; }
+    #demoPage .dvbtn.active-notvuln { background: rgba(100, 116, 139, .18); border-color: rgba(100, 116, 139, .5); color: #94a3b8; }
+    #demoPage .demo-opts { margin-top: 12px; display: flex; flex-direction: column; gap: 5px; }
+    #demoPage .demo-opts label { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dm-text); cursor: pointer; }
+    #demoPage .demo-opts input[type="checkbox"] { accent-color: var(--dm-blue); width: 13px; height: 13px; flex: none; }
+    #demoPage .demo-branch-tree { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+    #demoPage .demo-branch { margin-left: 6px; border-left: 2px solid var(--dm-border); padding-left: 12px; position: relative; }
+    #demoPage .demo-branch::before { content: ""; position: absolute; left: -2px; top: 18px; width: 10px; height: 2px; background: var(--dm-border); }
+    #demoPage .demo-branch-card { background: var(--dm-card2); border: 1px solid var(--dm-border); border-radius: 7px; padding: 10px 12px; position: relative; }
+    #demoPage .demo-branch-head { display: flex; align-items: center; gap: 8px; }
+    #demoPage .demo-branch-title { font-size: 12px; font-weight: 700; color: var(--dm-bright); flex: 1; }
+    #demoPage .demo-branch-text { margin-top: 5px; font-size: 11px; color: var(--dm-dim); line-height: 1.5; }
+    #demoPage .demo-note { width: 100%; margin-top: 9px; background: var(--dm-bg); border: 1px solid var(--dm-border); color: var(--dm-text); border-radius: 6px; padding: 7px 9px; font-size: 11.5px; line-height: 1.5; font-family: inherit; box-sizing: border-box; }
+    #demoPage .demo-note:focus { outline: none; border-color: var(--dm-border-hi); }
+    #demoPage .demo-exploit-row { display: flex; align-items: center; gap: 8px; margin-top: 9px; font-family: var(--dm-mono); font-size: 10.5px; font-weight: 700; letter-spacing: .06em; color: #fca5a5; cursor: pointer; user-select: none; }
+    #demoPage .demo-exploit-row input[type="checkbox"] { accent-color: var(--dm-red); width: 13px; height: 13px; flex: none; }
+    #demoPage .demo-note-row { display: flex; align-items: center; gap: 8px; margin-top: 9px; font-size: 11.5px; color: var(--dm-text); cursor: pointer; user-select: none; }
+    #demoPage .demo-note-row input[type="checkbox"] { accent-color: var(--dm-cyan); width: 13px; height: 13px; flex: none; }
+    #demoPage .demo-child-opts { margin-top: 10px; padding-top: 9px; border-top: 1px dashed var(--dm-border); display: flex; flex-direction: column; gap: 5px; }
+    #demoPage .demo-child-opts label { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: #9fb0c7; cursor: pointer; }
+    #demoPage .demo-child-opts input[type="checkbox"] { accent-color: var(--dm-blue); width: 12px; height: 12px; flex: none; }
+    #demoPage .demo-add-btn { margin-top: 10px; }
+    #demoPage .demo-legend { margin-top: 26px; display: flex; align-items: center; gap: 18px; flex-wrap: wrap; padding-top: 14px; border-top: 1px solid var(--dm-border); font-size: 11px; color: var(--dm-dim); }
+    #demoPage .demo-legend-item { display: flex; align-items: center; gap: 7px; }
+    #demoPage .demo-howto { margin-top: 10px; background: var(--dm-bg); border: 1px solid var(--dm-border); border-radius: 6px; padding: 9px 11px; }
+    #demoPage .demo-howto-label { font-family: var(--dm-mono); font-size: 9px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: var(--dm-cyan); }
+    #demoPage .demo-howto-note { margin-top: 6px; font-size: 11px; color: #9fb0c7; line-height: 1.55; }
+    #demoPage .demo-commands { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; }
+    #demoPage .demo-command { font-family: var(--dm-mono); font-size: 10.5px; color: #d7e3f4; background: #0b1220; border: 1px solid #1a2637; border-radius: 4px; padding: 5px 8px; white-space: pre-wrap; word-break: break-word; }
+    #demoPage .demo-sources { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 10.5px; }
+    #demoPage .demo-source { color: #7dd3fc; font-family: var(--dm-mono); }
+    #demoPage .demo-source-sep { color: var(--dm-dim); }
+  </style>
+
+  <div class="demo-head">
+    <div>
+      <h1 class="demo-title">Internal Checklist <span class="demo-tag">demo</span></h1>
+      <p class="demo-sub">Revamped internal unauth / auth checklist &mdash; same bubbles, one page. Click a bubble to open it.</p>
+    </div>
+    <label class="demo-toggle" title="Show only bubbles marked vulnerable (and their revealed branches)">
+      <input type="checkbox" id="demoVulnOnly"/>
+      <span class="demo-switch"></span>
+      <span>Vulnerable / exploitable only</span>
+    </label>
+  </div>
+
+  <div class="demo-section" id="demoSecUnauth">
+    <div class="demo-section-head">
+      <span class="demo-section-mark demo-mark-unauth">// UNAUTHENTICATED</span>
+      <span class="demo-section-sub">no creds required &mdash; external entry into the domain</span>
+    </div>
+    <div id="demoUnauthGrid" class="demo-grid"></div>
+    <div id="demoUnauthDetails" class="demo-details"></div>
+  </div>
+
+  <div class="demo-section" id="demoSecAuth">
+    <div class="demo-section-head">
+      <span class="demo-section-mark demo-mark-auth">// AUTHENTICATED</span>
+      <span class="demo-section-sub">with valid creds &mdash; escalation &amp; lateral paths</span>
+    </div>
+    <div id="demoAuthGrid" class="demo-grid"></div>
+    <div id="demoAuthDetails" class="demo-details"></div>
+  </div>
+
+  <div class="demo-legend">
+    <span class="demo-legend-item"><span class="demo-dot demo-dot-unchecked"></span> unchecked</span>
+    <span class="demo-legend-item"><span class="demo-dot demo-dot-vuln"></span> vulnerable</span>
+    <span class="demo-legend-item"><span class="demo-dot demo-dot-notvuln"></span> not vulnerable</span>
+    <span class="demo-legend-item"><span class="demo-pwned demo-pwned-sm">PWNED</span> exploited / success</span>
+  </div>
+</div>
+
+<script>
+  window.DEMO_MAPS = {
+    unauth: {{ unauth_map | tojson }},
+    auth: {{ auth_map | tojson }}
+  };
+</script>
+<script src="/static/checklist_demo.js?v=2"></script>
+{% endblock %}

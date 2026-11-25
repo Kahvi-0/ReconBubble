@@ -556,6 +556,28 @@ document.addEventListener("keydown", (e) => {
   syncSvcDrawerBodyClass();
 });
 
+/* --- Close the topmost drawer on click-off (click anywhere outside it) --- */
+document.addEventListener("click", (e) => {
+  const hostPopup = document.getElementById("hostPopup");
+  const servicePopup = document.getElementById("servicePopup");
+  if (hostPopup.classList.contains("open")) {
+    if (hostPopup.contains(e.target)) return;
+    // No row exclusion here: a row click reopens the service drawer via
+    // its own handler, so the host drawer must close for that to show.
+    hostPopup.classList.remove("open");
+    currentServicePopupService = null;
+  } else if (servicePopup.classList.contains("open")) {
+    if (servicePopup.contains(e.target)) return;
+    // Row clicks synchronously open/replace the service drawer — skip.
+    if (e.target.closest(".service-row")) return;
+    servicePopup.classList.remove("open");
+  } else {
+    return;
+  }
+  syncBodyScrollLock();
+  syncSvcDrawerBodyClass();
+});
+
 /* --- Hide completed hosts toggle --- */
 (function() {
   const cb = document.getElementById("hideCompleted");

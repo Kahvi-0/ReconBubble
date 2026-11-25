@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>OSINT Tools</h1>
+<p class="muted">
+  Run OSINT tools that feed straight into ReconBubble. Each card starts a queued
+  run; results are ingested automatically into the matching pages. Tool install
+  status and instructions are also on the <a href="/tools">Tools page</a>.
+</p>
+
+<div id="toolProgress" class="hidden">
+  <div class="progress-bar-container">
+    <div id="toolProgressBar" class="progress-bar-fill" style="width:0%"></div>
+  </div>
+  <p id="toolProgressText" class="muted">Starting...</p>
+</div>
+
+<div id="toolResult" class="card hidden" style="margin-bottom:20px;"></div>
+
+<div class="card" id="prowlerCard" style="margin-bottom:20px;">
+  <h2>Prowler</h2>
+  <p class="muted">
+    Full multi-phase OSINT run: subdomain enumeration (phase 1), zone transfers
+    (2), SMTP user enumeration (3), web app detection (4), cloud keywords (5)
+    and browser-based document discovery (6). Discovered subdomains, web app
+    URLs, SMTP users, zone-transfer results and downloaded documents are
+    ingested into the <a href="/subdomains">Web Apps</a>,
+    <a href="/users">Users</a> and the <a href="/osint/hub">OSINT hub</a>
+    pages. Runs headless — it takes a while.
+  </p>
+  <div id="prowlerInstall" class="hidden" style="color:#b58900; margin-bottom:10px;"></div>
+  <div id="prowlerForm">
+    <label for="prowlerTarget" class="muted" style="font-size:11px; display:block; margin-bottom:4px;">Target domain (single domain)</label>
+    <input type="text" id="prowlerTarget" spellcheck="false" autocomplete="off" placeholder="example.com" style="width:100%; box-sizing:border-box; font-family:monospace; font-size:12px;" />
+    <label class="muted" for="prowlerWordlist" style="font-size:11px; display:block; margin:10px 0 4px;">Wordlist &mdash; local file path or HTTP(S) URL (URL lists are downloaded automatically). Leave blank to use the built-in list.</label>
+    <input type="text" id="prowlerWordlist" spellcheck="false" autocomplete="off" placeholder="(optional)" style="width:100%; box-sizing:border-box; font-family:monospace; font-size:12px;" />
+    <label class="checkbox-label" style="margin-top:10px;">
+      <input type="checkbox" id="prowlerNoBruteforce" />
+      Skip bruteforce (--no-bruteforce)
+    </label>
+    <div style="margin-top:10px;">
+      <span class="muted" style="font-size:11px; display:block; margin-bottom:4px;">Skip phases</span>
+      <label class="checkbox-label" style="display:inline-block; margin-right:12px;"><input type="checkbox" class="prowlerSkip" value="2" /> Phase 2 &mdash; zone transfers</label>
+      <label class="checkbox-label" style="display:inline-block; margin-right:12px;"><input type="checkbox" class="prowlerSkip" value="3" /> Phase 3 &mdash; SMTP</label>
+      <label class="checkbox-label" style="display:inline-block; margin-right:12px;"><input type="checkbox" class="prowlerSkip" value="4" /> Phase 4 &mdash; web apps</label>
+      <label class="checkbox-label" style="display:inline-block;"><input type="checkbox" class="prowlerSkip" value="5" /> Phase 5 &mdash; cloud keywords</label>
+    </div>
+    <div style="display:flex; gap:16px; flex-wrap:wrap; margin-top:10px; align-items:flex-end;">
+      <div>
+        <label for="prowlerMaxDownloads" class="muted" style="font-size:11px; display:block; margin-bottom:4px;">Max downloads</label>
+        <input type="number" id="prowlerMaxDownloads" min="1" max="500" value="100" style="width:90px; box-sizing:border-box;" />
+      </div>
+      <div>
+        <label for="prowlerMaxPages" class="muted" style="font-size:11px; display:block; margin-bottom:4px;">Max pages</label>
+        <input type="number" id="prowlerMaxPages" min="1" max="50" value="2" style="width:90px; box-sizing:border-box;" />
+      </div>
+      <div>
+        <label for="prowlerDelay" class="muted" style="font-size:11px; display:block; margin-bottom:4px;">Delay (seconds)</label>
+        <input type="number" id="prowlerDelay" min="0" max="3600" value="10" style="width:90px; box-sizing:border-box;" />
+      </div>
+      <button class="btn" id="btnProwlerGo">Run Prowler</button>
+    </div>
+    <p id="prowlerError" style="color:#ff6666; margin-top:8px; display:none;"></p>
+  </div>
+</div>
+
+<script>
+  // Handle bfcache: reload when page restored from browser back/forward cache
+  window.addEventListener("pageshow", (ev) => {
+    if (ev.persisted) window.location.reload();
+  });
+</script>
+<script>
+  const prowlerTarget = document.getElementById("prowlerTarget");
+  const prowlerWordlist = document.getElementById("prowlerWordlist");
+  const prowlerNoBruteforce = document.getElementById("prowlerNoBruteforce");
+  const prowlerSkips = Array.from(document.querySelectorAll(".prowlerSkip"));
+  const prowlerMaxDownloads = document.getElementById("prowlerMaxDownloads");
+  const prowlerMaxPages = document.getElementById("prowlerMaxPages");
+  const prowlerDelay = document.getElementById("prowlerDelay");
+  const btnProwlerGo = document.getElementById("btnProwlerGo");
+  const prowlerError = document.getElementById("prowlerError");
+  const prowlerInstall = document.getElementById("prowlerInstall");
+  const toolProgress = document.getElementById("toolProgress");
+  const toolProgressBar = document.getElementById("toolProgressBar");
+  const toolProgressText = document.getElementById("toolProgressText");
+  const toolResult = document.getElementById("toolResult");
+
+  let prowlerAvailable = false;
+  let toolPollTimer = null;
+  let toolPollInFlight = false;
+  let toolRestoreInFlight = false;
+
+  const escapeHtml = (s) =>
+    String(s ?? "").replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
+    );
+
+  const installHint = (spec) => {
+    const first = Object.values(spec.install_commands || {})[0] || "see the /tools page";
+    return `Not installed. Install with: ${escapeHtml(first)}`;
+  };
+
+  const setProwlerAvailability = (spec) => {
+    prowlerAvailable = !!spec.available;
+    if (prowlerAvailable) {
+      prowlerInstall.classList.add("hidden");
+      prowlerInstall.textContent = "";
+    } else {
+      prowlerInstall.innerHTML = installHint(spec);
+      prowlerInstall.classList.remove("hidden");
+    }
+    setProwlerBusy("idle");
+  };
+
+  const setProwlerBusy = (state) => {
+    if (state === "running" || state === "queued") {
+      btnProwlerGo.disabled = !prowlerAvailable;
+      btnProwlerGo.textContent = `⏳ Prowler ${state}…`;
+      btnProwlerGo.title =
+        state === "running"
+          ? "In progress — you can still queue more runs."
+          : "Waiting in the run queue.";
+    } else {
+      btnProwlerGo.textContent = "Run Prowler";
+      btnProwlerGo.title = "";
+      btnProwlerGo.disabled = !prowlerAvailable;
+    }
+  };
+
+  const showResult = (job) => {
+    let html = `<b>Done</b> — ${job.added} new item(s) ingested, ${job.skipped} already known (of ${job.found} found).`;
+    html += `<p class="muted">Results are in the <a href="/subdomains">Web Apps</a>, <a href="/users">Users</a> and the <a href="/osint/hub">OSINT hub</a> pages.</p>`;
+    if (job.artifact_id) {
+      html += `<p class="muted"><a href="/api/artifacts/${job.artifact_id}" target="_blank" rel="noopener">View results.json</a></p>`;
+    }
+    toolResult.innerHTML = html;
+    toolResult.classList.remove("hidden");
+  };
+
+  const updateProgressFromJob = (job, queuedCount = 0) => {
+    if (!toolProgress) return;
+    toolProgress.classList.remove("hidden");
+    const keySuffix =
+      job.keys_applied && job.keys_applied.length
+        ? ` · keys: ${job.keys_applied.join(", ")}`
+        : "";
+    if (job.status === "running" || job.status === "pending") {
+      toolProgressBar.style.width = "45%";
+      let text =
+        job.status === "pending"
+          ? `Queued: ${job.tool} for ${job.target} — waiting for the current run to finish`
+          : job.current_label || `Running ${job.tool}...`;
+      if (queuedCount > 0) text += ` · ${queuedCount} queued`;
+      toolProgressText.textContent = text + keySuffix;
+      toolResult.classList.add("hidden");
+    } else if (job.status === "completed") {
+      toolProgressBar.style.width = "100%";
+      toolProgressText.textContent = (job.current_label || "Done.") + keySuffix;
+      if (job.tool === "prowler") showResult(job);
+      setTimeout(() => toolProgress.classList.add("hidden"), 15000);
+    } else if (job.status === "failed") {
+      toolProgressBar.style.width = "100%";
+      toolProgressText.textContent = `Error: ${job.error || "tool failed"}`;
+      toolResult.innerHTML = `<b>Run failed</b><p class="muted">${escapeHtml(job.error || "unknown error")}</p>`;
+      toolResult.classList.remove("hidden");
+    }
+    if (job.tool === "prowler") {
+      setProwlerBusy(job.status === "running" ? "running" : job.status === "pending" ? "queued" : "idle");
+    }
+  };
+
+  const stopPolling = () => {
+    if (toolPollTimer) {
+      clearTimeout(toolPollTimer);
+      toolPollTimer = null;
+    }
+  };
+
+  const pollQueue = async () => {
+    if (toolPollInFlight) return;
+    toolPollInFlight = true;
+    try {
+      const resp = await fetch("/api/tools/jobs/active", { cache: "no-store" });
+      const data = await resp.json();
+      if (!data.ok) throw new Error("Tool queue not found");
+      if (data.active_job) {
+        updateProgressFromJob(data.active_job, data.queued_count || 0);
+        stopPolling();
+        toolPollTimer = setTimeout(() => pollQueue(), 1500);
+        return;
+      }
+      stopPolling();
+      if (data.last_job) {
+        updateProgressFromJob(data.last_job);
+      }
+    } catch (e) {
+      stopPolling();
+      toolProgressText.textContent = `Error: ${e.message}`;
+    } finally {
+      toolPollInFlight = false;
+    }
+  };
+
+  const startJobPolling = (job) => {
+    if (!job || !job.id) return;
+    stopPolling();
+    updateProgressFromJob(job, job.queued_count || 0);
+    toolPollTimer = setTimeout(() => pollQueue(), 1500);
+  };
+
+  const restore = async () => {
+    if (toolRestoreInFlight) return;
+    toolRestoreInFlight = true;
+    try {
+      const resp = await fetch("/api/tools/jobs/active", { cache: "no-store" });
+      const data = await resp.json();
+      if (!data.ok) return;
+      if (data.active_job) {
+        updateProgressFromJob(data.active_job, data.queued_count || 0);
+        toolPollTimer = setTimeout(() => pollQueue(), 1500);
+      } else if (data.last_job && data.last_job.tool === "prowler") {
+        updateProgressFromJob(data.last_job);
+      }
+    } catch {
+      // best-effort
+    } finally {
+      toolRestoreInFlight = false;
+    }
+  };
+
+  btnProwlerGo.addEventListener("click", async () => {
+    const target = prowlerTarget.value.trim();
+    if (!target) {
+      prowlerError.textContent = "Enter a target domain.";
+      prowlerError.style.display = "";
+      return;
+    }
+    prowlerError.style.display = "none";
+    btnProwlerGo.disabled = true;
+    const body = { tool: "prowler", target };
+    const wl = prowlerWordlist.value.trim();
+    if (wl) body.wordlist = wl;
+    body.options = {
+      no_bruteforce: prowlerNoBruteforce.checked,
+      skip_phases: prowlerSkips.filter((c) => c.checked).map((c) => c.value),
+      max_downloads: parseInt(prowlerMaxDownloads.value || "100", 10),
+      max_pages: parseInt(prowlerMaxPages.value || "2", 10),
+      delay: parseFloat(prowlerDelay.value || "10"),
+    };
+    try {
+      const resp = await fetch("/api/tools/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await resp.json();
+      if (!data.ok || !data.job) throw new Error(data.error || "Could not start Prowler");
+      startJobPolling(data.job);
+    } catch (e) {
+      prowlerError.textContent = e.message;
+      prowlerError.style.display = "";
+      setProwlerBusy("idle");
+    }
+  });
+
+  const loadTools = async () => {
+    try {
+      const resp = await fetch("/api/tools", { cache: "no-store" });
+      const data = await resp.json();
+      if (!data.ok) return;
+      const spec = (data.tools || []).find((t) => t.name === "prowler");
+      if (spec) setProwlerAvailability(spec);
+    } catch {
+      // best-effort
+    }
+  };
+
+  loadTools();
+  restore();
+</script>
+{% endblock %}

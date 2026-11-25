@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>TLS Certificates</h1>
+
+<div class="card">
+  <h2>Certificates by Fingerprint</h2>
+  {% if grouped %}
+  <p class="muted">
+    {{ total }} endpoint(s) serving {{ grouped|length }} distinct certificate(s).
+    Re-probe hosts from the <a href="/subdomains-discovery">Subdomains</a> page
+    (TLS Certificates card) to refresh validity data.
+  </p>
+  {% for sha, records in grouped.items() %}
+  <details open style="margin:12px 0;">
+    <summary>
+      <strong>{% if records[0].subject_cn %}{{ records[0].subject_cn }}{% else %}(no common name){% endif %}</strong>
+      <code style="font-size:11px;">{{ sha[:16] }}&hellip;</code>
+      <span class="muted">({{ records|length }} endpoint{{ 's' if records|length > 1 }})</span>
+    </summary>
+    <table style="margin-top:8px;">
+      <thead>
+        <tr><th>Host:Port</th><th>Issuer</th><th>Valid From</th><th>Valid Until</th><th>Serial</th><th>SANs</th></tr>
+      </thead>
+      <tbody>
+        {% for r in records %}
+        <tr>
+          <td><code>{{ r.host }}:{{ r.port }}</code></td>
+          <td>{{ r.issuer }}</td>
+          <td><code>{{ r.not_before }}</code></td>
+          <td><span class="cert-until" data-date="{{ r.not_after }}"><code>{{ r.not_after }}</code></span></td>
+          <td><code>{{ r.serial }}</code></td>
+          <td class="muted" style="font-size:11px;">{{ r.sans }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endfor %}
+  {% else %}
+  <p class="muted">No TLS certificate data yet. Run the TLS Certificates probe from the <a href="/subdomains-discovery">Subdomains</a> page to populate this page.</p>
+  {% endif %}
+</div>
+
+<script>
+  // Expiry highlighting: red for expired, amber for expiring within 30 days.
+  // Dates are stored as "YYYY-MM-DD HH:MM:SS" (UTC).
+  const now = Date.now();
+  const WARN_MS = 30 * 24 * 3600 * 1000;
+  for (const el of document.querySelectorAll(".cert-until")) {
+    const raw = (el.dataset.date || "").replace(" ", "T");
+    const t = Date.parse(raw);
+    if (isNaN(t)) continue;
+    if (t < now) {
+      el.style.color = "#ff8080";
+      el.style.fontWeight = "700";
+      el.appendChild(document.createTextNode("  (EXPIRED)"));
+    } else if (t - now < WARN_MS) {
+      const days = Math.max(1, Math.round((t - now) / 86400000));
+      el.style.color = "#ffb74d";
+      el.style.fontWeight = "700";
+      el.appendChild(document.createTextNode(`  (${days}d left)`));
+    }
+  }
+</script>
+{% endblock %}

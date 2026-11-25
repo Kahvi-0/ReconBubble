@@ -62,11 +62,9 @@
         <div class="nav-dropdown" id="osintDropdown">
            <a href="#" class="nav-dropbtn">OSINT ▾</a>
            <div class="nav-dropdown-content">
-              <a href="/social" {{ 'class=current' if request.url.path == '/social' }}>Social Media</a>
-              <a href="/docs" {{ 'class=current' if request.url.path == '/docs' }}>Documents & Exif</a>
-             <a href="/dns" {{ 'class=current' if request.url.path == '/dns' }}>DNS</a>
-              <a href="/smtp" {{ 'class=current' if request.url.path == '/smtp' }}>SMTP</a>
-              <a href="/osint/registrars" {{ 'class=current' if request.url.path == '/osint/registrars' }}>Registrars</a>
+              <a href="/osint/hub" {{ 'class=current' if request.url.path == '/osint/hub' }}>OSINT Hub</a>
+
+              <a href="/osint/tools" {{ 'class=current' if request.url.path == '/osint/tools' }}>Tools</a>
             </div>
           </div>
            <div class="nav-dropdown" id="perimeterDropdown">
@@ -74,6 +72,7 @@
               <div class="nav-dropdown-content">
                 <a href="/subdomains-discovery" {{ 'class=current' if request.url.path == '/subdomains-discovery' }}>Subdomains</a>
                 <a href="/cloud" {{ 'class=current' if request.url.path == '/cloud' }}>Cloud</a>
+                <a href="/tls-certs" {{ 'class=current' if request.url.path == '/tls-certs' }}>TLS Certificates</a>
               </div>
             </div>
            <a href="/subdomains" class="nav-opt-2{% if request.url.path in ('/subdomains', '/urls') %} current{% endif %}">Web Apps</a>
@@ -82,6 +81,7 @@
           <div class="nav-dropdown-content">
             <a href="/checklist-unauthenticated" {{ 'class=current' if request.url.path == '/checklist-unauthenticated' }}>Domain Unauth Checklist</a>
             <a href="/checklist" {{ 'class=current' if request.url.path == '/checklist' }}>Domain Auth Checklist</a>
+            <a href="/checklist-demo" {{ 'class=current' if request.url.path == '/checklist-demo' }}>Checklist (Demo)</a>
             <a href="/checklist-attack-path" {{ 'class=current' if request.url.path == '/checklist-attack-path' }}>Attack Path</a>
             <a href="/smb-shares" {{ 'class=current' if request.url.path == '/smb-shares' }}>SMB Shares</a>
           </div>
@@ -166,7 +166,7 @@
   </aside>
 
   {% block scripts %}{% endblock %}
-  <script src="/static/sidebar.js?v=12"></script>
+  <script src="/static/sidebar.js?v=17"></script>
   <script src="/static/tablesort.js?v=1"></script>
   <script src="/static/jobs_indicator.js?v=2"></script>
   <script src="/static/global_notes_panel.js?v=33"></script>

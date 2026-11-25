@@ -1,21 +1,24 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Web Apps</h1>
+<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+  <h1>Web Apps</h1>
+  <a class="btn" href="/subdomains/export" style="padding:5px 10px;font-size:12px;">Export in-scope</a>
+</div>
 
 <div class="card" style="margin-bottom:20px;">
-  <h2>Filters</h2>
-  <label class="checkbox-label">
+  <label class="toggle-switch" style="margin:0;">
     <input type="checkbox" id="showOut" {% if show_out==1 %}checked{% endif %}/>
-    Show out-of-scope subdomains
+    <span class="toggle-slider"></span>
   </label>
-  <p class="muted">Default hides out-of-scope.</p>
-  <a class="btn" href="/subdomains/export">Export in-scope</a>
-  <button class="btn" id="btnCaptureScreenshots" style="margin-left:8px;">📸 Capture Screenshots</button>
-  <label class="checkbox-label" style="margin-left:12px;">
-    <input id="screenshotDelaySec" type="number" min="0" max="300" step="1" value="2" style="width:60px;" autocomplete="off" />
-    sec wait before capture
-  </label>
-  <button class="btn" id="btnProbeHttpHttps" style="margin-left:8px;">🌐 Probe HTTP/HTTPS</button>
+  <span class="filter-label" style="font-size:13px;">Show out-of-scope subdomains</span>
+  <div style="display:flex;align-items:center;gap:12px;margin-top:12px;">
+    <button class="btn" id="btnCaptureScreenshots" type="button">📸 Capture Screenshots</button>
+    <label class="checkbox-label">
+      <input id="screenshotDelaySec" type="number" min="0" max="300" step="1" value="2" style="width:60px;" autocomplete="off" />
+      sec wait before capture
+    </label>
+    <button class="btn" id="btnProbeHttpHttps" type="button">🌐 Probe HTTP/HTTPS</button>
+  </div>
 </div>
 <div id="screenshotProgress" class="hidden">
   <div class="progress-bar-container">
@@ -51,34 +54,29 @@
         <span class="standalone-label">IPs with HTTP/HTTPS ports</span>
         <span class="muted">({{ subs|length }} hosts)</span>
       {% else %}
-        <span class="scope-dot {% if data.root_in_scope %}in{% else %}out{% endif %}" title="Domain scope: {% if data.root_in_scope %}IN{% else %}OUT{% endif %}">●</span>
         <a href="#" class="domain-link" data-domain="{{ domain }}" data-rdap='{{ rdap | tojson }}'>{{ domain }}</a>
         {% if subs|selectattr('sensitive')|list|length > 0 %}<span class="sensitive-banner">Sensitive</span>{% endif %}
         <span class="muted">({{ subs|length }} subdomains)</span>
       {% endif %}
     </summary>
     <table style="margin-top:8px;">
-      <thead><tr><th style="width:30px;"></th><th style="width:60px;font-size:11px;" data-nosort>Complete</th><th style="width:70px;font-size:11px;" data-nosort>In Progress</th><th style="width:45px;font-size:11px;" data-nosort>WAF</th><th>{% if domain == '_standalone_ips' %}IP{% else %}Subdomain{% endif %}</th><th>Prowler IPs</th><th>Resolved IPs</th><th>HTTP/HTTPS Ports</th><th>URLs</th></tr></thead>
+      <thead><tr><th style="width:60px;font-size:11px;" data-nosort>Complete</th><th style="width:70px;font-size:11px;" data-nosort>In Progress</th><th style="width:45px;font-size:11px;" data-nosort>WAF</th><th>{% if domain == '_standalone_ips' %}IP{% else %}Subdomain{% endif %}</th><th>Resolved IPs</th><th>HTTP/HTTPS Ports</th><th>URLs</th></tr></thead>
       <tbody>
           {% for s in subs %}
           {% set url_count = s.url_count | default(0) %}
           {% set has_urls = url_count > 0 %}
           {% set url_id = 'urls-' ~ loop.index0 ~ '-' ~ s.fqdn|replace('.', '-') %}
+          {% set prowl_ips = (s.prowl.ips.split(',') | map('trim') | list) if (s.prowl and s.prowl.ips) else [] %}
          <tr class="sub-row" data-fqdn="{{ s.fqdn }}" data-complete="{{ s.complete }}" data-inprogress="{{ s.inprogress }}" data-waf="{{ s.waf }}">
-           <td>
-             <span class="scope-dot {% if s.in_scope %}in{% else %}out{% endif %}">●</span>
-           </td>
            <td><input type="checkbox" class="sub-complete" data-fqdn="{{ s.fqdn }}" {% if s.complete==1 %}checked{% endif %} /></td>
            <td><input type="checkbox" class="sub-inprogress" data-fqdn="{{ s.fqdn }}" {% if s.inprogress==1 %}checked{% endif %} {% if s.complete==1 %}disabled{% endif %} /></td>
            <td><input type="checkbox" class="sub-waf" data-fqdn="{{ s.fqdn }}" {% if s.waf==1 %}checked{% endif %} /></td>
             {% if s.standalone_host %}
-             <td><span class="standalone-ip-row"><a href="#" class="sub-link" data-fqdn="{{ s.fqdn }}" data-prowl='{{ s.prowl | tojson }}'><code class="ip-chip standalone-ip">{{ s.fqdn }}</code></a>{% if s.sensitive %}<span class="sensitive-banner">Sensitive</span>{% endif %}</span></td>
-           <td><span class="muted">-</span></td>
+             <td><span class="standalone-ip-row"><span class="scope-dot {% if s.in_scope %}in{% else %}out{% endif %}" title="{% if s.in_scope %}In-scope{% else %}Out-of-scope{% endif %}">●</span><a href="#" class="sub-link" data-fqdn="{{ s.fqdn }}"><code class="ip-chip standalone-ip">{{ s.fqdn }}</code></a>{% if s.sensitive %}<span class="sensitive-banner">Sensitive</span>{% endif %}</span></td>
            <td><span class="muted">-</span></td>
            {% else %}
-           <td><a href="#" class="sub-link" data-fqdn="{{ s.fqdn }}" data-prowl='{{ s.prowl | tojson }}'>{{ s.fqdn }}</a>{% if s.sensitive %}<span class="sensitive-banner">Sensitive</span>{% endif %}</td>
-             <td>{% if s.prowl and s.prowl.ips %}{% for ip in s.prowl.ips.split(', ') %}{% if show_out == 1 or ip in s.in_scope_ips %}<span class="ip-with-scope"><span class="scope-dot {% if ip in s.in_scope_ips %}in{% else %}out{% endif %}" title="{% if ip in s.in_scope_ips %}In-scope{% else %}Out-of-scope{% endif %}">●</span><code class="ip-chip">{{ ip }}</code></span>{% if ip in s.sensitive_ips %}<span class="sensitive-banner">Sensitive</span>{% endif %}<br/>{% endif %}{% endfor %}{% else %}<span class="muted">-</span>{% endif %}</td>
-             <td>{% if s.ips %}{% for ip in s.ips %}{% if show_out == 1 or ip in s.in_scope_ips %}<span class="ip-with-scope"><span class="scope-dot {% if ip in s.in_scope_ips %}in{% else %}out{% endif %}" title="{% if ip in s.in_scope_ips %}In-scope{% else %}Out-of-scope{% endif %}">●</span><code class="ip-chip">{{ ip }}</code></span>{% if ip in s.sensitive_ips %}<span class="sensitive-banner">Sensitive</span>{% endif %}<br/>{% endif %}{% endfor %}{% else %}<span class="muted">-</span>{% endif %}</td>
+           <td><span class="standalone-ip-row"><span class="scope-dot {% if s.in_scope %}in{% else %}out{% endif %}" title="{% if s.in_scope %}In-scope{% else %}Out-of-scope{% endif %}">●</span><a href="#" class="sub-link" data-fqdn="{{ s.fqdn }}">{{ s.fqdn }}</a>{% if s.sensitive %}<span class="sensitive-banner">Sensitive</span>{% endif %}</span></td>
+             <td>{% if s.ips %}{% for ip in s.ips %}{% if show_out == 1 or ip in s.in_scope_ips %}<span class="ip-with-scope"><span class="scope-dot {% if ip in s.in_scope_ips %}in{% else %}out{% endif %}" title="{% if ip in s.in_scope_ips %}In-scope{% else %}Out-of-scope{% endif %}">●</span><code class="ip-chip">{{ ip }}</code>{% if ip in prowl_ips %}<span class="prowler-badge" title="IP reported by Prowler scan">P</span>{% endif %}</span>{% if ip in s.sensitive_ips %}<span class="sensitive-banner">Sensitive</span>{% endif %}<br/>{% endif %}{% endfor %}{% else %}<span class="muted">-</span>{% endif %}</td>
            {% endif %}
              <td>
                {% if s.port_chips %}
@@ -99,7 +97,7 @@
          </tr>
          {% if has_urls %}
          <tr class="url-row" id="{{ url_id }}-row" style="display:none;">
-           <td colspan="9">
+           <td colspan="7">
              <details class="url-details" id="{{ url_id }}">
                <summary><strong>🌐 URLs ({{ url_count }})</strong></summary>
                <div class="url-status muted" id="{{ url_id }}-status">Loading URLs...</div>
@@ -136,6 +134,13 @@
 </aside>
 
 <style>
+.toggle-switch { position:relative; display:inline-block; width:34px; height:20px; flex-shrink:0; vertical-align:middle; }
+.toggle-switch input { opacity:0; width:0; height:0; position:absolute; }
+.toggle-slider { position:absolute; cursor:pointer; top:0; left:0; right:0; bottom:0; background:#3a3f47; border-radius:20px; transition:background 0.25s ease; }
+.toggle-slider::before { content:""; position:absolute; height:14px; width:14px; left:3px; bottom:3px; background:#fff; border-radius:50%; transition:transform 0.25s ease; }
+.toggle-switch input:checked + .toggle-slider { background:#58a6ff; }
+.toggle-switch input:checked + .toggle-slider::before { transform:translateX(14px); }
+.toggle-switch input:focus-visible + .toggle-slider { box-shadow:0 0 0 2px #58a6ff44; }
 .scope-dot { font-size: 14px; }
 .scope-dot.in { color: #00ff00; }
 .scope-dot.out { color: #ff3333; }
@@ -159,6 +164,7 @@
 .ip-chip { display: block; margin: 2px 0; font-size: 12px; }
 .ip-with-scope { display: inline-flex; align-items: center; gap: 4px; margin: 2px 0; }
 .ip-with-scope .ip-chip { display: inline; margin: 0; }
+.prowler-badge { display: inline-block; margin-left: 3px; padding: 0 4px; font-size: 10px; line-height: 15px; border-radius: 3px; background: rgba(181, 137, 0, 0.25); color: #e3b341; cursor: default; vertical-align: middle; }
 .port-chip { display: block; margin: 2px 0; font-size: 12px; color: #4a9eff; }
 .probe-badge { margin-left: 6px; padding: 1px 5px; border-radius: 3px; font-size: 10px; font-weight: 600; vertical-align: middle; }
 .probe-badge.scheme-https { background: rgba(0, 255, 0, 0.15); color: #00ff00; border: 1px solid rgba(0, 255, 0, 0.3); }
@@ -179,11 +185,14 @@
 .shot-card:hover { border-color: #4a9eff; background: rgba(74,158,255,0.12); }
 .shot-card.shot-done { border-color: rgba(0,255,0,0.55); background: rgba(0,255,0,0.05); }
 .shot-card.shot-done:hover { border-color: #00ff00; background: rgba(0,255,0,0.10); }
+.shot-card.shot-inprogress { border-color: rgba(255,153,0,0.55); background: rgba(255,153,0,0.05); }
+.shot-card.shot-inprogress:hover { border-color: #ff9900; background: rgba(255,153,0,0.10); }
 .shot-media { position: relative; }
 .shot-card img { width: 100%; aspect-ratio: 16/9; object-fit: cover; object-position: top center; display: block; background: #111; }
 .shot-done-box { position: absolute; top: 6px; left: 6px; z-index: 2; width: 22px; height: 22px; border-radius: 5px; background: rgba(8,12,20,0.85); border: 1px solid rgba(74,158,255,0.5); display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.12s ease; cursor: pointer; }
 .shot-card:hover .shot-done-box { opacity: 1; }
 .shot-card.shot-done .shot-done-box { opacity: 1; border-color: rgba(0,255,0,0.7); }
+.shot-card.shot-inprogress .shot-done-box { opacity: 1; border-color: rgba(255,153,0,0.7); }
 .shot-done-box input { -webkit-appearance: none; appearance: none; margin: 0; width: 16px; height: 16px; border-radius: 3px; border: 1px solid rgba(255,255,255,0.65); background: transparent; display: grid; place-items: center; cursor: pointer; }
 .shot-done-box input:checked { background: #00ff00; border-color: #00ff00; }
 .shot-done-box input:checked::after { content: "✓"; font-size: 12px; font-weight: 700; color: #0b1220; line-height: 1; }
@@ -309,8 +318,9 @@
         const statusTxt = h.http_status ? ` — HTTP ${h.http_status}` : "";
         const fqdnHtml = escHtml(h.fqdn);
         const done = Number(h.complete) === 1;
+        const inprog = !done && Number(h.inprogress) === 1;
         const urlHtml = escHtml(h.url || "");
-        return `<div class="shot-card${done ? " shot-done" : ""}" data-fqdn="${fqdnHtml}" data-port="${h.port || 0}" data-complete="${done ? "1" : "0"}" title="Open ${fqdnHtml}">
+        return `<div class="shot-card${done ? " shot-done" : inprog ? " shot-inprogress" : ""}" data-fqdn="${fqdnHtml}" data-port="${h.port || 0}" data-complete="${done ? "1" : "0"}" data-inprogress="${inprog ? "1" : "0"}" title="Open ${fqdnHtml}">
           <div class="shot-media">
             <img src="/screenshots/${encodeURIComponent(h.screenshot_path)}" loading="lazy" alt="${fqdnHtml}"/>
             <label class="shot-done-box" title="${done ? "Mark incomplete" : "Mark complete"}"><input type="checkbox" class="shot-done-check"${done ? " checked" : ""}/></label>
@@ -351,14 +361,22 @@
       });
     };
 
-    const syncScreenshotCardComplete = (card, complete) => {
+    const syncScreenshotCardState = (card, complete, inprogress) => {
       if (!card) return;
-      card.classList.toggle("shot-done", complete);
+      const inprog = !complete && !!inprogress;
+      card.classList.toggle("shot-done", !!complete);
+      card.classList.toggle("shot-inprogress", inprog);
       card.setAttribute("data-complete", complete ? "1" : "0");
+      card.setAttribute("data-inprogress", inprog ? "1" : "0");
       const chk = card.querySelector(".shot-done-check");
-      if (chk) chk.checked = complete;
+      if (chk) chk.checked = !!complete;
       const box = card.querySelector(".shot-done-box");
       if (box) box.title = complete ? "Mark incomplete" : "Mark complete";
+    };
+
+    const syncScreenshotCardComplete = (card, complete) => {
+      // Complete wins over in-progress (mirrors applySubRowState).
+      syncScreenshotCardState(card, complete, false);
     };
 
     const syncTableRowComplete = (fqdn, complete) => {
@@ -1134,6 +1152,8 @@
       if (cb.checked && cc) cc.checked = false;
       if (cb.checked && row) row.setAttribute("data-complete", "0");
       applySubRowState(row, cc, cb);
+      const shotCard = [...document.querySelectorAll(".shot-card")].find((c) => c.getAttribute("data-fqdn") === cb.getAttribute("data-fqdn"));
+      syncScreenshotCardState(shotCard, !!(cc && cc.checked), cb.checked);
     });
   });
 
