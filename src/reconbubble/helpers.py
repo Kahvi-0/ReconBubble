@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, Request, UploadFile, File, Form, Query, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 
-from sqlalchemy import select, func, text, or_
+from sqlalchemy import select, func, text, and_, or_
 from sqlalchemy.orm import Session
 
 from . import netproxy
@@ -125,6 +125,15 @@ _HTTP_CONTENT_TYPE_RE = re.compile(r"(?im)^\s*content-type\s*:")
 _HTTP_HEADER_RE = re.compile(
     r"(?im)^\s*(?:server|content-length|connection|access-control-allow-origin)\s*:"
 )
+# A TLS service presenting a certificate with a DNS Subject Alternative
+# Name is a strong "probably web" signal even on non-standard ports where
+# nmap cannot classify the service (e.g. a web UI on 3000 labelled "ppp").
+# The check is anchored to the [ssl-cert] evidence section so certificate
+# text from other protocols (e.g. SSH) cannot match.
+_TLS_CERT_SECTION_RE = re.compile(
+    r"\[ssl-cert\](.*?)(?=\n\[[a-z0-9_-]+\]|\Z)", re.S | re.I
+)
+_TLS_CERT_DNS_SAN_RE = re.compile(r"(?i)subject alternative name\s*:\s*dns\s*:")
 
 def _hostname_as_domain(value: str) -> str:
     return hostname_as_domain(value)
@@ -358,6 +367,13 @@ def list_hosts_by_ip(s: Session, ip: str) -> list[dict]:
     ).scalars().all()
     return [{"id": h.id, "ip": h.ip, "hostname": h.hostname or ""} for h in rows]
 
+def _evidence_has_tls_cert_dns_san(normalized: str) -> bool:
+    """True if any [ssl-cert] section in the evidence carries a DNS SAN."""
+    for match in _TLS_CERT_SECTION_RE.finditer(normalized):
+        if _TLS_CERT_DNS_SAN_RE.search(match.group(1)):
+            return True
+    return False
+
 def get_open_web_ports_by_ip(
     s: Session, ips: set[str] | list[str] | None = None
 ) -> dict[str, list[int]]:
@@ -373,6 +389,12 @@ def get_open_web_ports_by_ip(
                 ServiceEvidence.raw_output.ilike("%<!doctype%"),
                 ServiceEvidence.raw_output.ilike("%Content-Type:%"),
                 ServiceEvidence.raw_output.ilike("%Server:%"),
+                and_(
+                    ServiceEvidence.raw_output.ilike("%[ssl-cert]%"),
+                    ServiceEvidence.raw_output.ilike(
+                        "%subject alternative name: dns:%"
+                    ),
+                ),
             )
         )
         .scalar_subquery()
@@ -417,6 +439,9 @@ def get_open_web_ports_by_ip(
                     _HTTP_CONTENT_TYPE_RE.search(normalized)
                     and _HTTP_HEADER_RE.search(normalized)
                 )
+                # TLS certificate with a DNS SAN: likely a web service on a
+                # non-standard port that nmap could not classify.
+                or _evidence_has_tls_cert_dns_san(normalized)
             ):
                 result.setdefault(ip, []).append(svc.port)
                 break

@@ -358,6 +358,34 @@ def migrate_sqlite(engine) -> None:
             )
         )
 
+        # tls_certs table - one row per probed host:port endpoint, upserted
+        # on (host, port) by the TLS Certificates tool run
+        conn.execute(
+            text("""
+        CREATE TABLE IF NOT EXISTS tls_certs (
+          id INTEGER PRIMARY KEY,
+          host VARCHAR(255),
+          port INTEGER,
+          subject_cn VARCHAR(255) DEFAULT '',
+          subject TEXT DEFAULT '',
+          issuer TEXT DEFAULT '',
+          serial VARCHAR(128) DEFAULT '',
+          sans TEXT DEFAULT '',
+          not_before VARCHAR(64) DEFAULT '',
+          not_after VARCHAR(64) DEFAULT '',
+          sha256 VARCHAR(128) DEFAULT '',
+          source_job VARCHAR(64) DEFAULT '',
+          created_at DATETIME,
+          UNIQUE(host, port)
+        )
+        """)
+        )
+        conn.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_tls_certs_sha256 ON tls_certs(sha256)"
+            )
+        )
+
         # cloud_items table - add columns if missing
         try:
             if conn.execute(

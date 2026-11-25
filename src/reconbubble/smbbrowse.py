@@ -1118,21 +1118,13 @@ def convert_to_pdf(
     return pdf
 
 
-def doc2pdf_cache_hit(
-    cache_dir,
-    host: str,
-    share: str,
-    path: str,
-    filename: str,
-    source_size: int,
-) -> Optional[bytes]:
-    """Return cached converted-PDF bytes for a .doc, or None on any mismatch.
+def _doc2pdf_hit(cache_dir, key: str, source_size: int) -> Optional[bytes]:
+    """Shared body for :func:`doc2pdf_cache_hit` / :func:`doc2pdf_cache_hit_doc`.
 
     Freshness is judged exactly like the file cache: the stored size is the
-    *source* .doc's listed size, so a same-size re-request is served without
+    *source* file's listed size, so a same-size re-request is served without
     re-downloading or re-converting.
     """
-    key = _cache_key(host, share, path, filename) + DOC2PDF_SUFFIX
     bin_path = Path(cache_dir) / (key + ".bin")
     meta_path = Path(cache_dir) / (key + ".json")
     try:
@@ -1145,23 +1137,14 @@ def doc2pdf_cache_hit(
     return pdf if pdf.startswith(b"%PDF-") else None
 
 
-def doc2pdf_cache_write(
-    cache_dir,
-    host: str,
-    share: str,
-    path: str,
-    filename: str,
-    source_size: int,
-    pdf: bytes,
-) -> None:
-    """Store a converted PDF next to the source cache entry.
+def _doc2pdf_write(cache_dir, key: str, source_size: int, pdf: bytes) -> None:
+    """Shared body for :func:`doc2pdf_cache_write` / :func:`doc2pdf_cache_write_doc`.
 
     Written atomically (temp file + replace) like the file cache, and the
     ordinary ``*.bin`` eviction covers these entries as well.  Failures are
     swallowed: a missed cache write must never break the preview response.
     """
     try:
-        key = _cache_key(host, share, path, filename) + DOC2PDF_SUFFIX
         cache_dir = Path(cache_dir)
         cache_dir.mkdir(parents=True, exist_ok=True)
         bin_path = cache_dir / (key + ".bin")
@@ -1190,3 +1173,64 @@ def doc2pdf_cache_write(
                         p.unlink()
     except Exception:
         pass
+
+
+def doc2pdf_cache_hit(
+    cache_dir,
+    host: str,
+    share: str,
+    path: str,
+    filename: str,
+    source_size: int,
+) -> Optional[bytes]:
+    """Return cached converted-PDF bytes for a .doc on a share, or None."""
+    return _doc2pdf_hit(
+        cache_dir, _cache_key(host, share, path, filename) + DOC2PDF_SUFFIX, source_size
+    )
+
+
+def doc2pdf_cache_write(
+    cache_dir,
+    host: str,
+    share: str,
+    path: str,
+    filename: str,
+    source_size: int,
+    pdf: bytes,
+) -> None:
+    """Store a share .doc's converted PDF next to the source cache entry."""
+    _doc2pdf_write(
+        cache_dir, _cache_key(host, share, path, filename) + DOC2PDF_SUFFIX, source_size, pdf
+    )
+
+
+def _doc_id_cache_key(doc_id: int) -> str:
+    """Cache-key namespace for stored documents (separate from SMB keys)."""
+    return hashlib.sha256(f"doc\0{doc_id}".encode("utf-8")).hexdigest()
+
+
+def doc2pdf_cache_hit_doc(
+    cache_dir,
+    doc_id: int,
+    source_size: int,
+) -> Optional[bytes]:
+    """Cached converted-PDF for a stored document, keyed by document id.
+
+    Same freshness rule as the share variant: the stored size is the source
+    file's size, so a same-size re-request is served without re-converting.
+    """
+    return _doc2pdf_hit(
+        cache_dir, _doc_id_cache_key(doc_id) + DOC2PDF_SUFFIX, source_size
+    )
+
+
+def doc2pdf_cache_write_doc(
+    cache_dir,
+    doc_id: int,
+    source_size: int,
+    pdf: bytes,
+) -> None:
+    """Store a stored document's converted PDF in the shared preview cache."""
+    _doc2pdf_write(
+        cache_dir, _doc_id_cache_key(doc_id) + DOC2PDF_SUFFIX, source_size, pdf
+    )

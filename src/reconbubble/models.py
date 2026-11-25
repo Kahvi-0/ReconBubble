@@ -477,6 +477,18 @@ class RegistrarInfo(Base):
     )
 
 
+class RegistrarExclusion(Base):
+    """Root domains hidden from the registrar views. Data (prowl IPs,
+    registrar info) is kept; re-shown from /osint/registrars."""
+
+    __tablename__ = "registrar_exclusions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    domain: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, index=True
+    )
+
+
 class AppSettings(Base):
     __tablename__ = "app_settings"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

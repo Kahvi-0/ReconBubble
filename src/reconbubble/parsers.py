@@ -1606,8 +1606,33 @@ _KERBEROAST_RE = re.compile(r"^\$krb5tgs\$(\d+)\$[*]?([^$]+)\$([^$]+)")
 _NTLMV1_RE = re.compile(r"^([^:]+)::([^:]+):([^:]+):([^:]+):([^:]+)$")
 _NTLMV2_RE = re.compile(r"^([^:]+)::([^:]*):(.+)$")
 _DCC2_RE = re.compile(r"^\$DCC2\$(\d+)#([^#]+)#(.+)$")
-_KRB5ASREP_RE = re.compile(r"^\$krb5asrep\$(\d+)\$([^@]+)@([^:]+):(.+)$")
+_KRB5ASREP_RE = re.compile(r"^\$krb5asrep\$(\d+)\$(.+)$")
 _NTLM_RE = re.compile(r"^(?:([^\\]+)\\)?([^:]+):([0-9a-fA-F]{32})$")
+
+
+def _split_krb5asrep_principal(remainder: str) -> tuple[str, str] | None:
+    """Split the principal out of an AS-REP hash body.
+
+    Returns (user, domain) or None when the principal is unrecognized.
+    Accepted variants:
+      user@domain:hash    (UPN, hashcat default)
+      domain\\user:hash   (ASREPRoast SAM form)
+      user$domain$hash    (sanitized form where separators were replaced with $)
+    """
+    m = re.match(r"^([^@]+)@([^:]+):", remainder)
+    if m:
+        return m.group(1).strip(), m.group(2).strip()
+    m = re.match(r"^([^\\$]+)\\([^:]+):", remainder)
+    if m:
+        return m.group(2).strip(), m.group(1).strip()
+    m = re.match(r"^([^$]+)\$([^$]+)\$(.+)$", remainder)
+    if m:
+        user, domain = m.group(1).strip(), m.group(2).strip()
+        # A dotted FQDN in the first part means the parts came out domain-first.
+        if "." in user and "." not in domain:
+            user, domain = domain, user
+        return user, domain
+    return None
 
 
 def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dict:
@@ -1669,10 +1694,10 @@ def import_mixed_hashes(session: Session, artifact: Artifact, path: Path) -> dic
         # Try KRB5 AS-REP
         if not matched:
             m_asrep = _KRB5ASREP_RE.match(s)
-            if m_asrep:
+            asrep_principal = _split_krb5asrep_principal(m_asrep.group(2)) if m_asrep else None
+            if asrep_principal:
                 matched = True
-                raw_user = m_asrep.group(2).strip()
-                domain = m_asrep.group(3).strip()
+                raw_user, domain = asrep_principal
                 if raw_user:
                     user_item = session.scalar(
                         select(NameItem).where(NameItem.ad_username.ilike(_like_escape(raw_user), escape="\\"))
@@ -1953,5 +1978,294 @@ def import_smbmap(session: Session, artifact: Artifact, path: Path, user_id: int
         "skipped": skipped,
         "unmatched": unmatched,
         "details": {"hosts": len(hosts), "shares": added + skipped},
+    }
+
+
+# ---------------------------------------------------------------------------
+# Prowler (waffl3ss/Prowler) — result file ingestion
+# ---------------------------------------------------------------------------
+
+# Prowler's individual result files (internal/output/writer.go) and how
+# each is handled on ingest: (artifact kind, importer name or None for
+# artifact-only storage). results.json itself is stored under the
+# "prowl_results" kind by the caller.
+PROWLER_RESULT_FILES: dict[str, tuple[str, str | None]] = {
+    "phase1_domains.json": ("prowl_phase1", "import_prowl_phase1"),
+    "phase2_zone_transfers.json": ("prowl_zone_transfers", "import_zone_transfers"),
+    "phase3_smtp.json": ("prowl_smtp", "import_smtp"),
+    "phase4_urls.txt": ("prowl_web_urls", "import_web_urls"),
+    "phase4_webapps.json": ("prowl_webapps", None),
+    "phase4_webapps.csv": ("prowl_webapps", None),
+    "phase5_cloud_keywords.txt": ("prowl_cloud", None),
+    "extracted_usernames.txt": ("prowl_usernames", "import_usernames"),
+    "extracted_software.txt": ("prowl_software", None),
+    "metadata_full.json": ("prowl_metadata", None),
+    "metadata_summary.csv": ("prowl_metadata", None),
+}
+
+
+def import_usernames(session: Session, artifact: Artifact, path: Path) -> int:
+    """Import Prowler's extracted usernames into NameItem.
+
+    Mirrors import_names for 2+ token lines (first [middle] last); a
+    single-token username is stored as a surname only (first/middle empty).
+    """
+    count = 0
+    seen = set()
+    for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        s = s.split()[0].strip()
+        if not s:
+            continue
+        parts = s.split()
+        if len(parts) == 1:
+            first_name, middle_name, last_name = "", "", parts[0]
+        elif len(parts) == 2:
+            first_name, middle_name, last_name = parts[0], "", parts[1]
+        elif len(parts) == 3:
+            first_name, middle_name, last_name = parts
+        else:
+            first_name = parts[0]
+            middle_name = " ".join(parts[1:-1])
+            last_name = parts[-1]
+        first_name = first_name.strip().title()
+        middle_name = middle_name.strip().title() if middle_name else ""
+        last_name = last_name.strip().title()
+        key = (first_name.lower(), middle_name.lower(), last_name.lower())
+        if key in seen:
+            continue
+        existing = session.scalar(
+            select(NameItem).where(
+                NameItem.first_name.ilike(
+                    _like_escape(first_name) if first_name else "%", escape="\\"
+                ),
+                NameItem.middle_name.ilike(
+                    _like_escape(middle_name) if middle_name else "%", escape="\\"
+                ),
+                NameItem.last_name.ilike(_like_escape(last_name), escape="\\"),
+            )
+        )
+        if existing:
+            continue
+        seen.add(key)
+        session.add(
+            NameItem(first_name=first_name, middle_name=middle_name, last_name=last_name)
+        )
+        count += 1
+    session.commit()
+    return count
+
+
+def _prowler_first_meta(meta: dict, *keys: str) -> str:
+    """First non-empty value among keys (mirrors writer.go's getFirst)."""
+    for k in keys:
+        v = meta.get(k)
+        if v:
+            return str(v)
+    return ""
+
+
+def extract_prowler_result_files(results_path: Path, dest_dir: Path) -> dict[str, Path]:
+    """Rebuild Prowler's per-phase result files from a unified results.json.
+
+    Prowler writes results.json as the serialized models.FullResults while
+    the per-phase files are written separately into the output directory.
+    When only results.json is available (e.g. a manual upload), this
+    rebuilds the equivalent files under dest_dir so the standard importers
+    can consume them. Only phases with data are rebuilt.
+
+    Returns {filename: path} for each file created.
+    """
+    import csv as csv_mod
+
+    results_path = Path(results_path)
+    dest_dir = Path(dest_dir)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        data = json.loads(results_path.read_text(encoding="utf-8", errors="ignore"))
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in Prowler results file: {e}")
+    if not isinstance(data, dict):
+        raise ValueError("Prowler results.json must be a JSON object")
+
+    recon = data.get("recon") if isinstance(data.get("recon"), dict) else {}
+    scan = data.get("scan") if isinstance(data.get("scan"), dict) else {}
+    out: dict[str, Path] = {}
+
+    def _phase(key: str) -> dict:
+        # FullResults (successful `full` run) wraps phases under "recon"/"scan";
+        # the recon/scan runners also write results.json flat (ReconResults /
+        # ScanResults), so check both layouts.
+        for src in (recon, scan, data):
+            v = src.get(key)
+            if isinstance(v, dict):
+                return v
+        return {}
+
+    def _write_json(fname: str, obj) -> None:
+        p = dest_dir / fname
+        p.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+        out[fname] = p
+
+    def _write_lines(fname: str, lines: list[str]) -> None:
+        p = dest_dir / fname
+        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        out[fname] = p
+
+    def _write_csv(fname: str, header: list[str], rows: list[list]) -> None:
+        p = dest_dir / fname
+        with p.open("w", newline="", encoding="utf-8") as f:
+            w = csv_mod.writer(f)
+            w.writerow(header)
+            w.writerows(rows)
+        out[fname] = p
+
+    p1 = _phase("phase1")
+    if p1.get("domains"):
+        _write_json("phase1_domains.json", p1)
+
+    p2 = _phase("phase2")
+    if p2.get("results"):
+        _write_json("phase2_zone_transfers.json", p2)
+
+    p3 = _phase("phase3")
+    if p3.get("results"):
+        _write_json("phase3_smtp.json", p3)
+
+    p4 = _phase("phase4")
+    if isinstance(p4, dict):
+        apps = [a for a in p4.get("apps") or [] if isinstance(a, dict) and a.get("url")]
+        if apps:
+            _write_lines("phase4_urls.txt", [a["url"] for a in apps])
+            _write_json("phase4_webapps.json", p4)
+            _write_csv(
+                "phase4_webapps.csv",
+                ["URL", "Status", "Title", "Technology", "Server", "X-Powered-By", "Auth Required"],
+                [
+                    [
+                        a.get("url", ""),
+                        a.get("status_code", ""),
+                        a.get("title", ""),
+                        a.get("technology", ""),
+                        a.get("server", ""),
+                        a.get("x_powered_by", ""),
+                        a.get("requires_auth", ""),
+                    ]
+                    for a in apps
+                ],
+            )
+
+    p5 = _phase("phase5")
+    if p5.get("keywords"):
+        _write_lines("phase5_cloud_keywords.txt", [str(k) for k in p5["keywords"]])
+
+    p6 = _phase("phase6")
+    if p6:
+        _write_json("metadata_full.json", p6)
+        docs = [d for d in p6.get("metadata") or [] if isinstance(d, dict)]
+        if docs:
+            _write_csv(
+                "metadata_summary.csv",
+                ["Source URL", "File Type", "MD5 Hash", "Author", "Software", "Created", "Modified", "Title"],
+                [
+                    [
+                        d.get("source_url", ""),
+                        d.get("file_type", ""),
+                        d.get("file_hash", ""),
+                        _prowler_first_meta(d.get("metadata") or {}, "Author", "LastModifiedBy"),
+                        _prowler_first_meta(d.get("metadata") or {}, "Software", "Producer", "CreatorTool", "Application"),
+                        _prowler_first_meta(d.get("metadata") or {}, "CreateDate", "Created"),
+                        _prowler_first_meta(d.get("metadata") or {}, "ModifyDate", "Modified"),
+                        _prowler_first_meta(d.get("metadata") or {}, "Title"),
+                    ]
+                    for d in docs
+                ],
+            )
+        usernames = [u for u in p6.get("unique_usernames") or [] if u]
+        if usernames:
+            _write_lines("extracted_usernames.txt", [str(u) for u in usernames])
+        software = [s for s in p6.get("unique_software") or [] if s]
+        if software:
+            _write_lines("extracted_software.txt", [str(s) for s in software])
+
+    return out
+
+
+def ingest_prowler_results(
+    session: Session,
+    artifact: Artifact,
+    stored_files: dict[str, Path],
+    documents: dict[str, Path] | None = None,
+) -> dict:
+    """Ingest Prowler's per-phase result files (plus optional documents).
+
+    ``artifact`` is the primary results.json artifact (kind
+    "prowl_results"), kept for provenance. Each ``stored_files`` entry maps
+    a known Prowler result filename to its stored path; the file is
+    registered as an artifact and, when an importer exists for it, fed
+    through that importer. ``documents`` maps a document filename to its
+    stored path; each is imported via import_document and the global
+    name/software doc extraction is re-run afterwards.
+    """
+    importers = {
+        "import_prowl_phase1": import_prowl_phase1,
+        "import_zone_transfers": import_zone_transfers,
+        "import_smtp": import_smtp,
+        "import_web_urls": import_web_urls,
+        "import_usernames": import_usernames,
+    }
+    added = 0
+    skipped = 0
+    unmatched: list[str] = []
+    details: dict[str, str] = {}
+
+    for fname, path in stored_files.items():
+        spec = PROWLER_RESULT_FILES.get(fname)
+        if spec is None:
+            unmatched.append(fname)
+            continue
+        kind, importer_name = spec
+        path = Path(path)
+        art = upsert_artifact(session, kind, path)
+        if importer_name is None:
+            skipped += 1
+            details[fname] = "stored as artifact only"
+            continue
+        try:
+            n = importers[importer_name](session, art, path)
+        except ValueError as e:
+            details[fname] = f"import skipped: {e}"
+            skipped += 1
+            continue
+        except Exception as e:
+            session.rollback()
+            details[fname] = f"import failed: {e}"
+            continue
+        added += n
+        details[fname] = f"imported {n} via {importer_name}"
+
+    doc_count = 0
+    for fname, path in (documents or {}).items():
+        path = Path(path)
+        try:
+            art = upsert_artifact(session, "doc", path)
+            n = import_document(session, art, path)
+            added += n
+            doc_count += 1
+            details[f"documents/{fname}"] = f"document imported ({n} records)"
+        except Exception as e:
+            session.rollback()
+            details[f"documents/{fname}"] = f"document import failed: {e}"
+    if doc_count:
+        extract_doc_names(session)
+        extract_doc_software(session)
+
+    return {
+        "added": added,
+        "skipped": skipped,
+        "unmatched": unmatched,
+        "details": details,
     }
 

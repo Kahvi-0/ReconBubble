@@ -15,6 +15,7 @@ import random
 import re
 import shutil
 import signal
+import socket
 import ssl
 import subprocess
 import tempfile
@@ -341,6 +342,47 @@ def build_tools(bin_dir: str | Path) -> dict:
                 "brew": "brew install --cask libreoffice",
                 "flatpak": "flatpak install flathub org.libreoffice.LibreOffice",
             },
+        ),
+        "prowler": ToolSpec(
+            name="prowler",
+            label="Prowler",
+            # No argv template: the run is built per-job in run_prowler
+            # (`prowler full <target> -o <tmpdir>` plus optional flags).
+            argv=[],
+            timeout=3600,
+            bin_names=("prowler",),
+            repo_url="https://github.com/waffl3ss/Prowler",
+            network_note=(
+                "Active: full multi-phase OSINT sweep -- DNS/CT-log discovery, "
+                "zone transfer and SMTP enumeration, a browser-driven web scan "
+                "(Chromium via go-rod) collecting web app URLs and cloud "
+                "keywords, and document metadata extraction. Results are "
+                "auto-ingested: domains, zone transfers, SMTP, web URLs, "
+                "document names/software, and usernames. The scan phase "
+                "requires a Chrome/Chromium binary discoverable on this host."
+            ),
+            install_commands={
+                "go": (
+                    "git clone https://github.com/waffl3ss/Prowler && cd Prowler "
+                    "&& go build -o prowler ." + _bin_hint(bin_dir)
+                ),
+            },
+        ),
+        "tls_certs": ToolSpec(
+            name="tls_certs",
+            label="TLS Certificates",
+            argv=[],
+            timeout=600,
+            bin_names=(),
+            builtin=True,
+            input_mode="hosts_ports",
+            install_commands={},
+            network_note=(
+                "Active: connects to each selected host over TLS and records "
+                "the presented certificate (subject, issuer, serial, SANs, "
+                "validity window, SHA-256 fingerprint). Certificates are "
+                "stored in the TLS Certificates page; no API key required."
+            ),
         ),
     }
 
@@ -760,6 +802,8 @@ _SERVICE_TABLE = [
     ("leakix", ["key"], "subfinder:leakix"),
     ("merklemap", ["key"], "subfinder:merklemap"),
     ("profundis", ["key"], "subfinder:profundis"),
+    ("passivetotal", ["key"], "subfinder:passivetotal"),
+    ("binaryedge", ["key"], "subfinder:binaryedge"),
     ("pugrecon", ["key"], "subfinder:pugrecon"),
     ("quake", ["key"], "subfinder:quake"),
     ("reconeer", ["key"], "subfinder:reconeer"),
@@ -867,6 +911,9 @@ def parse_tool_config(content: str) -> dict:
         raise ValueError(f"no {tool} sources found in the config")
 
     rev = _reverse_map(tool)
+    # Case-insensitive source lookup: configs written by hand (or by other
+    # tools) may use different casing than the catalog's canonical names.
+    rev_lc = {k.lower(): v for k, v in rev.items()}
     services: dict = {}
     skipped: list = []
     for source, raw in sources.items():
@@ -879,12 +926,14 @@ def parse_tool_config(content: str) -> dict:
             }
             if not nonempty:
                 continue
-            hit = rev.get(str(source))
+            hit = rev_lc.get(str(source).strip().lower())
             if not hit:
                 skipped.append(str(source))
                 continue
             service, inv = hit
-            svc_fields = {inv[tf]: v for tf, v in nonempty.items() if tf in inv}
+            inv_lc = {k.lower(): v for k, v in inv.items()}
+            svc_fields = {inv_lc[tf.lower()]: v for tf, v in nonempty.items()
+                          if tf.lower() in inv_lc}
         else:  # subfinder: positional list of values
             if isinstance(raw, str):
                 raw = [raw]
@@ -893,7 +942,7 @@ def parse_tool_config(content: str) -> dict:
             vals = [str(v) for v in raw if v not in (None, "")]
             if not vals:
                 continue
-            hit = rev.get(str(source).strip().lower())
+            hit = rev_lc.get(str(source).strip().lower())
             if not hit:
                 skipped.append(str(source))
                 continue
@@ -1234,6 +1283,311 @@ def run_cero(spec: ToolSpec, hosts: list, ports: str, bin_dir: Path | None = Non
             "raw_error": "",
             "exit_code": None,
         }
+
+
+# ---- Prowler (waffl3ss/Prowler) full multi-phase run -----------------------
+#
+# Prowler runs six phases (DNS/CT discovery, zone transfers, SMTP, browser
+# web scan, cloud keywords, document extraction) and writes one file per
+# result into its output dir (results.json + per-phase files + documents/).
+# We run `prowler full <target> -o <tmpdir>` and let the router store and
+# ingest the files afterwards (parsers.ingest_prowler_results). Prowler logs
+# to stderr (zerolog), so stderr is the run log.
+
+
+def run_prowler(
+    spec: ToolSpec,
+    target: str,
+    bin_dir: Path | None = None,
+    wordlist: str | None = None,
+    no_bruteforce: bool = False,
+    skip_phases: tuple = (),
+    max_downloads: int = 100,
+    max_pages: int = 2,
+    delay: float = 10.0,
+) -> dict:
+    """Run `prowler full <target>` in a temp output dir (blocking).
+
+    Returns the same shape as run_tool plus "out_dir"; fqdns is always
+    empty because ingestion is file-based, not stdout-based. The stderr
+    stream is kept whole (uncapped) so the caller can log every line.
+    """
+    target = validate_target(target)
+    bin_path = find_tool(spec.name, spec, bin_dir)
+    if not bin_path:
+        return {
+            "ok": False,
+            "error": f"{spec.label} is not installed (see install hint)",
+            "fqdns": [],
+            "out_dir": "",
+            "raw": "",
+            "raw_error": "",
+            "exit_code": None,
+        }
+    out_dir = Path(tempfile.mkdtemp(prefix="prowler_"))
+    argv = [str(bin_path), "full", target, "-o", str(out_dir)]
+    wl = (wordlist or "").strip()
+    if wl:
+        argv += ["-w", wl]
+    if no_bruteforce:
+        argv += ["--no-bruteforce"]
+    for ph in sorted(set(skip_phases or ())):
+        try:
+            ph_n = int(ph)
+        except (TypeError, ValueError):
+            continue
+        if 2 <= ph_n <= 5:
+            argv += [f"--skip-phase{ph_n}"]
+    argv += ["--max-downloads", str(int(max_downloads))]
+    argv += ["--max-pages", str(int(max_pages))]
+    argv += ["--delay", str(int(round(delay)))]
+    try:
+        try:
+            proc = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                start_new_session=True,
+            )
+        except Exception as e:
+            return {
+                "ok": False,
+                "error": f"failed to start {spec.label}: {e}",
+                "fqdns": [],
+                "out_dir": str(out_dir),
+                "raw": "",
+                "raw_error": "",
+                "exit_code": None,
+            }
+        timed_out = False
+        try:
+            out, err = proc.communicate(timeout=spec.timeout)
+        except subprocess.TimeoutExpired:
+            timed_out = True
+            _kill_process_group(proc)
+            try:
+                out, err = proc.communicate(timeout=10)
+            except Exception:
+                out, err = "", ""
+        out = (out or "")[:RAW_CAP]
+        err = err or ""
+        if timed_out:
+            return {
+                "ok": False,
+                "error": f"{spec.label} timed out after {spec.timeout}s",
+                "fqdns": [],
+                "out_dir": str(out_dir),
+                "raw": out,
+                "raw_error": err,
+                "exit_code": None,
+            }
+        if proc.returncode != 0:
+            return {
+                "ok": False,
+                "error": f"{spec.label} exited with code {proc.returncode}: "
+                         f"{err.strip()[-500:] or 'no output'}",
+                "fqdns": [],
+                "out_dir": str(out_dir),
+                "raw": out,
+                "raw_error": err,
+                "exit_code": proc.returncode,
+            }
+        return {
+            "ok": True,
+            "fqdns": [],
+            "out_dir": str(out_dir),
+            "raw": out,
+            "raw_error": err,
+            "exit_code": proc.returncode,
+            "error": "",
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": f"{spec.label} failed: {e}",
+            "fqdns": [],
+            "out_dir": str(out_dir),
+            "raw": "",
+            "raw_error": "",
+            "exit_code": None,
+        }
+
+
+# ---- TLS certificate harvesting (in-process, no external binary) -----------
+#
+# For each host:port we open one short-lived TLS connection (optionally via
+# the configured SOCKS5 proxy) and decode the presented certificate with
+# `cryptography`. Certificates are stored in the tls_certs raw table by the
+# router and shown on the TLS Certificates page.
+
+
+def _is_ip_like(value: str) -> bool:
+    try:
+        ipaddress.ip_address(value)
+        return True
+    except Exception:
+        return False
+
+
+def _probe_tls_cert_once(host: str, port: int, timeout: float = 10.0) -> dict:
+    """Connect to host:port over TLS and decode the presented certificate.
+
+    Returns a flat record: host, port, ok, subject_cn, subject, issuer,
+    serial, sans, not_before, not_after, sha256, error.
+    """
+    rec = {
+        "host": host,
+        "port": port,
+        "ok": False,
+        "subject_cn": "",
+        "subject": "",
+        "issuer": "",
+        "serial": "",
+        "sans": "",
+        "not_before": "",
+        "not_after": "",
+        "sha256": "",
+        "error": "",
+    }
+    sock = None
+    try:
+        try:
+            sock = netproxy.socks5_connect(host, port, timeout=timeout)
+        except socket.timeout:
+            rec["error"] = "timeout"
+            return rec
+        except OSError:
+            rec["error"] = (
+                "proxy-error" if netproxy.proxy_settings() else "connect-error"
+            )
+            return rec
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        server_hostname = None if _is_ip_like(host) else host
+        tls = None
+        try:
+            tls = ctx.wrap_socket(sock, server_hostname=server_hostname)
+        except ssl.SSLError as exc:
+            reason = (getattr(exc, "reason", "") or "").strip()
+            # A bare IP cannot be used as an SNI name; these failures mean
+            # the endpoint speaks plaintext (or not TLS at all), not that the
+            # certificate is broken.
+            if _is_ip_like(host) and reason in (
+                "RECORD_LAYER_FAILURE",
+                "WRONG_VERSION_NUMBER",
+                "UNSUPPORTED_PROTOCOL",
+                "UNEXPECTED_EOF_WHILE_READING",
+            ):
+                rec["error"] = "no-tls"
+            else:
+                rec["error"] = f"tls-error: {reason or str(exc).strip()}"[:200]
+            return rec
+        except (OSError, ValueError) as exc:
+            rec["error"] = f"tls-error: {str(exc).strip()[:200]}"
+            return rec
+        try:
+            der = tls.getpeercert(binary_form=True) or b""
+            if not der:
+                rec["error"] = "no-cert"
+                return rec
+            from cryptography import x509
+            from cryptography.hazmat.primitives import hashes
+
+            cert = x509.load_der_x509_certificate(der)
+            try:
+                san_ext = cert.extensions.get_extension_for_class(
+                    x509.SubjectAlternativeName
+                ).value
+                san_list = san_ext.get_values_for_type(x509.DNSName)
+            except Exception:
+                san_list = []
+            subj_cn = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
+            rec.update(
+                ok=True,
+                subject_cn=str(subj_cn[0].value) if subj_cn else "",
+                subject=cert.subject.rfc4514_string(),
+                issuer=cert.issuer.rfc4514_string(),
+                serial=str(cert.serial_number),
+                sans=", ".join(san_list),
+                not_before=cert.not_valid_before_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                not_after=cert.not_valid_after_utc.strftime("%Y-%m-%d %H:%M:%S"),
+                sha256=cert.fingerprint(hashes.SHA256()).hex(),
+            )
+        finally:
+            if tls is not None:
+                try:
+                    tls.close()
+                except Exception:
+                    pass
+        return rec
+    except Exception as exc:
+        rec["error"] = f"tls-error: {str(exc).strip()[:200]}"
+        return rec
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+
+def run_tls_certs(hosts: list, ports: str) -> dict:
+    """Probe every host:port over TLS and decode the presented certificate.
+
+    Runs in-process (no external binary). Returns {"ok", "certs", "raw",
+    "raw_error", "exit_code", "error"} where certs is one flat record per
+    host:port (see _probe_tls_cert_once).
+    """
+    hosts = [h for h in (hosts or []) if h]
+    if not hosts:
+        return {"ok": False, "error": "no hosts to probe", "certs": []}
+    port_list: list = []
+    for p in (ports or "").split(","):
+        p = p.strip()
+        if not p:
+            continue
+        try:
+            pn = int(p)
+        except ValueError:
+            continue
+        if 1 <= pn <= 65535 and pn not in port_list:
+            port_list.append(pn)
+    if not port_list:
+        port_list = [443]
+    combos = [(h, p) for h in hosts for p in port_list]
+    certs: list = []
+    hard_errors: list = []
+    for host, port in combos:
+        rec = _probe_tls_cert_once(host, port)
+        certs.append(rec)
+        if not rec["ok"] and rec["error"] not in ("no-tls", "timeout"):
+            hard_errors.append(f"{host}:{port} {rec['error']}")
+    raw_lines = []
+    for rec in certs:
+        if rec["ok"]:
+            raw_lines.append(
+                f"{rec['host']}:{rec['port']} CN={rec['subject_cn']} "
+                f"issuer={rec['issuer']} serial={rec['serial']} "
+                f"valid {rec['not_before']} -> {rec['not_after']} "
+                f"sha256={rec['sha256']}"
+            )
+        else:
+            raw_lines.append(f"{rec['host']}:{rec['port']} {rec['error']}")
+    ok = any(c["ok"] for c in certs)
+    return {
+        "ok": ok,
+        "certs": certs,
+        "raw": "\n".join(raw_lines),
+        "raw_error": "\n".join(hard_errors)[:RAW_CAP],
+        "exit_code": 0 if ok else 1,
+        "error": "" if ok else (
+            "no certificates retrieved: " + "; ".join(hard_errors)[:400]
+            if hard_errors
+            else "no certificates retrieved"
+        ),
+    }
 
 
 # ---- VHost brute-force (gobuster vhost against ip:port sockets) -----------
