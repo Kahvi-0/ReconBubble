@@ -7,13 +7,14 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import APIRouter, Request, UploadFile, File, Form, Query, Response
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
+from fastapi.responses import RedirectResponse, JSONResponse, FileResponse, StreamingResponse
 
 from sqlalchemy import select, func, text, or_
 from sqlalchemy.orm import Session
 
 from .. import netproxy
 from .. import nsecatalog
+from .. import smbbrowse
 from ..nse import SEVERITY_RANK
 from ..models import (
     Host,
@@ -117,89 +118,77 @@ from ..state import AppState
 def build(st: AppState, app) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/docs", response_class=HTMLResponse)
-    def docs(request: Request):
-        from ..parsers import DOC_NAME_FIELDS, DOC_SOFTWARE_FIELDS
-        with st.db() as s:
-            rows = (
-                s.execute(select(Document).order_by(Document.created_at.desc()))
-                .scalars()
-                .all()
-            )
-        return st.templates.TemplateResponse(
-            "docs.html", {"request": request, "rows": rows, "name_fields": sorted(DOC_NAME_FIELDS), "software_fields": sorted(DOC_SOFTWARE_FIELDS)}
-        )
-
-    @router.get("/api/doc/names")
-    def api_doc_names(field: str = ""):
-        from ..models import DocExtractedName
-        from ..parsers import DOC_NAME_FIELDS
-        with st.db() as s:
-            q = select(DocExtractedName)
-            if field and field.lower() in {f.lower() for f in DOC_NAME_FIELDS}:
-                q = q.where(DocExtractedName.meta_field == field)
-            q = q.order_by(DocExtractedName.name.asc())
-            rows = s.execute(q).scalars().all()
-        return [
-            {
-                "id": r.id,
-                "name": r.name,
-                "meta_field": r.meta_field,
-                "document_id": r.document_id,
-                "source_file": r.source_file,
-            }
-            for r in rows
-        ]
-
-    @router.post("/api/doc/extract-software")
-    def api_doc_extract_software(fields: str = ""):
-        from ..models import DocExtractedSoftware
-        from ..parsers import DOC_SOFTWARE_FIELDS, extract_doc_software
-        with st.db() as s:
-            s.query(DocExtractedSoftware).delete()
-            s.commit()
-            field_set = {f.strip() for f in fields.split(",") if f.strip()}
-            if not field_set:
-                field_set = DOC_SOFTWARE_FIELDS
-            count = extract_doc_software(s, field_set)
-        return {"ok": True, "count": count}
-
-    @router.get("/api/doc/software")
-    def api_doc_software(field: str = ""):
-        from ..models import DocExtractedSoftware
-        from ..parsers import DOC_SOFTWARE_FIELDS
-        with st.db() as s:
-            q = select(DocExtractedSoftware)
-            if field and field.lower() in {f.lower() for f in DOC_SOFTWARE_FIELDS}:
-                q = q.where(DocExtractedSoftware.meta_field == field)
-            q = q.order_by(DocExtractedSoftware.software.asc())
-            rows = s.execute(q).scalars().all()
-        return [
-            {
-                "id": r.id,
-                "software": r.software,
-                "meta_field": r.meta_field,
-                "document_id": r.document_id,
-                "source_file": r.source_file,
-            }
-            for r in rows
-        ]
-
-    @router.get("/api/doc/{doc_id}")
-    def api_doc(doc_id: int):
+    @router.get("/api/doc/{doc_id}/detail")
+    def api_doc_detail(doc_id: int):
         with st.db() as s:
             d = s.scalar(select(Document).where(Document.id == doc_id))
             if not d:
                 return JSONResponse({"error": "not found"}, status_code=404)
-            return {
-                "id": d.id,
-                "title": d.title,
-                "mime": d.mime,
-                "artifact_id": d.artifact_id,
-            }
+            art = (
+                s.scalar(select(Artifact).where(Artifact.id == d.artifact_id))
+                if d.artifact_id
+                else None
+            )
+            notes = (
+                s.execute(
+                    select(Note)
+                    .where(
+                        Note.object_type == "document",
+                        Note.object_id == doc_id,
+                    )
+                    .order_by(Note.created_at.desc())
+                )
+                .scalars()
+                .all()
+            )
+        meta = json.loads(d.meta_json) if d.meta_json else {}
+        return {
+            "id": d.id,
+            "title": d.title or "",
+            "mime": d.mime or "",
+            "size_bytes": d.size_bytes,
+            "sha256": d.sha256 or "",
+            "created_at": d.created_at.strftime("%Y-%m-%d %H:%M") if d.created_at else "",
+            "artifact_id": d.artifact_id,
+            "stored_path": art.stored_path if art else "",
+            "meta": meta,
+            "notes": [
+                {
+                    "created_at": n.created_at.strftime("%Y-%m-%d %H:%M") if n.created_at else "",
+                    "severity": n.severity or "",
+                    "tags": n.tags or "",
+                    "body": n.body or "",
+                }
+                for n in notes
+            ],
+        }
 
-    @router.get("/api/doc/{doc_id}/text")
-    def api_doc_text(doc_id: int):
+    # Image extension -> media type, mirroring /api/smb/preview so doc
+    # previews and SMB share previews render identically.
+    _DOC_IMAGE_MEDIA = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "gif": "image/gif",
+        "webp": "image/webp",
+        "bmp": "image/bmp",
+        "ico": "image/x-icon",
+        "svg": "image/svg+xml",
+    }
+
+    @router.get("/api/doc/{doc_id}/preview")
+    def api_doc_preview(doc_id: int):
+        """Stream a stored document for inline preview.
+
+        Uses the same contract as ``/api/smb/preview``: ``X-Preview-Kind`` /
+        ``X-Preview-Cache`` / ``X-Preview-Note`` headers with the bytes
+        sniffed as text/image/pdf/binary, and legacy .doc files rendered to
+        PDF with headless LibreOffice when it is installed (the converted
+        PDF is cached in the workspace preview cache, same as the SMB share
+        preview).  Without LibreOffice the response carries
+        ``X-Preview-Note: needs-libreoffice`` so the pane can offer the
+        install command.
+        """
         with st.db() as s:
             d = s.scalar(select(Document).where(Document.id == doc_id))
             if not d:
@@ -217,40 +206,102 @@ def build(st: AppState, app) -> APIRouter:
             path = st.ws.uploads_dir / path
         if not path.exists() or not path.is_file():
             return JSONResponse({"error": "file not found"}, status_code=404)
-
-        suffix = path.suffix.lower()
         try:
-            if suffix == ".docx":
-                import docx
+            size = path.stat().st_size
+        except OSError:
+            return JSONResponse({"error": "file not found"}, status_code=404)
 
-                dfile = docx.Document(str(path))
-                parts = [p.text for p in dfile.paragraphs if (p.text or "").strip()]
-                text_body = "\n".join(parts)
-            elif suffix in (".txt", ".log", ".csv", ".json", ".md"):
-                text_body = path.read_text(encoding="utf-8", errors="replace")
-            else:
-                return JSONResponse(
-                    {"error": "text preview not supported for this file type"},
-                    status_code=400,
-                )
-        except Exception as e:
-            return JSONResponse({"error": f"preview error: {e}"}, status_code=500)
+        cache_dir = st.ws.preview_cache_dir
+        ext = path.suffix.lower().lstrip(".")
 
-        return {"ok": True, "text": text_body[:500000]}
-
-    @router.get("/doc/{doc_id}", response_class=HTMLResponse)
-    def doc_detail(doc_id: int, request: Request):
-        with st.db() as s:
-            d = s.scalar(select(Document).where(Document.id == doc_id))
-            art = (
-                s.scalar(select(Artifact).where(Artifact.id == d.artifact_id))
-                if d
-                else None
+        if ext == "doc" and smbbrowse.find_soffice() is None:
+            # No converter: nothing to stream, just the install prompt.
+            return Response(
+                b"",
+                media_type="application/octet-stream",
+                headers={
+                    "X-Preview-Kind": "binary",
+                    "X-Preview-Cache": "miss",
+                    "X-Preview-Note": "needs-libreoffice",
+                    "Cache-Control": "no-store",
+                },
             )
-        meta = json.loads(d.meta_json) if d else {}
-        return st.templates.TemplateResponse(
-            "doc_detail.html",
-            {"request": request, "doc": d, "artifact": art, "meta": meta},
+
+        if ext == "doc" and 0 < size <= smbbrowse.PREVIEW_MAX_BYTES:
+            if cache_dir is not None:
+                cached_pdf = smbbrowse.doc2pdf_cache_hit_doc(cache_dir, doc_id, size)
+                if cached_pdf is not None:
+                    return Response(
+                        cached_pdf,
+                        media_type="application/pdf",
+                        headers={
+                            "X-Preview-Kind": "pdf",
+                            "X-Preview-Cache": "hit",
+                            "Cache-Control": "no-store",
+                        },
+                    )
+            try:
+                doc_bytes = path.read_bytes()
+            except OSError:
+                return JSONResponse({"error": "could not read file"}, status_code=500)
+            try:
+                # tmp_root keeps the per-call working copy (source + profile)
+                # inside the workspace cache dir: zero footprint outside.
+                pdf = smbbrowse.convert_to_pdf(doc_bytes, path.name, tmp_root=cache_dir)
+            except smbbrowse.DocToPdfError as exc:
+                return Response(
+                    doc_bytes,
+                    media_type="application/octet-stream",
+                    headers={
+                        "X-Preview-Kind": "binary",
+                        "X-Preview-Cache": "miss",
+                        "X-Preview-Note": (
+                            "needs-libreoffice" if exc.reason == "missing"
+                            else "conversion-failed"
+                        ),
+                        "Cache-Control": "no-store",
+                    },
+                )
+            if cache_dir is not None:
+                smbbrowse.doc2pdf_cache_write_doc(cache_dir, doc_id, size, pdf)
+            return Response(
+                pdf,
+                media_type="application/pdf",
+                headers={
+                    "X-Preview-Kind": "pdf",
+                    "X-Preview-Cache": "miss",
+                    "Cache-Control": "no-store",
+                },
+            )
+
+        with path.open("rb") as fh:
+            sample = fh.read(smbbrowse.SNIFF_SIZE)
+        kind = smbbrowse.sniff_kind(sample, size or None)
+        if kind == "text":
+            media = "text/plain; charset=utf-8"
+        elif kind == "image":
+            media = _DOC_IMAGE_MEDIA.get(ext, "image/octet-stream")
+        elif kind == "pdf":
+            media = "application/pdf"
+        else:
+            media = "application/octet-stream"
+
+        def stream():
+            with path.open("rb") as fh:
+                while True:
+                    chunk = fh.read(64 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+
+        return StreamingResponse(
+            stream(),
+            media_type=media,
+            headers={
+                "X-Preview-Kind": kind,
+                "X-Preview-Cache": "miss",
+                "Cache-Control": "no-store",
+            },
         )
 
     @router.post("/api/doc/delete")
@@ -259,7 +310,7 @@ def build(st: AppState, app) -> APIRouter:
         with st.db() as s:
             d = s.scalar(select(Document).where(Document.id == doc_id))
             if not d:
-                return RedirectResponse(url="/docs", status_code=303)
+                return RedirectResponse(url="/osint/hub", status_code=303)
 
             artifact_id = d.artifact_id
 
@@ -302,15 +353,7 @@ def build(st: AppState, app) -> APIRouter:
             except Exception:
                 pass
 
-        return RedirectResponse(url="/docs", status_code=303)
-
-    @router.post("/api/doc/extract-names")
-    def api_doc_extract_names(fields: str = Form("")):
-        from ..parsers import DOC_NAME_FIELDS, extract_doc_names
-        target = set(f.strip() for f in fields.split(",") if f.strip()) if fields else None
-        with st.db() as s:
-            count = extract_doc_names(s, target)
-        return {"ok": True, "count": count}
+        return RedirectResponse(url="/osint/hub", status_code=303)
 
     # Graph API
 

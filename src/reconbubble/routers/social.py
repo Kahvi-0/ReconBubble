@@ -7,7 +7,6 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from fastapi import APIRouter, Request, UploadFile, File, Form, Query, Response
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 
 from sqlalchemy import select, func, text, or_
 from sqlalchemy.orm import Session
@@ -116,22 +115,6 @@ from ..state import AppState
 
 def build(st: AppState, app) -> APIRouter:
     router = APIRouter()
-
-    @router.get("/social", response_class=HTMLResponse)
-    def social_page(request: Request):
-        with st.db() as s:
-            rows = (
-                s.execute(
-                    select(SocialMedia).order_by(
-                        SocialMedia.platform.asc(), SocialMedia.handle.asc()
-                    )
-                )
-                .scalars()
-                .all()
-            )
-        return st.templates.TemplateResponse(
-            "social.html", {"request": request, "rows": rows}
-        )
 
     @router.post("/api/social/create")
     async def api_social_create(

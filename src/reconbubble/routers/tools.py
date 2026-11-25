@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-import asyncio, json, ipaddress, os, re, shlex, socket, ssl, sys, tempfile, uuid
+import asyncio, json, ipaddress, os, re, shlex, shutil, socket, ssl, sys, tempfile, uuid
 import html as html_lib
 from urllib.parse import quote_plus, parse_qsl, urlencode, urlsplit
 from datetime import datetime
@@ -66,6 +66,9 @@ from ..parsers import (
     import_prowl_phase1,
     import_zone_transfers,
     import_smtp,
+    PROWLER_RESULT_FILES,
+    extract_prowler_result_files,
+    ingest_prowler_results,
     import_bbot,
     import_bbot_cloud,
     import_mixed_hashes,
@@ -80,6 +83,8 @@ from ..tools import (
     find_tool,
     run_tool,
     run_cero,
+    run_prowler,
+    run_tls_certs,
     run_vhost_socket,
     run_builtin,
     _CERO_DEFAULT_PORTS,
@@ -263,6 +268,222 @@ def build(st: AppState, app) -> APIRouter:
                         )
                     else:
                         job["current_label"] = "Done: no subdomains found"
+                    if target_errors:
+                        job["current_label"] += " · error (see log)"
+                return
+
+            if spec.name == "prowler":
+                # Prowler is a long multi-phase run: one `prowler full` process
+                # writes result files (results.json, per-phase files,
+                # documents/) into a temp output dir. Store each file as an
+                # artifact, ingest via parsers.ingest_prowler_results, and keep
+                # the stderr (zerolog) stream as the run log.
+                target = (job.get("target") or "").strip()
+                options = job.get("options") or {}
+                job["current_label"] = f"Running {spec.label} full scan against {target}..."
+                job["updated_at"] = datetime.utcnow().isoformat()
+                result = await asyncio.to_thread(
+                    run_prowler,
+                    spec,
+                    target,
+                    st.ws.bin_dir,
+                    job.get("wordlist") or "",
+                    bool(options.get("no_bruteforce")),
+                    tuple(options.get("skip_phases") or ()),
+                    int(options.get("max_downloads") or 100),
+                    int(options.get("max_pages") or 2),
+                    float(options.get("delay") or 10),
+                )
+                out_dir = Path(result["out_dir"]) if result.get("out_dir") else None
+                stored_files: dict = {}
+                documents: dict = {}
+                results_stored = None
+                ingest: dict | None = None
+                last_artifact_id = None
+                if out_dir and out_dir.is_dir():
+                    if (out_dir / "results.json").is_file():
+                        results_stored = st.ws.store_upload(out_dir / "results.json", prefix="tool_run")
+                        # Defensively rebuild any per-phase file missing from
+                        # the output dir out of results.json (Prowler only
+                        # writes files for non-empty phases).
+                        try:
+                            rebuilt = extract_prowler_result_files(
+                                out_dir / "results.json", out_dir / "rebuilt"
+                            )
+                            for fname, p in rebuilt.items():
+                                if fname not in stored_files:
+                                    stored_files[fname] = st.ws.store_upload(p, prefix="tool_run")
+                        except Exception:
+                            pass
+                    for fname in PROWLER_RESULT_FILES:
+                        p = out_dir / fname
+                        if p.is_file() and fname not in stored_files:
+                            stored_files[fname] = st.ws.store_upload(p, prefix="tool_run")
+                    docs_dir = out_dir / "documents"
+                    if docs_dir.is_dir():
+                        for p in sorted(docs_dir.iterdir()):
+                            if p.is_file():
+                                documents[p.name] = st.ws.store_upload(p, prefix="tool_run")
+                if stored_files or documents or results_stored is not None:
+                    if results_stored is None:
+                        results_stored = st.ws.store_text(
+                            (
+                                f"# tool=prowler target={target} job={job_id} "
+                                f"ts={datetime.utcnow().isoformat()}\n"
+                                "# results.json not found; per-phase files ingested directly\n"
+                            ),
+                            f"prowler_results_{job_id[:8]}.txt",
+                            prefix="tool_run",
+                        )
+                    with st.SessionLocal() as s:
+                        art = upsert_artifact(s, "prowl_results", results_stored)
+                        last_artifact_id = art.id
+                        ingest = ingest_prowler_results(s, art, stored_files, documents)
+                logs = _log_lines(result)
+                done_added = ingest["added"] if ingest else 0
+                done_skipped = ingest["skipped"] if ingest else 0
+                header = (
+                    f"# tool=prowler target={target} job={job_id} "
+                    f"ts={datetime.utcnow().isoformat()}"
+                )
+                body = header + "\n"
+                if ingest is not None:
+                    for fname, note in (ingest.get("details") or {}).items():
+                        body += f"# ingest|{fname}: {note}\n"
+                if not result.get("ok"):
+                    err_text = (result.get("error") or "prowler error").replace("\n", " | ")
+                    target_errors.append(err_text)
+                    body += f"# error=prowler: {err_text[:500]}\n"
+                body += f"# done found={done_added} skipped={done_skipped}\n"
+                if logs:
+                    body += "\n".join(logs) + "\n"
+                log_stored = st.ws.store_text(
+                    body, f"prowler_run_{job_id[:8]}.log", prefix="tool_run"
+                )
+                with st.SessionLocal() as s:
+                    upsert_artifact(s, "prowl_run_log", log_stored)
+                total_found = done_added
+                total_added = total_found
+                if out_dir:
+                    shutil.rmtree(out_dir, ignore_errors=True)
+                job["found"] = total_found
+                job["added"] = total_added
+                job["skipped"] = done_skipped
+                job["artifact_id"] = last_artifact_id
+                if target_errors and total_found == 0:
+                    job["status"] = "failed"
+                    job["error"] = target_errors[0][:500]
+                    job["current_label"] = "Failed"
+                else:
+                    job["status"] = "completed"
+                    job["error"] = ""
+                    label_bits = []
+                    for fname, note in ((ingest or {}).get("details") or {}).items():
+                        m = re.match(r"imported (\d+) via \w+", note)
+                        if m:
+                            short = re.sub(r"\.(json|txt|csv)$", "", fname)
+                            label_bits.append(f"{short} {m.group(1)}")
+                    if label_bits:
+                        job["current_label"] = "Done: " + ", ".join(label_bits)
+                    else:
+                        job["current_label"] = "Done: no data ingested"
+                    if target_errors:
+                        job["current_label"] += " · error (see log)"
+                return
+
+            if spec.name == "tls_certs":
+                # In-process TLS probe: one certificate record per host:port,
+                # upserted into the tls_certs raw table (TLS Certificates page).
+                ports = (job.get("ports") or "443").strip()
+                host_list = [h for h in targets if h]
+                job["current_label"] = (
+                    f"Probing {len(host_list)} host(s) for TLS certificates (ports {ports})..."
+                )
+                job["updated_at"] = datetime.utcnow().isoformat()
+                result = await asyncio.to_thread(run_tls_certs, host_list, ports)
+                certs = result.get("certs") or []
+                ok_certs = [c for c in certs if c.get("ok")]
+                header = (
+                    f"# tool=tls_certs hosts={len(host_list)} ports={ports} job={job_id} "
+                    f"ts={datetime.utcnow().isoformat()}"
+                )
+                body = header + "\n"
+                if not result.get("ok") and result.get("raw_error"):
+                    err_text = result["raw_error"].strip()
+                    target_errors.append(err_text[:300])
+                    body += f"# error=tlscerts: {err_text[:500].replace(chr(10), ' | ')}\n"
+                for rec in certs:
+                    if rec.get("ok"):
+                        body += (
+                            f"{rec['host']}:{rec['port']} CN={rec['subject_cn']} "
+                            f"issuer={rec['issuer']} serial={rec['serial']} "
+                            f"valid {rec['not_before']} -> {rec['not_after']} "
+                            f"sha256={rec['sha256']}\n"
+                        )
+                    else:
+                        body += f"{rec['host']}:{rec['port']} {rec.get('error') or 'error'}\n"
+                body += f"# done found={len(ok_certs)} added={len(ok_certs)}\n"
+                logs = _log_lines(result)
+                if logs:
+                    body += "\n".join(logs) + "\n"
+                stored = st.ws.store_text(
+                    body, f"tls_certs_{job_id[:8]}.txt", prefix="tool_run"
+                )
+                with st.SessionLocal() as s:
+                    art = upsert_artifact(s, "tls_run_log", stored)
+                    last_artifact_id = art.id
+                if ok_certs:
+                    now_iso = datetime.utcnow().isoformat()
+                    with st.db() as s:
+                        for rec in ok_certs:
+                            s.execute(
+                                text(
+                                    "INSERT INTO tls_certs "
+                                    "(host, port, subject_cn, subject, issuer, serial, sans, "
+                                    " not_before, not_after, sha256, source_job, created_at) "
+                                    "VALUES (:host, :port, :subject_cn, :subject, :issuer, :serial, "
+                                    " :sans, :not_before, :not_after, :sha256, :source_job, :created_at) "
+                                    "ON CONFLICT(host, port) DO UPDATE SET "
+                                    "subject_cn=excluded.subject_cn, subject=excluded.subject, "
+                                    "issuer=excluded.issuer, serial=excluded.serial, sans=excluded.sans, "
+                                    "not_before=excluded.not_before, not_after=excluded.not_after, "
+                                    "sha256=excluded.sha256, source_job=excluded.source_job, "
+                                    "created_at=excluded.created_at"
+                                ),
+                                {
+                                    "host": rec["host"],
+                                    "port": rec["port"],
+                                    "subject_cn": rec["subject_cn"],
+                                    "subject": rec["subject"],
+                                    "issuer": rec["issuer"],
+                                    "serial": rec["serial"],
+                                    "sans": rec["sans"],
+                                    "not_before": rec["not_before"],
+                                    "not_after": rec["not_after"],
+                                    "sha256": rec["sha256"],
+                                    "source_job": job_id,
+                                    "created_at": now_iso,
+                                },
+                            )
+                        s.commit()
+                total_found = len(ok_certs)
+                total_added = len(ok_certs)
+                job["found"] = total_found
+                job["added"] = total_added
+                job["skipped"] = max(0, len(certs) - len(ok_certs))
+                job["artifact_id"] = last_artifact_id
+                if target_errors and total_found == 0:
+                    job["status"] = "failed"
+                    job["error"] = target_errors[0][:500]
+                    job["current_label"] = "Failed"
+                else:
+                    job["status"] = "completed"
+                    job["error"] = ""
+                    job["current_label"] = (
+                        f"Done: {total_added} certificate(s) stored"
+                        if total_added
+                        else "Done: no certificates retrieved"
+                    )
                     if target_errors:
                         job["current_label"] += " · error (see log)"
                 return
@@ -815,6 +1036,139 @@ def build(st: AppState, app) -> APIRouter:
                 "target": f"{len(hosts)} host(s)",
                 "targets": hosts,
                 "ports": ports,
+                "status": "pending",
+                "current_label": "Queued...",
+                "keys_applied": sorted(st._tool_keys_for(spec.name).keys()),
+                "found": 0,
+                "added": 0,
+                "skipped": 0,
+                "artifact_id": None,
+                "error": "",
+                "created_at": now,
+                "updated_at": now,
+                "finished_at": None,
+            }
+            app.state.tool_jobs[job_id] = job
+            app.state.tool_queue_ids.append(job_id)
+            app.state.tool_queue.put_nowait(job_id)
+            _ensure_tool_worker()
+            return {"ok": True, "job": _tool_public_job(job), "queue_position": _tool_queue_position(job_id)}
+        if spec.name == "tls_certs":
+            raw_hosts = body.get("hosts")
+            if not isinstance(raw_hosts, list):
+                return JSONResponse({"ok": False, "error": "hosts must be a list"}, status_code=400)
+            hosts: list = []
+            for h in raw_hosts:
+                h = str(h or "").strip()
+                if not h:
+                    continue
+                if h.startswith("-"):
+                    return JSONResponse({"ok": False, "error": "invalid host"}, status_code=400)
+                if h in hosts:
+                    continue
+                hosts.append(h)
+            if not hosts:
+                return JSONResponse({"ok": False, "error": "select at least one host"}, status_code=400)
+            if len(hosts) > 500:
+                return JSONResponse(
+                    {"ok": False, "error": "too many hosts (max 500 per run)"}, status_code=400
+                )
+            ports = re.sub(r"[^0-9,]", "", str(body.get("ports") or "")).strip(",")
+            if not ports:
+                return JSONResponse({"ok": False, "error": "ports are required"}, status_code=400)
+            _prune_tool_jobs()
+            if len(app.state.tool_queue_ids) >= 5:
+                return JSONResponse(
+                    {"ok": False, "error": "Tool run queue is full (max 5 waiting)"},
+                    status_code=409,
+                )
+            job_id = uuid.uuid4().hex
+            now = datetime.utcnow()
+            job = {
+                "id": job_id,
+                "tool": spec.name,
+                "target": f"{len(hosts)} host(s)",
+                "targets": hosts,
+                "ports": ports,
+                "status": "pending",
+                "current_label": "Queued...",
+                "keys_applied": sorted(st._tool_keys_for(spec.name).keys()),
+                "found": 0,
+                "added": 0,
+                "skipped": 0,
+                "artifact_id": None,
+                "error": "",
+                "created_at": now,
+                "updated_at": now,
+                "finished_at": None,
+            }
+            app.state.tool_jobs[job_id] = job
+            app.state.tool_queue_ids.append(job_id)
+            app.state.tool_queue.put_nowait(job_id)
+            _ensure_tool_worker()
+            return {"ok": True, "job": _tool_public_job(job), "queue_position": _tool_queue_position(job_id)}
+        if spec.name == "prowler":
+            if len(target_raw.split()) > 1:
+                return JSONResponse(
+                    {"ok": False, "error": "Prowler takes a single target domain"},
+                    status_code=400,
+                )
+            try:
+                target = validate_target(target_raw)
+            except ValueError as e:
+                return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+            wordlist = str(body.get("wordlist") or "").strip()
+            if wordlist:
+                try:
+                    wordlist = validate_wordlist(wordlist)
+                except ValueError as e:
+                    return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+            options_raw = body.get("options") or {}
+            if not isinstance(options_raw, dict):
+                return JSONResponse({"ok": False, "error": "options must be an object"}, status_code=400)
+            try:
+                options = {
+                    "no_bruteforce": bool(options_raw.get("no_bruteforce")),
+                    "skip_phases": [
+                        str(p).strip()
+                        for p in (options_raw.get("skip_phases") or [])
+                        if str(p).strip()
+                    ],
+                    "max_downloads": int(options_raw.get("max_downloads") or 100),
+                    "max_pages": int(options_raw.get("max_pages") or 2),
+                    "delay": float(options_raw.get("delay") or 10),
+                }
+            except (TypeError, ValueError):
+                return JSONResponse({"ok": False, "error": "invalid option value"}, status_code=400)
+            if not (0 <= options["delay"] <= 3600):
+                return JSONResponse({"ok": False, "error": "delay must be 0-3600 seconds"}, status_code=400)
+            if not (1 <= options["max_downloads"] <= 500):
+                return JSONResponse({"ok": False, "error": "max_downloads must be 1-500"}, status_code=400)
+            if not (1 <= options["max_pages"] <= 50):
+                return JSONResponse({"ok": False, "error": "max_pages must be 1-50"}, status_code=400)
+            if not find_tool(spec.name, spec, st.ws.bin_dir):
+                return JSONResponse(
+                    {
+                        "ok": False,
+                        "error": f"{spec.label} is not installed — see the Tools page for install commands.",
+                    },
+                    status_code=400,
+                )
+            _prune_tool_jobs()
+            if len(app.state.tool_queue_ids) >= 5:
+                return JSONResponse(
+                    {"ok": False, "error": "Tool run queue is full (max 5 waiting)"},
+                    status_code=409,
+                )
+            job_id = uuid.uuid4().hex
+            now = datetime.utcnow()
+            job = {
+                "id": job_id,
+                "tool": spec.name,
+                "target": target,
+                "targets": [target],
+                "wordlist": wordlist,
+                "options": options,
                 "status": "pending",
                 "current_label": "Queued...",
                 "keys_applied": sorted(st._tool_keys_for(spec.name).keys()),

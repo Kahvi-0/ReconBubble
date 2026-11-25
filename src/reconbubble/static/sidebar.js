@@ -1019,18 +1019,15 @@ async function openCloud(id) {
   });
 }
 
-async function openRegistrarEdit(rootDomain) {
-    const resp = await fetch(`/api/registrar?domain=${encodeURIComponent(rootDomain)}`, { cache: "no-store" });
-  if (!resp.ok) return;
+async function loadRegistrarData(rootDomain) {
+  const resp = await fetch(`/api/registrar?domain=${encodeURIComponent(rootDomain)}`, { cache: "no-store" });
+  if (!resp.ok) return null;
   const data = await resp.json();
-  const item = data.item || {};
+  return { item: data.item || {}, subdomainText: data.subdomain_ips || "" };
+}
+
+function renderRegistrarEdit(item, subdomainText, rootDomain) {
   const hasExisting = !!item.id;
-  const subdomainText = data.subdomain_ips || '';
-
-  const backBtn = document.getElementById("sidebarBack");
-  if (backBtn) backBtn.style.display = "none";
-  title.textContent = `Registrar: ${esc(rootDomain)}`;
-
   body.innerHTML = `
     <div class="card">
       <h2>Edit registrar info</h2>
@@ -1055,7 +1052,6 @@ async function openRegistrarEdit(rootDomain) {
       </form>
     </div>
   `;
-  show();
 
   const form = document.getElementById("registrarEditForm");
   const msg = document.getElementById("registrarEditMsg");
@@ -1080,10 +1076,158 @@ async function openRegistrarEdit(rootDomain) {
     deleteBtn.addEventListener("click", async () => {
       if (!confirm("Delete this registrar entry?")) return;
       const fd = new FormData(form);
+      fd.set("domain", rootDomain);
       const r = await fetch("/api/registrar/delete", { method: "POST", body: fd });
       if (r.ok) location.reload();
     });
   }
+}
+
+async function openRegistrarEdit(rootDomain) {
+  const loaded = await loadRegistrarData(rootDomain);
+  if (!loaded) return;
+  const backBtn = document.getElementById("sidebarBack");
+  if (backBtn) backBtn.style.display = "none";
+  title.textContent = `Registrar: ${esc(rootDomain)}`;
+  renderRegistrarEdit(loaded.item, loaded.subdomainText, rootDomain);
+  show();
+}
+
+// Read-only registrar card (full-page parity: badges + netblock chips +
+// subdomain/IP rows) with Edit / Delete / + Topology / Copy actions.
+async function openRegistrarDetail(rootDomain) {
+  const loaded = await loadRegistrarData(rootDomain);
+  if (!loaded) return;
+  const item = loaded.item;
+  const subdomainText = loaded.subdomainText;
+
+  const backBtn = document.getElementById("sidebarBack");
+  if (backBtn) backBtn.style.display = "none";
+  title.textContent = `Registrar: ${esc(rootDomain)}`;
+
+  const nbList = (item.netblocks || "").split(",").map((n) => n.trim()).filter(Boolean);
+  const subRows = subdomainText.split("\n").map((l) => l.trim()).filter(Boolean).map((line) => {
+    const parts = line.split(/\s+/);
+    const ipHtml = parts.length > 1
+      ? `<span style="display:flex; flex-direction:column; gap:2px;">${parts.slice(1).map((ip) => `<span class="ip-chip">${esc(ip)}</span>`).join("")}</span>`
+      : '<span class="muted">no IPs</span>';
+    return `<div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+      <span style="font-family:monospace; color:#93c5fd;">${esc(parts[0])}</span>${ipHtml}
+    </div>`;
+  }).join("");
+
+  body.innerHTML = `
+    <div class="card">
+      <h2>Registrar info</h2>
+      <div style="display:flex; flex-direction:column; gap:10px;">
+        <div><b>Root domain:</b> <span class="badge">${esc(item.domain || rootDomain)}</span></div>
+        <div><b>ASN:</b> ${item.asn ? `<span class="badge" style="background:#1e3a5f; color:#bfdbfe;">${esc(item.asn)}</span>` : '<span class="muted">—</span>'}</div>
+        <div><b>Registrar:</b> ${item.registrar ? `<span class="badge" style="background:#312e81; color:#e0e7ff;">${esc(item.registrar)}</span>` : '<span class="muted">—</span>'}</div>
+        <div><b>Netblocks:</b> ${nbList.length
+          ? `<div style="display:flex; flex-direction:column; gap:3px;">${nbList.map((nb) => `<span class="ip-chip">${esc(nb)}</span>`).join("")}</div>`
+          : '<span class="muted">—</span>'}</div>
+      </div>
+      <h2 style="margin:16px 0 8px;">Subdomains &amp; IPs</h2>
+      ${subRows ? `<div style="display:flex; flex-direction:column; gap:4px;">${subRows}</div>` : '<span class="muted">—</span>'}
+      <div style="display:flex; gap:8px; margin-top:14px; flex-wrap:wrap;">
+        <button class="btn" id="registrarDetailEditBtn" type="button">Edit</button>
+        <button class="btn" id="registrarDetailDeleteBtn" type="button" style="background:#7f1d1d; color:#fecaca;">Delete</button>
+        <button class="btn" id="registrarDetailTopologyBtn" type="button" style="background:#065f46; color:#a7f3d0;">+ Topology</button>
+        <button class="btn" id="registrarDetailCopyBtn" type="button" style="background:#374151; color:#d1d5db;">Copy</button>
+      </div>
+    </div>
+  `;
+  show();
+
+  document.getElementById("registrarDetailEditBtn").addEventListener("click", () => {
+    renderRegistrarEdit(item, subdomainText, rootDomain);
+  });
+
+  document.getElementById("registrarDetailDeleteBtn").addEventListener("click", async () => {
+    if (!confirm(`Remove "${rootDomain}" from the registrar list? (data is kept)`)) return;
+    const fd = new FormData();
+    fd.append("domain", rootDomain);
+    await fetch("/api/registrar/delete", { method: "POST", body: fd });
+    location.reload();
+  });
+
+  const topoBtn = document.getElementById("registrarDetailTopologyBtn");
+  const setTopoDisabled = (d) => {
+    topoBtn.disabled = d;
+    topoBtn.classList.toggle("btn--disabled", d);
+  };
+  (async () => {
+    let inTopology = false;
+    try {
+      const r = await fetch("/api/topology");
+      if (r.ok) {
+        const j = await r.json();
+        if (j.ok && j.map && j.map.nodes) {
+          inTopology = j.map.nodes.some((n) => n.label === rootDomain && n.type === "domain");
+        }
+      }
+    } catch (err) {}
+    if (inTopology) {
+      topoBtn.textContent = "In Topology ✓";
+      setTopoDisabled(true);
+      return;
+    }
+    topoBtn.addEventListener("click", async () => {
+      topoBtn.disabled = true;
+      topoBtn.textContent = "Adding...";
+      try {
+        const r = await fetch("/api/topology/add-domain", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            domain: rootDomain,
+            asn: item.asn || "",
+            registrar: item.registrar || "",
+            netblocks: item.netblocks || "",
+            subdomain_ips: subdomainText,
+          }),
+        });
+        const j = await r.json();
+        if (j.ok) {
+          topoBtn.textContent = "In Topology ✓";
+          setTopoDisabled(true);
+        } else {
+          alert(j.error || "Failed to add domain to topology");
+          topoBtn.textContent = "+ Topology";
+          setTopoDisabled(false);
+        }
+      } catch (err) {
+        alert("Error: " + err.message);
+        topoBtn.textContent = "+ Topology";
+        setTopoDisabled(false);
+      }
+    });
+  })();
+
+  const copyBtn = document.getElementById("registrarDetailCopyBtn");
+  copyBtn.addEventListener("click", async () => {
+    try {
+      const r = await fetch(`/api/registrar/copy?domain=${encodeURIComponent(rootDomain)}`);
+      const j = await r.json();
+      if (j.text) {
+        if (j.html) {
+          const htmlBlob = new Blob([j.html], { type: "text/html" });
+          const textBlob = new Blob([j.text], { type: "text/plain" });
+          const clipItem = new ClipboardItem({
+            "text/html": htmlBlob,
+            "text/plain": textBlob,
+          });
+          await navigator.clipboard.write([clipItem]);
+        } else {
+          await navigator.clipboard.writeText(j.text);
+        }
+        copyBtn.textContent = "Copied ✓";
+        setTimeout(() => { copyBtn.textContent = "Copy"; }, 2000);
+      }
+    } catch (err) {
+      alert("Copy failed: " + err.message);
+    }
+  });
 }
 
 async function openRegistrarCreate() {
@@ -1133,6 +1277,6 @@ async function openRegistrarCreate() {
   document.getElementById("registrarCancelBtn").addEventListener("click", hide);
 }
 
-window.ReconSidebar = { openHost, openService, openSubdomain, openHostCreate, openCloud, openCloudCreate, openRegistrarEdit, openRegistrarCreate, openServiceCreatePopup, hide };
+window.ReconSidebar = { show, hide, openHost, openService, openSubdomain, openHostCreate, openCloud, openCloudCreate, openRegistrarEdit, openRegistrarDetail, openRegistrarCreate, openServiceCreatePopup };
 
 })();

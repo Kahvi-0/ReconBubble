@@ -66,6 +66,8 @@ from ..parsers import (
     import_prowl_phase1,
     import_zone_transfers,
     import_smtp,
+    extract_prowler_result_files,
+    ingest_prowler_results,
     import_bbot,
     import_bbot_cloud,
     import_mixed_hashes,
@@ -153,6 +155,7 @@ def build(st: AppState, app) -> APIRouter:
             ("nmap_xml", "Nmap XML"),
             ("doc", "OSINT document"),
             ("prowl_phase1", "Prowler phase 1"),
+            ("prowl_results", "Prowler results.json"),
             ("zone_transfers", "Prowler zone transfers"),
             ("smtp", "Prowler SMTP"),
             ("names_emails", "Names - Email List"),
@@ -236,13 +239,14 @@ def build(st: AppState, app) -> APIRouter:
             "nmap_xml": "/assets",
             "subdomains": "/subdomains",
             "names_emails": "/users",
-            "doc": "/docs",
+            "doc": "/osint/hub",
             "ad_users": "/users",
             "name_creds": "/users",
             "urls": "/assets",
             "names": "/users",
             "bbot": "/subdomains",
             "prowl_phase1": "/subdomains",
+            "prowl_results": "/subdomains",
             "zone_transfers": "/subdomains",
             "smtp": "/users",
             "mixed_hashes": "/users",
@@ -299,6 +303,21 @@ def build(st: AppState, app) -> APIRouter:
                     res = {"added": import_names(s, art, p), "skipped": 0, "unmatched": []}
                 elif kind == "prowl_phase1":
                     res = {"added": import_prowl_phase1(s, art, p), "skipped": 0, "unmatched": []}
+                elif kind == "prowl_results":
+                    # Full Prowler run output (results.json). Rebuild the
+                    # per-phase files from it, store each as its own
+                    # artifact, then run the standard ingest pipeline.
+                    # documents/ cannot arrive via manual upload — users
+                    # upload those separately with the "doc" type.
+                    with tempfile.TemporaryDirectory(prefix="prowl_results_") as tmp:
+                        derived = extract_prowler_result_files(p, Path(tmp))
+                        # Copy the derived files into the permanent uploads dir
+                        # while the temp dir (and its files) still exist.
+                        stored_files = {
+                            fname: st.ws.store_upload(dp, prefix="prowl_results")
+                            for fname, dp in derived.items()
+                        }
+                    res = ingest_prowler_results(s, art, stored_files)
                 elif kind == "zone_transfers":
                     res = {"added": import_zone_transfers(s, art, p), "skipped": 0, "unmatched": []}
                 elif kind == "smtp":
@@ -395,6 +414,7 @@ def build(st: AppState, app) -> APIRouter:
                 "bbot": "BBOT",
                 "bbot_cloud": "BBOT Cloud",
                 "prowl_phase1": "Prowler Phase 1",
+                "prowl_results": "Prowler Results",
                 "zone_transfers": "Prowler Phase 2",
                 "smtp": "Prowler Phase 3",
                 "smb_shares": "SMB Shares",
@@ -422,6 +442,7 @@ def build(st: AppState, app) -> APIRouter:
                     "subdomains": "pasted_subdomains.txt",
                     "names_emails": "pasted_names_emails.txt",
                     "doc": "pasted_document.bin",
+                    "prowl_results": "pasted_results.json",
                     "ad_users": "pasted_ad_users.txt",
                     "name_creds": "pasted_name_creds.txt",
                     "urls": "pasted_urls.txt",

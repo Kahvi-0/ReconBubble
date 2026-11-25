@@ -113,6 +113,19 @@ from ..helpers import (
 )
 from ..state import AppState
 
+# Error text Playwright emits when the Chromium process dies mid-batch.
+_SCREENSHOT_BROWSER_DEAD_MARKERS = (
+    "target page, context or browser has been closed",
+    "browser has been closed",
+    "browser closed",
+    "connection closed",
+)
+# Recycle the browser context periodically so long batches do not accumulate
+# pages that can exhaust renderer memory.
+_SCREENSHOT_CONTEXT_RECYCLE_EVERY = 25
+# Always passed at launch: avoids the 64MB /dev/shm limit in containers.
+_SCREENSHOT_BASE_LAUNCH_ARGS = ["--disable-dev-shm-usage"]
+
 
 def build(st: AppState, app) -> APIRouter:
     router = APIRouter()
@@ -380,18 +393,63 @@ def build(st: AppState, app) -> APIRouter:
         screenshots_dir.mkdir(parents=True, exist_ok=True)
 
         async with async_playwright() as p:
-            async def capture_targets(target_list: list[dict], launch_args: list[str] | None = None) -> list[dict]:
+            async def start_browser(extra_args: list[str] | None = None):
                 try:
                     browser = await p.chromium.launch(
                         headless=True,
-                        args=launch_args or [],
+                        args=[*_SCREENSHOT_BASE_LAUNCH_ARGS, *(extra_args or [])],
                         **_screenshot_proxy_options(),
                         **_screenshot_browser_options(),
                     )
                 except Exception as e:
                     raise _screenshot_browser_launch_error(e) from e
                 context = await browser.new_context(ignore_https_errors=True)
+                return browser, context
+
+            async def capture_targets(target_list: list[dict], launch_args: list[str] | None = None) -> list[dict]:
+                browser, context = await start_browser(launch_args)
                 batch_results: list[dict] = []
+                targets_since_context = 0
+                dead_forever = False
+                restart_failed_error = ""
+
+                def _browser_alive() -> bool:
+                    try:
+                        return browser is not None and bool(browser.is_connected())
+                    except Exception:
+                        return False
+
+                def _browser_dead_error(exc: Exception) -> bool:
+                    if not _browser_alive():
+                        return True
+                    message = str(exc or "").lower()
+                    return any(marker in message for marker in _SCREENSHOT_BROWSER_DEAD_MARKERS)
+
+                async def _restart_browser() -> bool:
+                    nonlocal browser, context, dead_forever, restart_failed_error, targets_since_context
+                    for stale in (context, browser):
+                        try:
+                            await stale.close()
+                        except Exception:
+                            pass
+                    try:
+                        browser, context = await start_browser(launch_args)
+                    except Exception as e:
+                        dead_forever = True
+                        restart_failed_error = (
+                            f"Screenshot browser crashed and could not be restarted: {str(e)[:200]}"
+                        )
+                        return False
+                    targets_since_context = 0
+                    return True
+
+                def _record_result(rec: WebScreenshot, result: dict) -> None:
+                    with st.SessionLocal() as s:
+                        s.add(rec)
+                        s.commit()
+                    batch_results.append(result)
+                    if progress_cb is not None:
+                        progress_cb(result)
 
                 for target in target_list:
                     if cancel_check is not None and cancel_check():
@@ -406,6 +464,50 @@ def build(st: AppState, app) -> APIRouter:
                                 {"fqdn": fqdn, "port": port, "ip": ip, "mode": capture_mode}
                             )
                         )
+
+                    if dead_forever:
+                        # The browser is unrecoverable: record the remaining
+                        # targets as failures with the clear message instead of
+                        # cascading raw Playwright errors.
+                        _record_result(
+                            WebScreenshot(
+                                fqdn=fqdn,
+                                port=port,
+                                scheme="https",
+                                screenshot_path="",
+                                http_status=0,
+                                http_title="",
+                                http_content_length=0,
+                                error=restart_failed_error,
+                                target_ip=ip,
+                                capture_mode=capture_mode,
+                                created_at=datetime.utcnow(),
+                            ),
+                            {
+                                "fqdn": fqdn,
+                                "port": port,
+                                "ip": ip,
+                                "mode": capture_mode,
+                                "ok": False,
+                                "http_status": 0,
+                                "http_title": "",
+                                "file": "",
+                                "error": restart_failed_error,
+                            },
+                        )
+                        continue
+
+                    targets_since_context += 1
+                    if targets_since_context >= _SCREENSHOT_CONTEXT_RECYCLE_EVERY:
+                        try:
+                            await context.close()
+                        except Exception:
+                            pass
+                        try:
+                            context = await browser.new_context(ignore_https_errors=True)
+                        except Exception:
+                            pass  # the pre-capture check below restarts the browser if it died
+                        targets_since_context = 0
 
                     ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
                     safe_fqdn = fqdn.replace(".", "-")
@@ -423,54 +525,89 @@ def build(st: AppState, app) -> APIRouter:
                     http_content_length = 0
                     error = ""
                     scheme = "https"
+                    restarts_used = 0
+                    pending_scheme = None
+                    schemes = iter(["https", "http"])
 
-                    for try_scheme in ["https", "http"]:
+                    while True:
                         if cancel_check is not None and cancel_check():
                             break
-                        url = f"{try_scheme}://{fqdn}:{port}"
+                        try_scheme = pending_scheme if pending_scheme is not None else next(schemes, None)
+                        if try_scheme is None:
+                            break
+                        pending_scheme = None
                         scheme = try_scheme
+                        url = f"{try_scheme}://{fqdn}:{port}"
                         page = None
-                        try:
-                            page = await context.new_page()
-                            resp = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
-                            if resp is not None:
-                                http_status = resp.status
-                                headers = resp.headers
-                                content_length_str = headers.get("content-length", "")
-                                http_content_length = int(content_length_str) if content_length_str.isdigit() else 0
+                        dead = False
+                        if not _browser_alive():
+                            error = "Screenshot browser crashed; attempting restart."
+                            dead = True
+                        else:
+                            try:
+                                page = await context.new_page()
+                                resp = await page.goto(url, timeout=30000, wait_until="domcontentloaded")
+                                if resp is not None:
+                                    http_status = resp.status
+                                    headers = resp.headers
+                                    content_length_str = headers.get("content-length", "")
+                                    http_content_length = int(content_length_str) if content_length_str.isdigit() else 0
 
-                                try:
-                                    http_title = await page.title()
-                                except Exception:
-                                    http_title = ""
+                                    try:
+                                        http_title = await page.title()
+                                    except Exception:
+                                        http_title = ""
 
-                                if delay_ms > 0:
-                                    await _screenshot_sleep_cancelable(delay_ms / 1000.0, cancel_check)
-                                if cancel_check is not None and cancel_check():
+                                    if delay_ms > 0:
+                                        await _screenshot_sleep_cancelable(delay_ms / 1000.0, cancel_check)
+                                    if cancel_check is not None and cancel_check():
+                                        try:
+                                            await page.close()
+                                        except Exception:
+                                            pass
+                                        page = None
+                                        break
+
+                                    await page.screenshot(path=str(filepath), clip={"x": 0, "y": 0, "width": 1280, "height": 720})
+                                    success = True
+                                    await page.close()
+                                    page = None
+                                    break
+                            except Exception as e:
+                                error = str(e)[:255]
+                                dead = _browser_dead_error(e)
+                                if page is not None:
                                     try:
                                         await page.close()
                                     except Exception:
                                         pass
-                                    page = None
-                                    break
 
-                                await page.screenshot(path=str(filepath), clip={"x": 0, "y": 0, "width": 1280, "height": 720})
-                                success = True
-                                await page.close()
-                                page = None
+                        if success:
+                            break
+                        if dead:
+                            # The browser process died: restart it and retry the
+                            # same scheme once. If the restart itself fails, stop
+                            # the batch (remaining targets are recorded below).
+                            if restarts_used >= 1:
+                                error = "Screenshot browser crashed repeatedly during this batch."
                                 break
-                        except Exception as e:
-                            error = str(e)[:255]
-                            if page is not None:
-                                try:
-                                    await page.close()
-                                except Exception:
-                                    pass
-                            continue
+                            restarts_used += 1
+                            if await _restart_browser():
+                                # The error above came from the dead browser; the
+                                # retry runs against a fresh one, so start clean.
+                                error = ""
+                                pending_scheme = try_scheme
+                                continue
+                            break
 
                     # Cancelled: don't record a result for this skipped target.
                     if cancel_check is not None and cancel_check():
                         break
+
+                    if dead_forever:
+                        # Record this target with the clear message; the remaining
+                        # targets use the dead_forever fast path above.
+                        error = restart_failed_error
 
                     rec = WebScreenshot(
                         fqdn=fqdn,
@@ -485,27 +622,26 @@ def build(st: AppState, app) -> APIRouter:
                         capture_mode=capture_mode,
                         created_at=datetime.utcnow(),
                     )
-                    with st.SessionLocal() as s:
-                        s.add(rec)
-                        s.commit()
+                    _record_result(
+                        rec,
+                        {
+                            "fqdn": fqdn,
+                            "port": port,
+                            "ip": ip,
+                            "mode": capture_mode,
+                            "ok": success,
+                            "http_status": http_status,
+                            "http_title": http_title,
+                            "file": filepath.name if success else "",
+                            "error": error,
+                        },
+                    )
 
-                    result = {
-                        "fqdn": fqdn,
-                        "port": port,
-                        "ip": ip,
-                        "mode": capture_mode,
-                        "ok": success,
-                        "http_status": http_status,
-                        "http_title": http_title,
-                        "file": filepath.name if success else "",
-                        "error": error,
-                    }
-                    batch_results.append(result)
-                    if progress_cb is not None:
-                        progress_cb(result)
-
-                await context.close()
-                await browser.close()
+                for stale in (context, browser):
+                    try:
+                        await stale.close()
+                    except Exception:
+                        pass
                 return batch_results
 
             auto_targets = [t for t in clean_targets if not t["ip"]]
@@ -735,9 +871,11 @@ def build(st: AppState, app) -> APIRouter:
                 all_ips_map.setdefault(k.lower(), v)
             prowl_map: dict[str, str] = {}
             complete_map: dict[str, int] = {}
+            inprogress_map: dict[str, int] = {}
             for x in s.execute(select(Subdomain)).scalars().all():
                 prowl_map[x.fqdn.lower()] = x.prowl_ips or ""
                 complete_map[x.fqdn.lower()] = getattr(x, "complete", 0) or 0
+                inprogress_map[x.fqdn.lower()] = getattr(x, "inprogress", 0) or 0
         hosts = []
         for fqdn, r in latest.items():
             resolved = all_ips_map.get(fqdn, [])
@@ -780,6 +918,7 @@ def build(st: AppState, app) -> APIRouter:
                     "http_title": r.http_title or "",
                     "created_at": r.created_at.isoformat() if r.created_at else "",
                     "complete": complete_map.get(fqdn, 0),
+                    "inprogress": inprogress_map.get(fqdn, 0),
                     "url": url,
                 }
             )

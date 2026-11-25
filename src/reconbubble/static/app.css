@@ -1298,3 +1298,19 @@ body.notes-open .domain-corr-panel.active { right: calc(min(480px, 90vw) + 10px)
 #timelineContent {
   overscroll-behavior: contain;
 }
+
+/* --- Shared document preview (hub overlay + doc detail; mirrors SMB pane) --- */
+.smb-preview-sheetbar { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.smb-preview-sheetbar label { font-size: 12px; color: #94a3b8; }
+.smb-preview-sheetbar select { background: #1a2332; color: #e8e8e8; border: 1px solid #334155; border-radius: 3px; font-size: 12px; padding: 2px 6px; }
+.smb-preview-sheet { width: 100%; border-collapse: collapse; font-size: 12px; }
+.smb-preview-sheet td { border: 1px solid #1e2630; padding: 3px 8px; text-align: left; white-space: nowrap; color: #e8e8e8; }
+.smb-preview-docx { font-size: 13px; line-height: 1.55; color: #e8e8e8; }
+.smb-preview-docx img { max-width: 100%; height: auto; }
+.smb-preview-docx table { border-collapse: collapse; }
+.smb-preview-docx td, .smb-preview-docx th { border: 1px solid #334155; padding: 3px 8px; }
+.smb-preview-docx p { margin: 0 0 8px; }
+/* Preview containers render the same element types as .smb-preview-body */
+#hubDocContent pre, #docContent pre { margin: 0; font-family: 'Courier New', monospace; font-size: 12px; white-space: pre-wrap; word-break: break-word; color: #e8e8e8; max-height: 80vh; overflow: auto; }
+#hubDocContent img, #docContent img { max-width: 100%; height: auto; display: block; }
+#hubDocContent iframe, #docContent iframe { width: 100%; height: 70vh; min-height: 320px; border: none; display: block; }

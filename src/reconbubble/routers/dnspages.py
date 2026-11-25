@@ -117,43 +117,44 @@ from ..state import AppState
 def build(st: AppState, app) -> APIRouter:
     router = APIRouter()
 
-    @router.get("/dns", response_class=HTMLResponse)
-    def dns_page(request: Request):
+    @router.get("/tls-certs", response_class=HTMLResponse)
+    def tls_certs_page(request: Request):
         from sqlalchemy import text
 
         with st.db() as s:
             rows = s.execute(
                 text(
-                    "SELECT domain, nameserver, status FROM dns_zone_transfers ORDER BY domain ASC, nameserver ASC"
+                    "SELECT host, port, subject_cn, subject, issuer, serial, sans, "
+                    "not_before, not_after, sha256, source_job, created_at "
+                    "FROM tls_certs ORDER BY sha256 ASC, host ASC, port ASC"
                 )
             ).fetchall()
-            # Group by domain
-            grouped = {}
-            for r in rows:
-                domain = r[0] or "unknown"
-                if domain not in grouped:
-                    grouped[domain] = []
-                grouped[domain].append({"nameserver": r[1], "status": r[2]})
-        return st.templates.TemplateResponse(
-            "dns.html", {"request": request, "grouped": grouped}
-        )
-
-    @router.get("/smtp", response_class=HTMLResponse)
-    def smtp_page(request: Request):
-        from sqlalchemy import text
-
-        with st.db() as s:
-            rows = s.execute(
-                text(
-                    "SELECT mx_host, vrfy, expn, rcpt FROM smtp_scans ORDER BY mx_host ASC"
-                )
-            ).fetchall()
-            data = [
-                {"mx_host": r[0], "vrfy": r[1], "expn": r[2], "rcpt": r[3]}
+            recs = [
+                {
+                    "host": r[0],
+                    "port": r[1],
+                    "subject_cn": r[2],
+                    "subject": r[3],
+                    "issuer": r[4],
+                    "serial": r[5],
+                    "sans": r[6],
+                    "not_before": r[7],
+                    "not_after": r[8],
+                    "sha256": r[9],
+                    "source_job": r[10],
+                    "created_at": r[11],
+                }
                 for r in rows
             ]
+        # Group by sha256 fingerprint so each distinct certificate is shown
+        # once with every endpoint serving it.
+        grouped = {}
+        for rec in recs:
+            key = rec["sha256"] or rec["subject_cn"] or "unknown"
+            grouped.setdefault(key, []).append(rec)
         return st.templates.TemplateResponse(
-            "smtp.html", {"request": request, "rows": data}
+            "tls_certs.html",
+            {"request": request, "grouped": grouped, "total": len(recs)},
         )
 
     return router
